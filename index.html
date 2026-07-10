@@ -1396,41 +1396,39 @@ function setMode(mode){
    click), (3) the users assigned in Entra, and (4) a real sign-in test. Admin steps are in
    SETUP-Deploy-and-SignIn.md — those are Scott/admin actions (I can't register apps, assign
    users, or enter Azure credentials). Leave enabled:false to run/test locally. */
+/* Front-door sign-in gate — Microsoft Entra (LaVida tenant) via MSAL, using the SAME app + account as
+   the ClinicalVault upload, so it's ONE sign-in for both. Only users assigned to the Entra app get in
+   (Entra enforces "assignment required"). Needs the page served from the registered redirect URI
+   (https://notes.lavidaheal.com/redirect.html) — a file:// double-click can't sign in.
+   GO-LIVE SWITCH: flip enabled:true once that redirect URI is registered + the users are assigned. */
 const AUTH = {
-  enabled: false,                          // flip to true once deployed + Entra app exists
-  demo: false,                             // set by ?demo=1 — simulates the gate, NO real Microsoft auth
-  tenantId: 'YOUR_LAVIDA_TENANT_ID',       // Entra "Directory (tenant) ID"
-  clientId: 'YOUR_ENTRA_APP_CLIENT_ID',    // the SPA app's "Application (client) ID"
-  scopes: 'openid profile email'
+  enabled: false,     // ← flip to true for go-live (leave false while the link is open for testing)
+  demo: false         // set by ?demo=1 — shows the gate UI with NO real Microsoft auth
 };
-const redirectUri = () => location.origin + location.pathname;
-function b64url(bytes){ return btoa(String.fromCharCode.apply(null, bytes)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); }
-function randStr(n){ const a=new Uint8Array(n); crypto.getRandomValues(a); return b64url(a); }
-async function sha256url(v){ const d=await crypto.subtle.digest('SHA-256', new TextEncoder().encode(v)); return b64url(new Uint8Array(d)); }
+const LOGIN_SCOPES = ['openid','profile','email'];
+function _acctName(a){ return (a && (a.username || (a.idTokenClaims && (a.idTokenClaims.preferred_username||a.idTokenClaims.email)) || a.name)) || 'signed in'; }
 async function beginSignIn(){
-  if(AUTH.demo){ const claims={preferred_username:'operations@lavidaheal.com (demo)',name:'Demo User'};
-    sessionStorage.setItem('id_claims',JSON.stringify(claims)); document.getElementById('authGate').style.display='none'; showUser(claims); setMode('new'); return; }
-  const verifier=randStr(48); sessionStorage.setItem('pkce_v',verifier);
-  const state=randStr(16); sessionStorage.setItem('oauth_state',state);
-  const p=new URLSearchParams({client_id:AUTH.clientId,response_type:'code',redirect_uri:redirectUri(),
-    response_mode:'query',scope:AUTH.scopes,state,code_challenge:await sha256url(verifier),code_challenge_method:'S256'});
-  location.href='https://login.microsoftonline.com/'+AUTH.tenantId+'/oauth2/v2.0/authorize?'+p.toString();
+  if(AUTH.demo){ document.getElementById('authGate').style.display='none'; showUser({username:'operations@lavidaheal.com (demo)',name:'Demo User'}); setMode('new'); return; }
+  const btn=document.querySelector('#authGate button'); if(btn) btn.disabled=true;
+  try{
+    const pca=await _getPca();
+    const res=await pca.loginPopup({scopes:LOGIN_SCOPES});
+    if(res && res.account) pca.setActiveAccount(res.account);
+    document.getElementById('authGate').style.display='none';
+    showUser(res.account); setMode('new');
+  }catch(e){
+    showGate('Sign-in didn’t complete — use your LaVida (Microsoft) account. ('+((e&&e.message)||e)+')');
+  }finally{
+    const b=document.querySelector('#authGate button'); if(b) b.disabled=false;
+  }
 }
-async function completeSignIn(code){
-  const body=new URLSearchParams({client_id:AUTH.clientId,grant_type:'authorization_code',code,
-    redirect_uri:redirectUri(),code_verifier:sessionStorage.getItem('pkce_v')});
-  const r=await fetch('https://login.microsoftonline.com/'+AUTH.tenantId+'/oauth2/v2.0/token',
-    {method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});
-  const t=await r.json(); if(!t.id_token) throw new Error(t.error_description||'sign-in failed');
-  const claims=JSON.parse(atob(t.id_token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));
-  if(claims.tid!==AUTH.tenantId) throw new Error('Not a LaVida account.');
-  sessionStorage.setItem('id_claims',JSON.stringify(claims)); return claims;
-}
-function showUser(claims){
+function showUser(acct){
+  // keep id_claims so the handoff's Provider field still prefills from the signed-in user
+  try{ if(acct) sessionStorage.setItem('id_claims', JSON.stringify({name:acct.name||'', preferred_username:acct.username||''})); }catch(e){}
   const el=document.getElementById('authUser'); if(!el) return;
-  el.innerHTML=''; const who=document.createElement('span'); who.textContent=(claims.preferred_username||claims.email||'signed in');
+  el.innerHTML=''; const who=document.createElement('span'); who.textContent=_acctName(acct);
   const out=document.createElement('button'); out.textContent='Sign out'; out.className='signout';
-  out.onclick=()=>{ sessionStorage.removeItem('id_claims'); location.href=redirectUri(); };
+  out.onclick=async()=>{ try{ const pca=await _getPca(); if(pca.clearCache) await pca.clearCache(); }catch(e){} try{ sessionStorage.clear(); }catch(e){} location.reload(); };
   el.appendChild(who); el.appendChild(out);
 }
 function showGate(msg){ const g=document.getElementById('authGate');
@@ -1441,14 +1439,12 @@ function showGate(msg){ const g=document.getElementById('authGate');
 async function startApp(){
   if(new URLSearchParams(location.search).get('demo')==='1'){ AUTH.enabled=true; AUTH.demo=true; }
   if(!AUTH.enabled){ setMode('new'); return; }
-  const params=new URLSearchParams(location.search);
-  if(params.get('code')){
-    try{ const c=await completeSignIn(params.get('code')); history.replaceState({},'',redirectUri()); showUser(c); setMode('new'); }
-    catch(e){ showGate('Sign-in failed: '+e.message); }
-    return;
-  }
-  const cached=sessionStorage.getItem('id_claims');
-  if(cached){ showUser(JSON.parse(cached)); setMode('new'); return; }
+  if(AUTH.demo){ showGate(); return; }
+  try{
+    const pca=await _getPca();
+    const acct=pca.getAllAccounts()[0];
+    if(acct){ pca.setActiveAccount(acct); showUser(acct); setMode('new'); return; }
+  }catch(e){ showGate('Sign-in unavailable — reload the page. ('+((e&&e.message)||e)+')'); return; }
   showGate();
 }
 startApp();
