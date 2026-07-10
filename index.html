@@ -136,6 +136,11 @@
   .ho-actions{display:flex;gap:9px;flex-wrap:wrap;align-items:center}
   .ho-send{display:flex;gap:9px;align-items:center;flex-wrap:wrap;border-top:1px solid var(--line);padding-top:12px}
   .ho-send select{width:auto}
+  .ho-vault{display:flex;gap:9px;align-items:center;flex-wrap:wrap;border-top:1px solid var(--line);padding-top:12px}
+  .vault-result{font-size:12.5px;padding:4px 10px;border-radius:6px}
+  .vault-ok{color:var(--good);background:#eaf6ef;border:1px solid #bfe3cd}
+  .vault-err{color:var(--bad);background:#fdeeee;border:1px solid #e0b3b3}
+  .vault-result a{color:var(--accent);font-weight:600}
   .ho-note{font-size:11px;color:var(--muted);flex:1;min-width:200px}
   .ho-preview{width:100%;height:280px;border:1px solid var(--line);border-radius:8px;background:#fff}
   .ho-roster{display:flex;align-items:center;gap:10px;flex-wrap:wrap;border-top:1px solid var(--line);padding-top:12px}
@@ -215,6 +220,9 @@
 </div>
 <div class="toast" id="toast"></div>
 
+<!-- Microsoft MSAL (bundled locally, same-origin — no CDN). Powers the optional "Save to ClinicalVault"
+     upload only; note-authoring stays 100% local. Absence just disables that one button. -->
+<script src="msal-browser.min.js"></script>
 <script>
 /* ============ TEMPLATES (captured verbatim from PCC global macros 2026-07-09) ============ */
 const TEMPLATES = {
@@ -657,6 +665,113 @@ function emailHandoffSelected(){
     : 'Draft opened with the handoff filled in (also on your clipboard). Check the recipient, then send.');
 }
 function refreshHandoffPreview(){ const f=document.getElementById('ho_preview'); if(f) f.srcdoc=handoffHTML(); }
+
+/* ===== Save to ClinicalVault — Microsoft Graph upload (folds in the old Handoff Builder) =====
+   Egress is Microsoft-ONLY: login.microsoftonline.com (sign-in) + graph.microsoft.com (upload to
+   the practice's own SharePoint/ClinicalVault in the BAA-covered tenant). No third parties. PHI is
+   entered in the browser and goes directly to the practice's own tenant. Note-authoring stays 100%
+   local; this is the one optional cloud-save. */
+const VAULT_CFG = {
+  clientId:  '3702875f-471b-4878-a009-8a2575b41db3',   // LaVida Entra SPA app (client ID is public by design)
+  tenantId:  'cc541639-168a-4a8d-9880-4e3628918b70',
+  spHost:    'lavidah.sharepoint.com',
+  sitePath:  '/sites/ClinicalVault',
+  scopes:    ['Sites.ReadWrite.All']
+};
+let _pca=null;
+async function _getPca(){
+  if(_pca) return _pca;
+  if(!(window.msal && window.msal.PublicClientApplication))
+    throw new Error('Sign-in library didn’t load — msal-browser.min.js must sit next to this page (only works on the hosted site, not a local file).');
+  const redirectUri = location.origin + location.pathname.replace(/[^/]*$/, '') + 'redirect.html';
+  _pca=new window.msal.PublicClientApplication({
+    auth:{ clientId:VAULT_CFG.clientId, authority:'https://login.microsoftonline.com/'+VAULT_CFG.tenantId, redirectUri },
+    cache:{ cacheLocation:'sessionStorage', storeAuthStateInCookie:false }   // clears on tab close (PHI-friendly)
+  });
+  await _pca.initialize();
+  return _pca;
+}
+async function _vaultToken(){
+  const pca=await _getPca(), req={scopes:VAULT_CFG.scopes};
+  const acct=pca.getAllAccounts()[0];
+  if(acct){ try{ return (await pca.acquireTokenSilent(Object.assign({account:acct},req))).accessToken; }catch(e){} }
+  return (await pca.acquireTokenPopup(req)).accessToken;   // triggered by the Save click → popup allowed
+}
+function _gfetch(url,token,opts){ opts=opts||{}; opts.headers=Object.assign({Authorization:'Bearer '+token},opts.headers||{}); return fetch(url,opts); }
+function _encPath(rel){ return rel.split('/').map(encodeURIComponent).join('/'); }
+async function _vaultSiteId(token){
+  const r=await _gfetch('https://graph.microsoft.com/v1.0/sites/'+VAULT_CFG.spHost+':'+VAULT_CFG.sitePath,token);
+  if(!r.ok) throw new Error('Couldn’t reach the ClinicalVault site (HTTP '+r.status+'). Sign in with a LaVida account that has access.');
+  return (await r.json()).id;
+}
+async function _vaultDriveId(token,siteId){
+  const r=await _gfetch('https://graph.microsoft.com/v1.0/sites/'+siteId+'/drive',token);
+  if(!r.ok) throw new Error('Couldn’t open the document library (HTTP '+r.status+').');
+  return (await r.json()).id;
+}
+async function _vaultEnsureFolders(token,driveId,segs){
+  let parent='';
+  for(let i=0;i<segs.length;i++){
+    const seg=segs[i], childRel=parent?parent+'/'+seg:seg;
+    const c=await _gfetch('https://graph.microsoft.com/v1.0/drives/'+driveId+'/root:/'+_encPath(childRel),token);
+    if(c.status===404){
+      const parentUrl=parent
+        ? 'https://graph.microsoft.com/v1.0/drives/'+driveId+'/root:/'+_encPath(parent)+':/children'
+        : 'https://graph.microsoft.com/v1.0/drives/'+driveId+'/root/children';
+      const mk=await _gfetch(parentUrl,token,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:seg,folder:{},'@microsoft.graph.conflictBehavior':'fail'})});
+      if(!mk.ok && mk.status!==409) throw new Error('Couldn’t create the “'+seg+'” folder (HTTP '+mk.status+').');
+    } else if(!c.ok){ throw new Error('Folder check failed (HTTP '+c.status+').'); }
+    parent=childRel;
+  }
+}
+async function _vaultUpload(token,driveId,segs,filename,blob){
+  const url='https://graph.microsoft.com/v1.0/drives/'+driveId+'/root:/'+_encPath(segs.join('/')+'/'+filename)+':/content';
+  const r=await _gfetch(url,token,{method:'PUT',headers:{'Content-Type':'application/msword'},body:blob});
+  if(!r.ok) throw new Error('Upload failed (HTTP '+r.status+').');
+  return await r.json();
+}
+function _vaultStatus(t){ const b=document.getElementById('saveVaultBtn'); if(b) b.textContent=t; }
+function _vaultResult(ok,msg,url){
+  const el=document.getElementById('vaultResult'); if(!el) return;
+  el.className='vault-result '+(ok?'vault-ok':'vault-err');
+  el.innerHTML=(ok?'✓ ':'⚠ ')+esc(msg)+(ok&&url?(' · <a href="'+esc(url)+'" target="_blank" rel="noopener">open in SharePoint</a>'):'');
+  el.style.display='';
+}
+// Folder path = Daily Handoffs / <facility> / <YYYY-MM-DD>, from the roster (or the current header).
+function _vaultFacDate(){
+  const roster=rosterGet(), h=currentHeader();
+  let fac = roster.length ? ((roster.find(p=>p.facility&&!hoBlank(p.facility))||{}).facility||'') : h.facility;
+  let date = roster.length ? ((roster.find(p=>p.dateVal&&!hoBlank(p.dateVal))||{}).dateVal||'') : h.date;
+  fac = String(fac||'').replace(/[\\/:*?"<>|#%]/g,'').replace(/\s+/g,' ').trim() || 'Unfiled';
+  date = /^\d{4}-\d{2}-\d{2}/.test(String(date||'')) ? date.slice(0,10) : 'undated';
+  return { segs:['Daily Handoffs', fac, date] };
+}
+async function saveToVault(){
+  // require something to save so we don't create empty Unfiled/undated uploads
+  if(!rosterGet().length && hoBlank(currentHeader().patient)){ toast('Enter the patient name (or add to today’s handoff) first'); return; }
+  const btn=document.getElementById('saveVaultBtn'); if(btn) btn.disabled=true;
+  const rel=document.getElementById('vaultResult'); if(rel) rel.style.display='none';
+  try{
+    _vaultStatus('Signing in…');
+    const token=await _vaultToken();
+    const { segs }=_vaultFacDate();
+    _vaultStatus('Preparing folder…');
+    const siteId=await _vaultSiteId(token);
+    const driveId=await _vaultDriveId(token,siteId);
+    await _vaultEnsureFolders(token,driveId,segs);
+    _vaultStatus('Uploading…');
+    const blob=new Blob(['﻿'+handoffHTML()],{type:'application/msword'});
+    const item=await _vaultUpload(token,driveId,segs,fileName(),blob);
+    _vaultStatus('✓ Saved');
+    _vaultResult(true,'Saved to '+segs.join(' / ')+' — '+fileName(),(item&&item.webUrl)||'');
+  }catch(e){
+    _vaultStatus('Save failed');
+    _vaultResult(false,(e&&e.message)||String(e),'');
+  }finally{
+    if(btn) btn.disabled=false;
+    setTimeout(()=>_vaultStatus('☁ Save to ClinicalVault'),4000);
+  }
+}
 function closeHandoff(){ document.getElementById('handoffModal').style.display='none'; }
 function openHandoff(){
   const card=document.getElementById('handoffCard'); const hs=STATE['__handoff']||{}; const roster=rosterGet();
@@ -680,6 +795,9 @@ function openHandoff(){
      (roster.length ? '<div class="ho-rlist">'+roster.map((p,i)=>'<span class="ho-rchip">'+(i+1)+'. '+esc(p.patient||'—')+((p.facility&&!hoBlank(p.facility))?' · '+esc(p.facility):'')+' <button onclick="removeFromRoster('+i+')">✕</button></span>').join('')+'<button class="ho-clear" onclick="clearRoster()">Clear roster</button></div>' : '')+
      '<div class="ho-actions"><button class="primary" onclick="downloadHandoff()">Download (.doc)</button>'+
        '<button class="ghost" onclick="printHandoff()">Print / Save PDF</button></div>'+
+     '<div class="ho-vault"><button class="primary" id="saveVaultBtn" onclick="saveToVault()">☁ Save to ClinicalVault</button>'+
+       '<span id="vaultResult" class="vault-result" style="display:none"></span>'+
+       '<span class="ho-note">Signs in to your LaVida Microsoft account and uploads this handoff to <b>SharePoint → ClinicalVault → Daily Handoffs / facility / date</b>. Microsoft-only (login.microsoftonline.com + graph.microsoft.com) — the file goes straight into your own tenant, no third parties.</span></div>'+
      '<div class="ho-send"><label style="margin:0">Email to facility</label>'+
        '<select id="ho_contact" style="max-width:260px">'+contactOpts+'</select>'+
        '<button class="ghost" onclick="emailHandoffSelected()">Open email draft</button>'+
