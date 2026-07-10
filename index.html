@@ -1,0 +1,1349 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LaVida Wound Note Composer — PCC Macro Filler</title>
+<style>
+  :root{
+    --bg:#f4f2ec; --panel:#ffffff; --panel2:#eceae3; --line:#d8d3c8;
+    --ink:#2a2925; --muted:#7a7365; --accent:#0f8a7c; --accent2:#3a86ff;
+    --warn:#b06a00; --bad:#c0392b; --good:#2e8b57; --fill:#ffffff;
+    --header-h:58px;   /* kept in sync with the header's real rendered height by JS below —
+                           the header wraps to multiple lines on medium-width screens, so a
+                           hardcoded value here causes the side panel to stick too high and
+                           hide partly under the header once the page scrolls */
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.55 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+  header{padding:14px 22px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:16px;flex-wrap:wrap;
+    background:linear-gradient(180deg,#ffffff,#f4f2ec);position:sticky;top:0;z-index:10}
+  header h1{font-size:16px;margin:0;font-weight:650}
+  .toggle{display:flex;border:1px solid var(--line);border-radius:9px;overflow:hidden}
+  .toggle button{background:transparent;color:var(--muted);border:none;padding:8px 16px;cursor:pointer;font:inherit}
+  .toggle button.on{background:var(--accent);color:#ffffff;font-weight:650}
+  .badge{margin-left:auto;font-size:11.5px;color:var(--good);border:1px solid #bfe3cd;background:#eaf6ef;padding:4px 10px;border-radius:999px}
+  .note-type{font-size:12px;color:var(--muted)}
+  .pt-field{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;font-weight:650;color:var(--ink);background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:4px 8px 4px 11px}
+  .pt-field input{font:inherit;font-weight:500;border:none;background:transparent;color:var(--ink);min-width:210px;padding:3px 2px;outline:none}
+  .pt-field input::placeholder{color:var(--muted);font-weight:400}
+  .note-type b{color:var(--ink)}
+  .auth-user{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
+  .auth-user .signout{background:transparent;border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:3px 9px;cursor:pointer;font-size:11.5px}
+  .auth-user .signout:hover{border-color:var(--accent)}
+  .wrap{display:grid;grid-template-columns:1fr 500px;gap:0;min-height:calc(100vh - var(--header-h))}
+  @media (max-width:1050px){.wrap{grid-template-columns:1fr}}
+  .form{padding:18px 22px;overflow:auto;min-width:0}
+  .side{border-left:1px solid var(--line);background:var(--panel);padding:18px;display:flex;flex-direction:column;gap:12px;position:sticky;top:var(--header-h);height:calc(100vh - var(--header-h));min-width:0}
+  @media (max-width:1050px){.side{position:static;height:auto;border-left:none;border-top:1px solid var(--line)}}
+
+  .section{background:var(--panel);border:1px solid var(--line);border-radius:10px;margin-bottom:14px;overflow:hidden}
+  .section > h2{margin:0;font-size:12px;text-transform:uppercase;letter-spacing:.7px;color:var(--accent);
+    padding:10px 14px;background:var(--panel2);border-bottom:1px solid var(--line);display:flex;gap:8px;align-items:center}
+  .section > h2 .num{color:var(--muted)}
+  .section .body{padding:6px 18px 14px}
+
+  /* clean label + control rows */
+  .frow{display:grid;grid-template-columns:minmax(140px,215px) 1fr;gap:8px 16px;align-items:start;
+        padding:10px 0;border-bottom:1px solid rgba(0,0,0,.06)}
+  .frow:last-child{border-bottom:none}
+  .flabel{color:var(--muted);font-size:13px;font-weight:500;padding-top:7px;line-height:1.35}
+  .fctrls{display:flex;flex-wrap:wrap;align-items:center;gap:7px 9px;line-height:1.8}
+  @media (max-width:640px){.frow{grid-template-columns:1fr;gap:5px}.flabel{padding-top:0}}
+
+  .subhead{margin:20px 0 2px;font-size:11.5px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;
+        color:#2f8f83;border-bottom:1px solid var(--line);padding-bottom:6px}
+  .subhead:first-child{margin-top:4px}
+  .spacer{height:2px}
+
+  /* remove/restore a line from the note */
+  .line{position:relative;padding-right:22px}
+  .rm-btn{position:absolute;top:5px;right:0;width:18px;height:18px;padding:0;border:none;background:transparent;color:var(--muted);cursor:pointer;opacity:0;transition:.12s;font-size:12px;line-height:18px;border-radius:4px;text-align:center}
+  .line:hover .rm-btn{opacity:.55}
+  .rm-btn:hover{opacity:1;color:var(--bad);background:var(--panel2)}
+  .line.removed{opacity:.4}
+  .line.removed .rm-btn{opacity:.85;color:var(--good)}
+  .line.removed .flabel{text-decoration:line-through}
+  .line.removed input,.line.removed select,.line.removed .toggle-chip{pointer-events:none}
+
+  .prose-line{padding:8px 2px;line-height:2}
+  /* several labeled fields sharing one line: kept together, each label glued to its box, clearly spaced */
+  .prose-line.grouped{display:flex;flex-wrap:wrap;align-items:center;gap:8px 20px;line-height:1.8;padding:9px 2px}
+  .prose-line.grouped .pair{display:inline-flex;align-items:center;gap:6px}
+  .prose-line.grouped .pair .lit{color:var(--muted);font-size:13px}
+  .prose-line.grouped .group-prefix{color:var(--ink);font-weight:600;font-size:13px;margin-right:2px}
+  .prose-line.canned{color:var(--muted);font-size:13px;line-height:1.6;background:var(--panel2);
+        border-left:2px solid var(--line);border-radius:0 7px 7px 0;padding:10px 13px;margin:8px 0}
+
+  .fctrls select,.prose-line select{background:var(--fill);color:var(--accent);border:1px solid var(--line);
+        border-radius:7px;padding:5px 9px;font:inherit;font-size:13.5px;min-width:150px;max-width:100%;cursor:pointer}
+  .fctrls select.unset,.prose-line select.unset{color:var(--muted)}
+  .fctrls input,.prose-line input{background:var(--fill);color:var(--ink);border:1px solid var(--line);
+        border-radius:7px;padding:5px 9px;font:inherit;font-size:13.5px}
+  .fctrls input.txt,.prose-line input.txt{width:185px}
+  .fctrls input.num,.prose-line input.num{width:54px;text-align:center}
+  .fctrls input.sa,.prose-line input.sa{width:66px;color:var(--good);border-style:dashed;background:#eaf6ef;text-align:center}
+  .fctrls select:focus,.fctrls input:focus,.prose-line select:focus,.prose-line input:focus{outline:none;border-color:var(--accent)}
+  /* fill-status highlight — empty = soft red, filled = soft green (skips read-only/removed fields) */
+  #form .fld-empty{border-color:#dca0a0 !important;background:#fdeeee !important}
+  #form .fld-filled{border-color:#8fcaa8 !important;background:#eef7f1 !important}
+  #form select.fld-filled{color:var(--accent) !important}
+  #form .fld-empty:focus,#form .fld-filled:focus{border-color:var(--accent) !important}
+  .lit{color:var(--muted);font-size:12.5px}
+  .auto{color:var(--muted);background:#eceae3;border:1px dashed var(--line);border-radius:6px;padding:2px 8px;font-size:12.5px}
+  .toggle-chip{display:inline-flex;align-items:center;gap:5px;background:var(--fill);border:1px solid var(--line);
+        border-radius:7px;padding:4px 11px;font-size:13px;color:var(--muted);cursor:pointer}
+  .toggle-chip:hover{border-color:var(--accent)}
+  .toggle-chip.on{background:#d6efe9;border-color:var(--accent);color:#0c6d61}
+
+  /* per-wound cards */
+  .wound-card{border:1px solid var(--line);border-radius:10px;margin:12px 0 6px;overflow:hidden;background:rgba(43,179,163,.04)}
+  .wound-head{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--panel2);border-bottom:1px solid var(--line)}
+  .wound-title{font-size:12px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#2f8f83}
+  .wound-clock{background:transparent;border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:3px 9px;cursor:pointer;font-size:11.5px}
+  .wound-clock:hover{border-color:var(--accent)}
+  .wound-rm{margin-left:auto;background:transparent;border:1px solid var(--line);color:#c0392b;border-radius:6px;padding:3px 9px;cursor:pointer;font-size:11.5px}
+  .wound-rm:hover{border-color:#c0392b}
+  .wound-body{padding:2px 14px 10px}
+  .add-wound{margin:8px 0 2px;background:transparent;border:1px dashed var(--accent);color:var(--accent);border-radius:8px;padding:9px 14px;cursor:pointer;font:inherit;font-weight:600;width:100%}
+  .add-wound:hover{background:rgba(43,179,163,.08)}
+
+  /* measurement sanity-check panel (advisory — never enters the note) */
+  .meas-flags{margin:2px 0 10px;font-size:12px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 11px;display:flex;flex-direction:column;gap:5px}
+  .mf-line{display:flex;align-items:center;gap:8px;flex-wrap:wrap;color:var(--muted)}
+  .mf-calc{color:#2a2925}
+  .mf-priorlbl{margin-left:auto}
+  .mf-prior{width:58px;background:var(--fill);border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:3px 6px;font:inherit;font-size:12.5px}
+  .mf-cm{color:var(--muted)}
+  .mf-trend.improving{color:var(--good)} .mf-trend.worsening{color:var(--bad)} .mf-trend.stable{color:var(--warn)}
+  .mf-warn{color:var(--warn);display:none;line-height:1.5}
+  .mf-warn.show{display:block}
+
+  /* facility handoff modal */
+  #handoffCard{background:var(--panel);border:1px solid var(--line);border-radius:12px;max-width:760px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.6)}
+  .ho-head{display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid var(--line)}
+  .ho-head b{font-size:14px}
+  .ho-x{margin-left:auto;background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer}
+  .ho-body{padding:16px;display:flex;flex-direction:column;gap:12px}
+  .ho-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  @media (max-width:560px){.ho-grid{grid-template-columns:1fr}}
+  .ho-body label{font-size:12px;color:var(--muted);display:block;margin-bottom:4px}
+  .ho-body input,.ho-body select{width:100%;background:var(--fill);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:7px 9px;font:inherit;font-size:13.5px}
+  .ho-secs{display:flex;flex-wrap:wrap;gap:12px;font-size:13px}
+  .ho-secs label{display:inline-flex;align-items:center;gap:5px;color:var(--ink);margin:0}
+  .ho-secs input{width:auto}
+  .ho-actions{display:flex;gap:9px;flex-wrap:wrap;align-items:center}
+  .ho-send{display:flex;gap:9px;align-items:center;flex-wrap:wrap;border-top:1px solid var(--line);padding-top:12px}
+  .ho-send select{width:auto}
+  .ho-note{font-size:11px;color:var(--muted);flex:1;min-width:200px}
+  .ho-preview{width:100%;height:280px;border:1px solid var(--line);border-radius:8px;background:#fff}
+  .ho-roster{display:flex;align-items:center;gap:10px;flex-wrap:wrap;border-top:1px solid var(--line);padding-top:12px}
+  .ho-rlist{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+  .ho-rchip{display:inline-flex;align-items:center;gap:6px;background:var(--fill);border:1px solid var(--line);border-radius:999px;padding:3px 6px 3px 11px;font-size:12px;color:var(--ink)}
+  .ho-rchip button{background:none;border:none;color:#c0392b;cursor:pointer;font-size:12px;padding:0}
+  .ho-clear{background:transparent;border:1px solid var(--line);color:var(--muted);border-radius:6px;padding:3px 10px;cursor:pointer;font-size:11.5px}
+
+  .side h3{margin:0;font-size:12px;text-transform:uppercase;letter-spacing:.7px;color:var(--muted)}
+  .out-sec{border:1px solid var(--line);border-radius:8px;overflow:hidden;flex:0 0 auto}
+  .out-sec .cap{display:flex;align-items:center;gap:8px;padding:9px 12px;background:linear-gradient(180deg,#e2f2ef,#eef4f2);border-bottom:1px solid var(--accent);border-left:4px solid var(--accent);font-size:13.5px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--accent)}
+  .out-sec .cap button{margin-left:auto;font-size:11px;padding:3px 9px;border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:6px;cursor:pointer}
+  .out-sec .cap button:hover{border-color:var(--accent)}
+  .side-pair{display:inline-flex;align-items:center;gap:5px;margin:0 16px 4px 0}
+  .side-rm{border:none;background:transparent;color:var(--muted);cursor:pointer;font-size:12px;line-height:1;padding:2px 4px;border-radius:4px}
+  .side-rm:hover{color:var(--bad);background:var(--panel2)}
+  .side-off{opacity:.45}
+  .side-off .lit{text-decoration:line-through}
+  .out-sec .cap .copied-mark{margin-left:8px;display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;text-transform:none;letter-spacing:0;color:var(--good);background:#e5f5ec;border:1px solid #bfe3cd;border-radius:999px;padding:2px 9px}
+  .out-sec.copied .cap{background:linear-gradient(180deg,#e3f5ea,#eef7f1)}
+  .out-sec.copied .cap button{border-color:var(--good)}
+  .out-sec pre{margin:0;padding:9px 11px;white-space:pre-wrap;font:12.5px/1.5 ui-monospace,Consolas,monospace;color:#2a2925;min-height:78px;max-height:360px;overflow:auto;resize:vertical}
+  .out-scroll{overflow:auto;display:flex;flex-direction:column;gap:10px;flex:1}
+  .btnrow{display:flex;gap:9px;flex-wrap:wrap}
+  button.primary{background:var(--accent);border:1px solid var(--accent);color:#ffffff;font-weight:650;padding:10px 15px;border-radius:9px;cursor:pointer;font:inherit;font-weight:650}
+  button.ghost{background:transparent;border:1px solid var(--line);color:var(--ink);padding:10px 15px;border-radius:9px;cursor:pointer;font:inherit}
+  button.ghost:hover{border-color:var(--accent)}
+  .foot{color:var(--muted);font-size:11px;border-top:1px solid var(--line);padding-top:8px}
+  .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--accent);color:#ffffff;
+    padding:8px 16px;border-radius:8px;font-weight:600;opacity:0;transition:.2s;pointer-events:none}
+  .toast.show{opacity:1}
+</style>
+</head>
+<body>
+<header>
+  <h1>LaVida Wound Note Composer</h1>
+  <div class="toggle">
+    <button id="tab-new" class="on" onclick="setMode('new')">Initial · New Patient</button>
+    <button id="tab-fu" onclick="setMode('fu')">Follow-Up · Weekly</button>
+  </div>
+  <label class="pt-field" title="For your reference and the facility handoff only — this is never copied into the PCC note.">Patient <input id="patientName" placeholder="name / ID — not copied into the note" oninput="onPatientInput(this.value)"></label>
+  <div class="note-type">Pastes into: <b id="noteType"></b></div>
+  <button class="ghost" onclick="openHandoff()" style="padding:6px 12px">📄 Facility Handoff</button>
+  <span id="authUser" class="auth-user"></span>
+  <span class="badge">● Local · autosaves in this browser only <span id="saveflag" style="color:#0c6d61;margin-left:4px"></span></span>
+</header>
+
+<div class="wrap">
+  <div class="form" id="form"></div>
+  <div class="side">
+    <h3>Composed note — use the Copy button on EACH box below, pasted into its own matching PCC field</h3>
+    <div class="out-scroll" id="output"></div>
+    <div class="btnrow">
+      <button class="ghost" onclick="clearAll()">Clear all</button>
+      <button class="ghost" onclick="copyAll()" title="Combines every section into ONE block — for review/printing/email only. Do not paste this into a single PCC field.">Copy entire note (review only — not for PCC)</button>
+    </div>
+    <div class="foot"><b style="color:var(--warn)">Paste each box separately into PCC</b> — Subjective, Objective, A&amp;P, Procedures, MDM are separate EMR fields, so each needs its own Copy click. The "Copy entire note" button above combines everything into one block for review/printing only — pasting that into a single PCC field will put the whole note in the wrong place. Unfilled
+      <span style="color:var(--warn)">[choices]</span> stay visible so nothing is missed. Reproduces the macro text exactly.
+      Entries autosave in this browser tab only and clear when you close it — nothing is stored on disk or sent anywhere.</div>
+  </div>
+</div>
+<div id="handoffModal" style="display:none;position:fixed;inset:0;z-index:90;background:rgba(6,10,15,.75);align-items:flex-start;justify-content:center;padding:24px;overflow:auto">
+  <div id="handoffCard"></div>
+</div>
+<div id="authGate" style="display:none;position:fixed;inset:0;z-index:100;background:#f4f2ec;align-items:center;justify-content:center;flex-direction:column;gap:16px;text-align:center;padding:24px">
+  <div style="font-size:20px;font-weight:650">LaVida Wound Note Composer</div>
+  <div id="authMsg" style="color:#7a7365;max-width:430px;line-height:1.5">Sign in with your LaVida (Microsoft) account to continue.</div>
+  <button onclick="beginSignIn()" style="background:#0f8a7c;color:#ffffff;border:none;border-radius:9px;padding:12px 22px;font:inherit;font-weight:650;cursor:pointer">Sign in with Microsoft</button>
+</div>
+<div id="clockPanel" style="display:none;position:fixed;right:18px;bottom:18px;z-index:50;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;width:328px;max-height:88vh;overflow:auto;box-shadow:0 12px 44px rgba(0,0,0,.55)">
+  <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+    <b style="font-size:13px">Undermining / Tunneling Clock</b>
+    <button onclick="closeClock()" style="margin-left:auto;background:none;border:none;color:var(--muted);cursor:pointer;font-size:16px">✕</button>
+  </div>
+  <div style="font-size:11px;color:var(--muted);margin-bottom:8px">Marking the clock fills this wound’s <b>Undermining</b> &amp; <b>Tunneling</b> fields in the note automatically.</div>
+  <div id="clockBody"></div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+/* ============ TEMPLATES (captured verbatim from PCC global macros 2026-07-09) ============ */
+const TEMPLATES = {
+  new: {
+    noteType: "LaVida Wound Care New Patient Note v2",
+    sections: [
+      ["History of Present Illness",
+`This is a ***. The patient ***. This wound was first noted on / around ***. It is believed to be secondary to [pressure/ diabetes/ venous/ arterial /trauma /surgical /unknown]. Current facility treatment has included: [dressings/offloading/compression/antibiotics/other].
+Prior treatments have included ***.
+The patient reports ***.
+Risk factors — DM: [yes/no]; Tobacco: [yes/no]; Chemotherapy: [yes/no]; Radiation: [yes/no]; Steroids: [yes/no]; Other immunocompromise: [yes/no].
+History of blood clots, clotting disorders, or bleeding disorders: [yes / no]. On blood thinners or other anticoagulant therapy: [yes / no].
+Their baseline mobility is: [wheelchair/ bed bound/ independent / other: ***].
+Their offloading ability is: [independent / requires staff / completely dependent]
+Their nutritional plans include: [regular / supplements / tube feeds / other: ***]
+Their continence status is [continent / incontinent]
+Interval health changes: [none / yes: ***]. Sick contacts: [none / yes].
+Review of systems: [negative except as noted in HPI / additional findings: ***].`],
+      ["Family History",
+`[Unknown / Known: ***] family history of bleeding or clotting disorders.`],
+      ["Physical Exam",
+`General: [alert, no acute distress / ill-appearing / lethargic / altered mental status / febrile-appearing].
+Cardiovascular: [regular rate per pulse / tachycardic / irregular].
+Respiratory: [normal effort / tachypneic / increased work of breathing].
+Abdomen: [non-distended / distended / tender].
+Neuro: [grossly non-focal / focal deficit / altered mental status].
+Skin: [warm and dry / diaphoretic / cool / mottled].
+Extremities:
+Extremity skin: [warm and dry / cool / mottled / cyanotic].
+Edema: [none/trace/1+/2+/3+].
+Hemosiderosis: [yes/no].
+Hyperpigmentation: [yes/no].
+Lipodermatosclerosis: [yes/no].
+Hyperkeratosis: [yes/no].
+Maceration: [yes/no].
+Vascular:
+DP/PT pulses: [palpable/doppler/nonpalpable].
+Capillary refill: [<3 sec/>3 sec].
+Temperature: [warm/cool].
+Dependent rubor: [yes/no].
+Erythema: [yes/no].
+Hair growth: [present/absent].
+Compression device in use: [yes/no].
+Neuropathy/protective sensation: [intact/decreased/absent/not tested].
+Other findings: ***
+Per-wound findings below. Periwound signs of infection / inflammation: [absent / present — erythema / induration / ecchymosis / fluctuance / increased warmth / tenderness].
+Location / laterality: *** — [left / right / midline / other].
+L: *** cm W: *** cm D: *** cm
+Surface area (auto): *** cm²
+Etiology/classification: [pressure injury stage / diabetic ulcer Wagner grade / venous / arterial / surgical / traumatic / MASD / other].
+If pressure injury → Stage: [1 / 2 / 3 / 4 / unstageable / DTI]. If diabetic ulcer → Wagner grade: [0 / 1 / 2 / 3 / 4 / 5].
+Status: [new/not healed/improving/stable/worsening/healed].
+Wound bed: [ ]% granulation, [ ]% slough, [ ]% eschar, [ ]% epithelialization, [ ]% fibrin/exudate, [ ]% exposed structure.
+Exposed structures: [none/subcutaneous tissue/tendon/muscle/bone/hardware].
+Drainage: [none/scant/small/moderate/large], color [ ], consistency [thin/thick], odor [none/mild/strong].
+Undermining: [none/present from clock position/depth].
+Tunneling/sinus tract: [none/present location/depth].
+Periwound: [normal/macerated/erythematous/indurated/ecchymotic/callused/fluctuant/warm/tender].`],
+      ["Assessment & Plan",
+`Assessment:
+***
+
+Plans:
+-Debridement (see details above)
+-Dressings [drop down collagen / HFB or alginate /foam / betadine / npwt / *** ]
+-Offloading with [ heel protectors / PRAFO / air mattress / q2h turns / wheelchair cushion / other: ***]
+-ABI/TBI/arterial duplex ***, vascular surgery referral as indicated pending results review
+- Encourage protein supplementation and dietitian evaluation as needed
+-Re-evaluation in [1 week / 2 weeks / PRN]. Notify LaVida MD or APP sooner for any concerns- conveyed to facility wound care RN and DON.`],
+      ["Procedures", PROC()],
+      ["Medical Decision-Making Summary", MDM()]
+    ]
+  },
+  fu: {
+    noteType: "LaVida Wound Care Weekly Progress Note",
+    sections: [
+      ["Subjective", `date ***
+***
+Prior subjective: Please copy from my previous on the EMR`],
+      ["Objective",
+`Physical exam
+General: [alert, no acute distress / ill-appearing / lethargic / altered mental status / febrile-appearing]. Cardiovascular: [regular rate per pulse / tachycardic / irregular]. Respiratory: [normal effort / tachypneic / increased work of breathing]. Abdomen: [non-distended / distended / tender]. Neuro: [grossly non-focal / focal deficit / altered mental status].
+Skin: [warm and dry / diaphoretic / cool / mottled].
+Extremities:
+Extremity skin: [warm and dry / cool / mottled / cyanotic].
+Edema: [none/trace/1+/2+/3+].
+Hemosiderosis: [yes/no].
+Hyperpigmentation: [yes/no].
+Lipodermatosclerosis: [yes/no].
+Hyperkeratosis: [yes/no].
+Maceration: [yes/no].
+Vascular:
+DP/PT pulses: [palpable/doppler/nonpalpable].
+Capillary refill: [<3 sec/>3 sec].
+Temperature: [warm/cool].
+Dependent rubor: [yes/no].
+Erythema: [yes/no].
+Hair growth: [present/absent].
+Compression device in use: [yes/no].
+Neuropathy/protective sensation: [intact/decreased/absent/not tested].
+Other findings: ***
+Per-wound findings below. Periwound signs of infection / inflammation: [absent / present — erythema / induration / ecchymosis / fluctuance / increased warmth / tenderness].
+Location / laterality: *** — [left / right / midline / other].
+L: *** cm W: *** cm D: *** cm Surface area (auto): *** cm²
+Prior Measurements: Please copy from my previous on the EMR
+Etiology/classification: [pressure injury stage / diabetic ulcer Wagner grade / venous / arterial / surgical / traumatic / MASD / other].
+If pressure injury → Stage: [1 / 2 / 3 / 4 / unstageable / DTI]. If diabetic ulcer → Wagner grade: [0 / 1 / 2 / 3 / 4 / 5].
+Status: [new/not healed/improving/stable/worsening/healed].
+Wound bed: [ ]% granulation, [ ]% slough, [ ]% eschar, [ ]% epithelialization, [ ]% fibrin/exudate, [ ]% exposed structure.
+Exposed structures: [none/subcutaneous tissue/tendon/muscle/bone/hardware].
+Drainage: [none/scant/small/moderate/large], color [ ], consistency [thin/thick], odor [none/mild/strong].
+Undermining: [none/present from clock position/depth].
+Tunneling/sinus tract: [none/present location/depth]. Periwound: [normal/macerated/erythematous/indurated/ecchymotic/callused/fluctuant/warm/tender].`],
+      ["Assessment & Plan",
+`***
+-Debridement (see details above)
+-Dressings [drop down collagen / HFB or alginate /foam / betadine / npwt / *** ]
+-Offloading with [ heel protectors / PRAFO / air mattress / q2h turns / wheelchair cushion / other: ***]
+-ABI/TBI/arterial duplex ***, vascular surgery referral as indicated pending results review
+- Encourage protein supplementation and dietitian evaluation as needed
+-Re-evaluation in [1 week / 2 weeks / PRN]. Notify LaVida MD or APP sooner for any concerns- conveyed to facility wound care RN and DON.`],
+      ["Procedures", PROC()],
+      ["Medical Decision-Making Summary", MDM()]
+    ]
+  }
+};
+/* shared sections */
+function PROC(){return `Debridement:
+Tissue Type Removed: [slough / eschar / nonviable subcutaneous / fibrin / other]
+PRE-Debridement Measurements (cm): L: *** × W: *** × D: ***
+POST-Debridement Measurements (cm): L: *** × W: *** × D: ***
+Total Surface Area debrided (cm2): *** cm² (auto-calculated from debrided L × W)
+Depth: *** cm
+Deepest tissue debrided: [epidermis / dermis / sq tissue / fascia / muscle / bone]
+Type of Debridement: Excisional debridement (scalpel and/or curette). [Change to selective if removing only superficial slough/biofilm.]
+Instrument Used: [curette / curved scissors / scalpel / forceps / other]
+Estimated Blood Loss (mL): *** mL
+Blood Loss Controlled Via: [pressure / silver nitrate / hemostatic agent / electrocautery / none needed]
+Consent: [risks, benefits, and alternatives discussed and agreed]
+Anesthesia: [topical / local lidocaine / none]
+Cleansing / prep: [wound cleanser / saline / other: ***]
+Endpoint: [debrided to healthy bleeding tissue / debrided to viable margins / hemostasis achieved]
+Procedure note: The wound was cleansed with wound cleaner. Topical anesthetic was applied. A curette was used to loosen the slough, exudate, and to remove underlying nonviable tissues over the entire surface of the wound. Once I reached pink, healthy, bleeding tissues, I stopped and applied pressure. There was no evidence of tunneling, purulent drainage, fluctuance or induration otherwise.
+Tolerance of Procedure: [tolerated well / tolerated with discomfort / procedure aborted]`;}
+function MDM(){return `I evaluated the patient, reviewed relevant facility records, medications, wound history, nursing documentation, and available labs/imaging. I assessed wound etiology, infection risk, perfusion, pressure/offloading, edema, nutrition, and barriers to healing. Orders and return precautions were communicated to facility staff.
+Total time: [***] minutes, excluding separately billable procedures.`;}
+
+/* ============ SESSION STATE (sessionStorage — local to this browser tab, auto-wiped on close, never networked) ============ */
+const SKEY='lavida_wound_composer_session';
+let MODE='new';
+function loadStore(){ try{const r=sessionStorage.getItem(SKEY); if(r){const o=JSON.parse(r); return {new:o.new||{}, fu:o.fu||{}};}}catch(e){} return {new:{},fu:{}}; }
+let STORE=loadStore(); let STATE=STORE.new; let _saveT;
+function persist(){ try{ sessionStorage.setItem(SKEY, JSON.stringify(STORE)); }catch(e){}
+  const f=document.getElementById('saveflag'); if(f){f.textContent='✓ saved'; clearTimeout(_saveT); _saveT=setTimeout(()=>{if(f)f.textContent='';},1200);} }
+/* Patient name lives at the top of the tool for the provider's reference and the facility handoff.
+   It is deliberately NOT wired into any section resolver, so it never appears in the composed note. */
+const PKEY='lavida_patient_name';
+function getPatient(){ try{ return sessionStorage.getItem(PKEY)||''; }catch(e){ return ''; } }
+function setPatient(v){ try{ v ? sessionStorage.setItem(PKEY,v) : sessionStorage.removeItem(PKEY); }catch(e){} }
+function syncPatientField(){ const el=document.getElementById('patientName'); if(el) el.value=getPatient(); }
+function onPatientInput(v){ setPatient(v); const ho=document.getElementById('ho_patient'); if(ho && ho.value!==v){ ho.value=v; saveHandoff(); refreshHandoffPreview(); } }
+function clearAll(){ if(!confirm('Clear all entries for BOTH notes and wipe the in-browser session? This cannot be undone.')) return;
+  STORE={new:{},fu:{}}; STATE=STORE[MODE]; try{sessionStorage.removeItem(SKEY);}catch(e){} setPatient(''); syncPatientField(); setMode(MODE); }
+
+/* ============ UNDERMINING / TUNNELING CLOCK — writes into the wound's fields ============ */
+let clockTarget=null;   // {underInp, tunInp} of the wound whose 🕐 was clicked
+function openClock(target){ clockTarget=target||null; document.getElementById('clockPanel').style.display='block'; buildClock(); }
+function closeClock(){ document.getElementById('clockPanel').style.display='none'; }
+function buildClock(){
+  const NS='http://www.w3.org/2000/svg', cx=155,cy=150,r=97;
+  let mode='under', pending=null, interacted=false;
+  const under=[];    // {from,to,depth}
+  const tunnels=[];  // {hour,depth}
+  const body=document.getElementById('clockBody'); body.innerHTML='';
+  const polar=deg=>{const t=deg*Math.PI/180;return {x:cx+r*Math.sin(t),y:cy-r*Math.cos(t)};};
+
+  // ---- mode tabs ----
+  const tabWrap=document.createElement('div'); tabWrap.style.cssText='display:flex;border:1px solid #d8d3c8;border-radius:8px;overflow:hidden;margin-bottom:8px';
+  const tabU=document.createElement('button'), tabT=document.createElement('button');
+  tabU.textContent='Undermining'; tabT.textContent='Tunneling';
+  [tabU,tabT].forEach(b=>b.style.cssText='flex:1;background:transparent;border:none;color:#7a7365;padding:7px;cursor:pointer;font:inherit;font-size:12.5px;font-weight:600');
+  tabU.onclick=()=>setClockMode('under'); tabT.onclick=()=>setClockMode('tunnel');
+  tabWrap.appendChild(tabU); tabWrap.appendChild(tabT);
+
+  // ---- dial ----
+  const svg=document.createElementNS(NS,'svg'); svg.setAttribute('viewBox','0 0 310 300'); svg.style.width='100%';
+  const face=document.createElementNS(NS,'circle'); face.setAttribute('cx',cx);face.setAttribute('cy',cy);face.setAttribute('r',r);face.setAttribute('fill','#ffffff');face.setAttribute('stroke','#d8d3c8');face.setAttribute('stroke-width','2'); svg.appendChild(face);
+  const wedgeG=document.createElementNS(NS,'g'); svg.appendChild(wedgeG);
+  const spokeG=document.createElementNS(NS,'g'); svg.appendChild(spokeG);
+  const c0=document.createElementNS(NS,'circle'); c0.setAttribute('cx',cx);c0.setAttribute('cy',cy);c0.setAttribute('r',3);c0.setAttribute('fill','#d8d3c8');svg.appendChild(c0);
+  const mk=(x,y,t,c)=>{const e=document.createElementNS(NS,'text');e.setAttribute('x',x);e.setAttribute('y',y);e.setAttribute('fill',c||'#7a7365');e.setAttribute('font-size','10');e.setAttribute('text-anchor','middle');e.textContent=t;svg.appendChild(e);};
+  mk(cx,cy-r-12,'12 · toward head','#2e8b57'); mk(cx,cy+r+20,'6 · toward feet','#2e8b57');
+  const hourEls={};
+  for(let h=1;h<=12;h++){
+    const p=polar(h*30);
+    const dot=document.createElementNS(NS,'circle'); dot.setAttribute('cx',p.x);dot.setAttribute('cy',p.y);dot.setAttribute('r',13);dot.setAttribute('fill','#eceae3');dot.setAttribute('stroke','#d8d3c8');dot.setAttribute('stroke-width','1.5');dot.style.cursor='pointer';
+    const num=document.createElementNS(NS,'text');num.setAttribute('x',p.x);num.setAttribute('y',p.y+4);num.setAttribute('fill','#2a2925');num.setAttribute('font-size','12');num.setAttribute('text-anchor','middle');num.style.pointerEvents='none';num.textContent=h;
+    dot.onclick=()=>onHour(h);
+    svg.appendChild(dot); svg.appendChild(num); hourEls[h]=dot;
+  }
+
+  const hint=document.createElement('div'); hint.style.cssText='margin-top:4px;font-size:11px;color:#7a7365;min-height:14px';
+  const lists=document.createElement('div'); lists.style.cssText='margin-top:8px;display:flex;flex-direction:column;gap:6px';
+  const readout=document.createElement('div'); readout.style.cssText='margin-top:8px;font-size:12px;color:#2a2925;line-height:1.5;border-top:1px solid #d8d3c8;padding-top:8px';
+  const actions=document.createElement('div'); actions.style.cssText='margin-top:8px;display:flex;gap:8px';
+  const copyBtn=document.createElement('button'); copyBtn.textContent='Copy description'; copyBtn.style.cssText='background:transparent;border:1px solid #d8d3c8;color:#2a2925;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:12px';
+  copyBtn.onclick=()=>copyText(desc(),'Clock description copied — paste into the note if you want');
+  const clr=document.createElement('button'); clr.textContent='Clear'; clr.style.cssText=copyBtn.style.cssText;
+  clr.onclick=()=>{under.length=0;tunnels.length=0;pending=null;interacted=true;rebuild();};
+  actions.appendChild(copyBtn); actions.appendChild(clr);
+
+  function setClockMode(m){ mode=m; pending=null;
+    tabU.style.background=m==='under'?'#0f8a7c':'transparent'; tabU.style.color=m==='under'?'#ffffff':'#7a7365';
+    tabT.style.background=m==='tunnel'?'#e0a458':'transparent'; tabT.style.color=m==='tunnel'?'#241a04':'#7a7365';
+    hint.textContent = m==='under' ? 'Click the START then END hour of the undermined arc (goes clockwise).' : 'Click each hour where a tunnel is present.';
+    rebuild();
+  }
+  function onHour(h){
+    interacted=true;
+    if(mode==='under'){
+      if(pending==null){ pending=h; hint.textContent='Now click the END hour (clockwise from '+h+').'; redraw(); }
+      else { under.push({from:pending,to:h,depth:''}); pending=null; hint.textContent='Click the START then END hour of the undermined arc (goes clockwise).'; rebuild(); }
+    } else {
+      const i=tunnels.findIndex(t=>t.hour===h);
+      if(i>=0) tunnels.splice(i,1); else tunnels.push({hour:h,depth:''});
+      rebuild();
+    }
+  }
+  function wedgePath(fh,th){
+    let dF=fh*30,dT=th*30; if(fh===th){dF=fh*30-16;dT=fh*30+16;}
+    let sweep=dT-dF; if(sweep<0)sweep+=360; if(sweep===0)sweep=360;
+    const p1=polar(dF),p2=polar(dT),large=sweep>180?1:0;
+    return 'M '+cx+' '+cy+' L '+p1.x.toFixed(1)+' '+p1.y.toFixed(1)+' A '+r+' '+r+' 0 '+large+' 1 '+p2.x.toFixed(1)+' '+p2.y.toFixed(1)+' Z';
+  }
+  function redraw(){
+    wedgeG.innerHTML=''; spokeG.innerHTML='';
+    under.forEach(u=>{const path=document.createElementNS(NS,'path');path.setAttribute('d',wedgePath(u.from,u.to));path.setAttribute('fill','rgba(43,179,163,.28)');path.setAttribute('stroke','#0f8a7c');path.setAttribute('stroke-width','1');wedgeG.appendChild(path);});
+    tunnels.forEach(t=>{const p=polar(t.hour);const ln=document.createElementNS(NS,'line');ln.setAttribute('x1',cx);ln.setAttribute('y1',cy);ln.setAttribute('x2',p.x);ln.setAttribute('y2',p.y);ln.setAttribute('stroke','#e0a458');ln.setAttribute('stroke-width','3');spokeG.appendChild(ln);});
+    for(let h=1;h<=12;h++){ const isP=pending===h, isT=tunnels.some(t=>t.hour===h);
+      hourEls[h].setAttribute('stroke',isP?'#0f8a7c':(isT?'#e0a458':'#d8d3c8'));
+      hourEls[h].setAttribute('stroke-width',(isP||isT)?'3':'1.5'); }
+  }
+  function desc(){
+    const u=under.map(x=>{const d=x.depth?x.depth+' cm ':'';return d+'from '+x.from+' to '+x.to+" o'clock";});
+    const t=tunnels.slice().sort((a,b)=>a.hour-b.hour).map(x=>{const d=x.depth?x.depth+' cm ':'';return d+'at '+x.hour+" o'clock";});
+    return 'Undermining: '+(u.length?u.join('; ')+'.':'none.')+' Tunneling: '+(t.length?t.join('; ')+'.':'none.');
+  }
+  function underminingText(){ if(!under.length) return 'none'; return under.map(x=>{const d=x.depth?x.depth+' cm ':'';return d+'from '+x.from+' to '+x.to+" o'clock";}).join('; '); }
+  function tunnelingText(){ if(!tunnels.length) return 'none'; return tunnels.slice().sort((a,b)=>a.hour-b.hour).map(x=>{const d=x.depth?x.depth+' cm ':'';return d+'at '+x.hour+" o'clock";}).join('; '); }
+  function setBox(el,v){ if(el){ el.value=v; el.dispatchEvent(new Event('input',{bubbles:true})); } }
+  function syncToNote(){ if(!interacted||!clockTarget) return;
+    // undermining -> from/to boxes (first arc drives from/to; extra arcs append to 'to')
+    if(clockTarget.underFrom && clockTarget.underTo){
+      if(under.length){ const u=under[0];
+        let toVal=u.to+" o'clock"+(u.depth?", "+u.depth+" cm":"");
+        if(under.length>1) toVal+="; "+under.slice(1).map(x=>(x.depth?x.depth+' cm ':'')+'from '+x.from+' to '+x.to+" o'clock").join('; ');
+        setBox(clockTarget.underFrom, u.from+" o'clock"); setBox(clockTarget.underTo, toVal);
+      } else { setBox(clockTarget.underFrom,''); setBox(clockTarget.underTo,''); }
+    }
+    // tunneling -> from = position(s), to = depth
+    if(clockTarget.tunFrom && clockTarget.tunTo){
+      if(tunnels.length){ const t=tunnels.slice().sort((a,b)=>a.hour-b.hour);
+        setBox(clockTarget.tunFrom, t.map(x=>x.hour+" o'clock").join(', '));
+        setBox(clockTarget.tunTo, t.map(x=>x.depth?x.depth+' cm':'—').join(', '));
+      } else { setBox(clockTarget.tunFrom,''); setBox(clockTarget.tunTo,''); }
+    } }
+  function depthRow(colorMark, label, obj, remove){
+    const row=document.createElement('div'); row.style.cssText='display:flex;align-items:center;gap:5px;font-size:12px;color:#2a2925';
+    const m=document.createElement('span'); m.textContent=colorMark.ch; m.style.color=colorMark.c; row.appendChild(m);
+    row.appendChild(document.createTextNode(' '+label+', depth '));
+    const inp=document.createElement('input'); inp.value=obj.depth; inp.style.cssText='width:46px;background:#ffffff;border:1px solid #d8d3c8;color:#2a2925;border-radius:5px;padding:2px 5px'; inp.oninput=()=>{obj.depth=inp.value;interacted=true;readout.textContent=desc();syncToNote();};
+    const cm=document.createElement('span'); cm.textContent=' cm'; cm.style.color='#7a7365';
+    const x=document.createElement('button'); x.textContent='✕'; x.style.cssText='margin-left:auto;background:none;border:none;color:#c0392b;cursor:pointer'; x.onclick=remove;
+    row.appendChild(inp); row.appendChild(cm); row.appendChild(x); return row;
+  }
+  function rebuild(){
+    lists.innerHTML='';
+    under.forEach((u,i)=> lists.appendChild(depthRow({ch:'◗',c:'#0f8a7c'}, u.from+' → '+u.to+" o'clock", u, ()=>{under.splice(i,1);rebuild();})));
+    tunnels.slice().sort((a,b)=>a.hour-b.hour).forEach(t=> lists.appendChild(depthRow({ch:'▬',c:'#e0a458'}, t.hour+" o'clock", t, ()=>{const idx=tunnels.indexOf(t);if(idx>=0)tunnels.splice(idx,1);rebuild();})));
+    redraw(); readout.textContent=desc(); syncToNote();
+  }
+
+  body.appendChild(tabWrap); body.appendChild(svg); body.appendChild(hint); body.appendChild(lists); body.appendChild(readout); body.appendChild(actions);
+  setClockMode('under');
+}
+
+/* ============ FACILITY HANDOFF — 100% local generate; download-first; allowlisted email only ============ */
+// Fill in real facility contacts here (name + secure address). This is an ALLOWLIST on purpose —
+// no free-typed recipient, so a typo can't send PHI to a stranger. Leave empty to hide email sending.
+const FACILITY_CONTACTS = [
+  // TEST PLACEHOLDER — points to Scott's admin inbox so testing can't email the real facility.
+  // AT GO-LIVE, replace the test address with the real approved facility contact(s) — kept in the
+  // private ops vault, not in this file (this repo is hosted publicly).
+  { name: 'University Heights (TEST → admin)', email: 'admin@lavidaheal.com' },
+  // add more approved facility contacts here, one line each — name + secure address
+];
+function esc(s){ return (s==null?'':String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+function val(id){ const e=document.getElementById(id); return e?e.value:''; }
+function currentHeader(){ return {patient:val('ho_patient'),facility:val('ho_facility'),date:val('ho_date'),provider:val('ho_provider'),dx:val('ho_dx')}; }
+function saveHandoff(){ STATE['__handoff']=currentHeader(); persist(); }
+// --- field extraction from resolved note text (pull, don't duplicate) ---
+function grab(t,re){ const m=t.match(re); return m? m[1].trim().replace(/\s*\.\s*$/,'') : ''; }
+function tidy(v){ if(!v) return v; return v.split(',').map(s=>s.trim()).filter(s=> s && !/\[[^\]]*\]/.test(s)).join(', '); }
+// Unfilled if empty, a bare free-text star, or still showing an un-chosen [option / list] (with or
+// without trailing boilerplate) — keeps handoffs free of *** and raw dropdown lists.
+function hoBlank(v){ return !v || v==='[ ]' || /^\s*\*\*\*/.test(v) || /^\s*\[[^\]]*\]/.test(v); }
+function hoVal(v){ return hoBlank(v) ? '—' : v; }
+function dimsOf(t){ const m=t.match(/L:\s*(\S+)\s*cm\s*W:\s*(\S+)\s*cm\s*D:\s*(\S+)\s*cm/);
+  if(!m || (m[1]==='***'&&m[2]==='***'&&m[3]==='***')) return ''; return m[1]+' × '+m[2]+' × '+m[3]+' cm'; }
+function woundSummary(t, priorSA){
+  return {
+    location: grab(t,/Location \/ laterality:\s*([^\n]+)/),
+    etiology: grab(t,/Etiology\/classification:\s*([^\n]+)/),
+    stage: grab(t,/Stage:\s*([^.\n]+)/),
+    wagner: grab(t,/Wagner grade:\s*([^.\n]+)/),
+    dims: dimsOf(t),
+    sa: grab(t,/Surface area \(auto\):\s*(\S+)/),
+    priorSA: priorSA||'',
+    bed: tidy(grab(t,/Wound bed:\s*([^\n]+)/)),
+    undermining: grab(t,/Undermining:\s*([^\n]+)/),
+    tunneling: grab(t,/Tunneling\/sinus tract:\s*([^.\n]+)/),
+    periwound: grab(t,/\.\s*Periwound:\s*([^.\n]+)/),
+    drainage: tidy(grab(t,/Drainage:\s*([^\n]+)/)),
+    status: grab(t,/Status:\s*([^.\n]+)/)
+  };
+}
+function extractPatient(){
+  const h=currentHeader();
+  const subj=sectionResolvers.find(s=>s.name==='Subjective');
+  const noteDate = subj ? grab(subj.resolve(),/date\s+(.+)/) : '';
+  const dateVal = (noteDate && noteDate!=='***') ? noteDate : (h.date||'');
+  const wounds = woundRegistry.map((w,i)=>({ n:i+1, s:woundSummary(w.resolve(), STATE[w.keyPrefix+':priorSA']) }));
+  const proc=sectionResolvers.find(s=>s.name==='Procedures'); const pt=proc?proc.resolve():'';
+  const procedure={ removed:grab(pt,/Tissue Type Removed:\s*([^\n]+)/), type:grab(pt,/Type of Debridement:\s*([^\n\[]+)/),
+    dbt:grab(pt,/Deepest tissue debrided:\s*([^\n]+)/), instrument:grab(pt,/Instrument Used:\s*([^\n]+)/), anesthesia:grab(pt,/Anesthesia:\s*([^\n]+)/) };
+  const ap=sectionResolvers.find(s=>s.name==='Assessment & Plan'); const at=ap?ap.resolve():'';
+  const orders={ dressings:grab(at,/Dressings\s*([^\n]+)/), offloading:grab(at,/Offloading with\s*([^\n]+)/), reeval:grab(at,/Re-evaluation in\s*([^\n]+)/) };
+  return { patient:h.patient, facility:h.facility, dateVal, provider:h.provider, dx:h.dx, wounds, procedure, orders };
+}
+// running roster of patients seen that day (own sessionStorage key, so clearing the note doesn't wipe it)
+function rosterGet(){ try{ return JSON.parse(sessionStorage.getItem('lavida_handoff_roster')||'[]'); }catch(e){ return []; } }
+function rosterSet(r){ try{ sessionStorage.setItem('lavida_handoff_roster', JSON.stringify(r)); }catch(e){} }
+function addToRoster(){ const p=extractPatient(); if(hoBlank(p.patient)){ toast('Enter the patient name/ID first'); return; } const r=rosterGet(); r.push(p); rosterSet(r); toast('Added — '+r.length+' in today’s handoff'); openHandoff(); }
+function removeFromRoster(i){ const r=rosterGet(); r.splice(i,1); rosterSet(r); openHandoff(); }
+function clearRoster(){ if(!confirm('Clear today’s handoff roster? (does not affect the note)')) return; rosterSet([]); openHandoff(); }
+function renderPatient(p){
+  const row=(l,v)=>'<tr><td class="l">'+esc(l)+'</td><td>'+esc(hoVal(v))+'</td></tr>';
+  const block=(title,pairs)=>{ const rows=pairs.filter(x=>!hoBlank(x[1])).map(x=>row(x[0],x[1])).join(''); return rows?'<div class="w"><h3>'+esc(title)+'</h3><table>'+rows+'</table></div>':''; };
+  let b='<div class="meta"><b>Patient:</b> '+esc(hoVal(p.patient))+' &nbsp; <b>Facility:</b> '+esc(hoVal(p.facility))+' &nbsp; <b>Date:</b> '+esc(hoVal(p.dateVal))+' &nbsp; <b>Provider:</b> '+esc(hoVal(p.provider))+' &nbsp; <b>Dx:</b> '+esc(hoVal(p.dx))+' &nbsp; <b>Wounds:</b> '+p.wounds.length+'</div>';
+  p.wounds.forEach(w=>{ const s=w.s; let et=s.etiology||''; if(s.stage&&!hoBlank(s.stage)) et+=(et?' — ':'')+'Stage '+s.stage; if(s.wagner&&!hoBlank(s.wagner)) et+=(et?' — ':'')+'Wagner '+s.wagner;
+    b+='<div class="w"><h3>Wound '+w.n+((s.location&&!hoBlank(s.location))?' — '+esc(s.location):'')+'</h3><table>'+
+      row('Etiology',et)+row('Dimensions (L×W×D)',s.dims)+row('Surface area',hoBlank(s.sa)?'':s.sa+' cm²')+
+      row('Prior surface area',hoBlank(s.priorSA)?'':s.priorSA+' cm²')+row('Tissue (gran/slough/eschar/epith)',s.bed)+
+      row('Undermining',s.undermining)+row('Tunneling',s.tunneling)+row('Drainage',s.drainage)+
+      row('Periwound',s.periwound)+row('Progress',s.status)+'</table></div>'; });
+  b+=block('Procedure',[['Tissue removed',p.procedure.removed],['Type',p.procedure.type],['Deepest tissue (DBT)',p.procedure.dbt],['Instrument',p.procedure.instrument],['Anesthetic',p.procedure.anesthesia]]);
+  b+=block('Plan / Orders',[['Dressings',p.orders.dressings],['Offloading',p.orders.offloading],['Re-evaluation',p.orders.reeval]]);
+  return b;
+}
+function handoffHTML(){
+  const roster=rosterGet(); const isPreview=roster.length===0;
+  const patients = isPreview ? [extractPatient()] : roster;
+  const fac=(patients.find(p=>p.facility&&!hoBlank(p.facility))||{}).facility;
+  const date=(patients.find(p=>p.dateVal&&!hoBlank(p.dateVal))||{}).dateVal;
+  const style='body{font-family:Segoe UI,Arial,sans-serif;color:#111;font-size:11.5pt;line-height:1.4;margin:24px}h1{font-size:15pt;margin:0}h2.ph{font-size:12pt;margin:18px 0 2px;border-bottom:2px solid #ccd6e0;padding-bottom:3px}.meta{color:#333;margin:3px 0 12px;font-size:10.5pt}.w{border:1px solid #ccd6e0;border-radius:5px;margin:9px 0}.w h3{font-size:11pt;margin:0;background:#eef2f7;padding:5px 9px;border-radius:5px 5px 0 0}.w table{width:100%;border-collapse:collapse;font-size:10.5pt}.w td{padding:3px 9px;vertical-align:top;border-top:1px solid #eef}.w td.l{color:#555;width:36%;white-space:nowrap}.foot{margin-top:16px;color:#777;font-size:9pt;border-top:1px solid #ddd;padding-top:8px}';
+  let b='<h1>Wound Care Handoff'+(fac?' — '+esc(fac):'')+'</h1>';
+  b+='<div class="meta"><b>Date:</b> '+esc(hoVal(date))+' &nbsp; <b>Patients:</b> '+patients.length+(isPreview?' &nbsp;<i>(preview — current patient, not yet added)</i>':'')+'</div>';
+  patients.forEach((p,i)=>{ if(patients.length>1) b+='<h2 class="ph">Patient '+(i+1)+'</h2>'; b+=renderPatient(p); });
+  b+='<div class="foot">Care-coordination handoff — for facility use only. Not an official medical record, provider note, or billing document; the signed EHR note is the authoritative record.</div>';
+  return '<html><head><meta charset="utf-8"><style>'+style+'</style></head><body>'+b+'</body></html>';
+}
+// Plain-text handoff — for the email body / clipboard (mailto can't carry the formatted .doc).
+function handoffText(){
+  const roster=rosterGet(); const isPreview=roster.length===0;
+  const patients = isPreview ? [extractPatient()] : roster;
+  const fac=(patients.find(p=>p.facility&&!hoBlank(p.facility))||{}).facility;
+  const date=(patients.find(p=>p.dateVal&&!hoBlank(p.dateVal))||{}).dateVal;
+  const L=[]; const add=(lbl,v,pad)=>{ if(v!=null) v=String(v).replace(/\*\*\*/g,'').replace(/[ \t]{2,}/g,' ').trim(); if(!hoBlank(v)) L.push((pad||'')+lbl+': '+v); };
+  L.push('WOUND CARE HANDOFF'+(fac?' — '+fac:''));
+  L.push('Date: '+hoVal(date)+'    Patients: '+patients.length);
+  patients.forEach((p,i)=>{
+    L.push('');
+    if(patients.length>1) L.push('=== Patient '+(i+1)+' ===');
+    L.push('Patient: '+hoVal(p.patient)+'    Facility: '+hoVal(p.facility)+'    Date: '+hoVal(p.dateVal));
+    add('Provider',p.provider); add('Dx / ICD-10',p.dx);
+    p.wounds.forEach(w=>{ const s=w.s;
+      let et=s.etiology||''; if(s.stage&&!hoBlank(s.stage)) et+=(et?' — ':'')+'Stage '+s.stage; if(s.wagner&&!hoBlank(s.wagner)) et+=(et?' — ':'')+'Wagner '+s.wagner;
+      L.push('Wound '+w.n+((s.location&&!hoBlank(s.location))?' — '+s.location:''));
+      add('Etiology',et,'  '); add('Dimensions (L×W×D)',s.dims,'  ');
+      add('Surface area', hoBlank(s.sa)?'':s.sa+' cm²', '  '); add('Prior surface area', hoBlank(s.priorSA)?'':s.priorSA+' cm²', '  ');
+      add('Tissue (gran/slough/eschar/epith)',s.bed,'  '); add('Undermining',s.undermining,'  '); add('Tunneling',s.tunneling,'  ');
+      add('Drainage',s.drainage,'  '); add('Periwound',s.periwound,'  '); add('Progress',s.status,'  ');
+    });
+    const pr=p.procedure, pb=[['Tissue removed',pr.removed],['Type',pr.type],['Deepest tissue (DBT)',pr.dbt],['Instrument',pr.instrument],['Anesthetic',pr.anesthesia]].filter(x=>!hoBlank(x[1]));
+    if(pb.length){ L.push('  Procedure:'); pb.forEach(x=>L.push('    '+x[0]+': '+x[1])); }
+    const or=p.orders, ob=[['Dressings',or.dressings],['Offloading',or.offloading],['Re-evaluation',or.reeval]].filter(x=>!hoBlank(x[1]));
+    if(ob.length){ L.push('  Plan / Orders:'); ob.forEach(x=>L.push('    '+x[0]+': '+x[1])); }
+  });
+  L.push('');
+  L.push('— Care-coordination handoff, for facility use only. Not an official medical record, provider note, or billing document; the signed EHR note is the authoritative record. —');
+  return L.join('\n');
+}
+function fileName(){ const roster=rosterGet();
+  if(roster.length){ const fac=((roster.find(p=>p.facility&&!hoBlank(p.facility))||{}).facility||'facility').replace(/[^\w\- ]/g,'').trim();
+    const d=(roster.find(p=>p.dateVal&&!hoBlank(p.dateVal))||{}).dateVal||''; return 'Wound Handoff - '+(fac||'facility')+' - '+d+'.doc'; }
+  const h=currentHeader(); return 'Wound Handoff - '+((h.patient||'patient').replace(/[^\w\- ]/g,'').trim()||'patient')+' - '+(h.date||'')+'.doc'; }
+function downloadHandoff(){
+  const blob=new Blob(['﻿'+handoffHTML()],{type:'application/msword'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=fileName();
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),1000); toast('Handoff downloaded');
+}
+function printHandoff(){
+  const f=document.createElement('iframe'); f.style.cssText='position:fixed;right:0;bottom:0;width:0;height:0;border:0';
+  document.body.appendChild(f); const d=f.contentDocument; d.open(); d.write(handoffHTML()); d.close();
+  f.contentWindow.focus(); setTimeout(()=>{ f.contentWindow.print(); setTimeout(()=>f.remove(),600); },250);
+}
+function emailHandoffSelected(){
+  const sel=document.getElementById('ho_contact'); const i=sel&&sel.value;
+  if(i===''||i==null||!FACILITY_CONTACTS[i]){ toast('Add facility contacts in the file first'); return; }
+  const c=FACILITY_CONTACTS[i], h=currentHeader(); const roster=rosterGet();
+  const fac=roster.length?((roster.find(p=>p.facility&&!hoBlank(p.facility))||{}).facility||''):h.facility;
+  const date=roster.length?((roster.find(p=>p.dateVal&&!hoBlank(p.dateVal))||{}).dateVal||''):h.date;
+  const n=roster.length||1;
+  const subj='Wound care handoff — '+(fac||'')+' — '+(date||'')+' ('+n+' patient'+(n>1?'s':'')+')';
+  const full=handoffText();
+  const sig=h.provider?('\n\n'+h.provider):'';
+  // Always stage the full handoff on the clipboard — reliable no matter which mail app opens.
+  copyRaw(full+sig);
+  // Prefer the whole handoff right in the body. Older Outlook caps mailto length and silently
+  // fails to open if it's too long, so if the encoded draft is oversized we open a short draft
+  // and let the provider paste from the clipboard — the draft always opens either way.
+  const encode=s=>'mailto:'+encodeURIComponent(c.email)+'?subject='+encodeURIComponent(subj)+'&body='+encodeURIComponent(s);
+  const tryFull=encode(full+sig);
+  const shortBody='The wound care handoff is on your clipboard — click in the message body and press Ctrl+V to paste it.'+sig;
+  const usedClipboard = tryFull.length>1900;
+  const mailto = usedClipboard ? encode(shortBody) : tryFull;
+  const a=document.createElement('a'); a.href=mailto; document.body.appendChild(a); a.click(); a.remove();
+  toast(usedClipboard
+    ? 'Draft opened — press Ctrl+V in the body to paste the handoff (it’s on your clipboard). Check the recipient, then send.'
+    : 'Draft opened with the handoff filled in (also on your clipboard). Check the recipient, then send.');
+}
+function refreshHandoffPreview(){ const f=document.getElementById('ho_preview'); if(f) f.srcdoc=handoffHTML(); }
+function closeHandoff(){ document.getElementById('handoffModal').style.display='none'; }
+function openHandoff(){
+  const card=document.getElementById('handoffCard'); const hs=STATE['__handoff']||{}; const roster=rosterGet();
+  const claims=JSON.parse(sessionStorage.getItem('id_claims')||'{}'); const today=new Date().toISOString().slice(0,10);
+  const contactOpts=FACILITY_CONTACTS.length
+    ? '<option value="">— choose facility contact —</option>'+FACILITY_CONTACTS.map((c,i)=>'<option value="'+i+'">'+esc(c.name)+'</option>').join('')
+    : '<option value="">— no facility contacts configured —</option>';
+  card.innerHTML=
+   '<div class="ho-head"><b>Facility Handoff</b><button class="ho-x" onclick="closeHandoff()">✕</button></div>'+
+   '<div class="ho-body">'+
+     '<div class="ho-grid">'+
+       '<div><label>Patient (name or ID)</label><input id="ho_patient" value="'+esc(getPatient()||hs.patient||'')+'"></div>'+
+       '<div><label>Facility</label><input id="ho_facility" value="'+esc(hs.facility||'')+'"></div>'+
+       '<div><label>Date of service</label><input id="ho_date" type="date" value="'+esc(hs.date||today)+'"></div>'+
+       '<div><label>Provider</label><input id="ho_provider" value="'+esc(hs.provider||claims.name||'')+'"></div>'+
+       '<div><label>Dx / ICD-10 <span style="color:var(--muted);font-weight:400">— copy from EMR</span></label><input id="ho_dx" placeholder="copy from EMR (e.g. L89.153, E11.621)" value="'+esc(hs.dx||'')+'"></div>'+
+     '</div>'+
+     '<div class="ho-note">Wound findings, procedure &amp; orders pull automatically from the note you filled — this only adds what the note doesn’t capture.</div>'+
+     '<div class="ho-roster"><button class="primary" onclick="addToRoster()">+ Add this patient to today’s handoff</button>'+
+       '<span class="ho-note" style="flex:0 1 auto">'+roster.length+' patient'+(roster.length===1?'':'s')+' in today’s handoff'+(roster.length?' — the buttons below produce the full roster':'')+'</span></div>'+
+     (roster.length ? '<div class="ho-rlist">'+roster.map((p,i)=>'<span class="ho-rchip">'+(i+1)+'. '+esc(p.patient||'—')+((p.facility&&!hoBlank(p.facility))?' · '+esc(p.facility):'')+' <button onclick="removeFromRoster('+i+')">✕</button></span>').join('')+'<button class="ho-clear" onclick="clearRoster()">Clear roster</button></div>' : '')+
+     '<div class="ho-actions"><button class="primary" onclick="downloadHandoff()">Download (.doc)</button>'+
+       '<button class="ghost" onclick="printHandoff()">Print / Save PDF</button></div>'+
+     '<div class="ho-send"><label style="margin:0">Email to facility</label>'+
+       '<select id="ho_contact" style="max-width:260px">'+contactOpts+'</select>'+
+       '<button class="ghost" onclick="emailHandoffSelected()">Open email draft</button>'+
+       '<span class="ho-note">Opens a draft in your default mail app with the handoff filled in — and copies it to your clipboard as a backup (paste with <b>Ctrl+V</b> if the draft looks empty). Recipient is limited to the approved contact above; <b>check it and hit send yourself</b>. Prefer a formatted file? Use Download / Print instead.</span></div>'+
+     '<iframe class="ho-preview" id="ho_preview"></iframe>'+
+   '</div>';
+  ['patient','facility','date','provider','dx'].forEach(k=>{ document.getElementById('ho_'+k).oninput=()=>{ if(k==='patient'){ setPatient(document.getElementById('ho_patient').value); syncPatientField(); } saveHandoff(); refreshHandoffPreview(); }; });
+  document.getElementById('handoffModal').style.display='flex'; refreshHandoffPreview();
+}
+
+/* ============ PARSER: build inline fillable controls, keep exact text ============ */
+let sectionResolvers = [];   // one resolve() per section
+let copiedState = {};        // section name -> the exact text that was copied (drives the ✓ Copied badge; reset per patient/mode)
+let woundRegistry = [];      // per-wound {resolve, keyPrefix} for the current mode (handoff reads these)
+let dressingsSync = null;    // re-renders the per-wound dressings rows when wounds change
+function isFillOpt(o){ o=String(o).trim(); return /\*\*\*/.test(o) || /^other\b/i.test(o); }  // "***", "other: ***", or "other"
+// Exam fields documented per-leg (Right/Left) — extremities + vascular. See renderBilateral.
+const BILAT = new Set([
+  'Extremity skin','Edema','Hemosiderosis','Hyperpigmentation','Lipodermatosclerosis','Hyperkeratosis','Maceration',
+  'DP/PT pulses','Capillary refill','Temperature','Dependent rubor','Erythema','Hair growth','Compression device in use','Neuropathy/protective sensation']);
+
+function tokenize(text){
+  // tokens: {type:'lit',v} | {type:'choice',opts,raw} | {type:'num',raw} | {type:'text'} | {type:'auto',v}
+  const toks=[]; const re=/\[[^\]]*\]|\*\*\*/g; let last=0,m;
+  while((m=re.exec(text))){
+    if(m.index>last) toks.push({type:'lit',v:text.slice(last,m.index)});
+    const t=m[0];
+    if(t==='***'){ toks.push({type:'text',raw:'***'}); }
+    else{
+      const inner=t.slice(1,-1);
+      if(/^\s*$/.test(inner)) toks.push({type:'num',raw:t});
+      else if(/^\*+$/.test(inner.trim())) toks.push({type:'text',raw:t});
+      else if(/^auto/i.test(inner.trim())) toks.push({type:'auto',v:inner.trim()});
+      else if(inner.includes('/') && !/[.]\s*$/.test(inner.trim()) && inner.split('/').every(o=>o.trim().split(/\s+/).filter(Boolean).length<=8))
+        toks.push({type:'choice',opts:inner.split('/').map(s=>s.trim()).filter(Boolean),raw:t});
+      else toks.push({type:'canned',v:inner.trim(),raw:t}); // sentence / instruction / single statement -> optional toggle
+    }
+    last=re.lastIndex;
+  }
+  if(last<text.length) toks.push({type:'lit',v:text.slice(last)});
+  return toks;
+}
+
+// Render a block of template text into `container`; keys namespaced by keyPrefix; own surface-area wiring.
+function renderLines(text, container, keyPrefix){
+  let seq=0, saField=null, Lfield=null, Wfield=null, Dfield=null, measFlags=null, priorInput=null, underFrom=null, underTo=null, tunFrom=null, tunTo=null;
+  const nextKey=()=> keyPrefix+':'+(seq++);
+  const fp=v=>{ const n=parseFloat(v); return (Number.isFinite(n)&&n>0)?n:NaN; };  // finite positive number, else NaN
+  function recalcSA(){
+    if(saField && Lfield && Wfield){
+      const L=fp(Lfield.value), W=fp(Wfield.value);
+      saField.value=(L>0&&W>0)?(L*W).toFixed(1):'';
+    }
+    if(measFlags) updateFlags();
+  }
+  function updateFlags(){
+    const L=fp(Lfield&&Lfield.value), W=fp(Wfield&&Wfield.value), D=fp(Dfield&&Dfield.value);
+    const sa=(L>0&&W>0)?L*W:NaN, warns=[];
+    measFlags._calc.textContent = (L>0&&W>0&&D>0) ? 'Volume ≈ '+(L*W*D).toFixed(1)+' cm³'
+      : (L>0&&W>0) ? 'Surface area '+sa.toFixed(1)+' cm²' : 'Enter L × W for auto surface area.';
+    if(L>30||W>30) warns.push('L/W over 30 cm is unusual — check for a missed decimal or mm↔cm.');
+    if(D>10) warns.push('Depth over 10 cm is unusual — verify.');
+    if(D>0&&L>0&&W>0&&D>L&&D>W) warns.push('Depth exceeds length and width — verify.');
+    const prior=fp(priorInput&&priorInput.value); const tr=measFlags._trend; tr.className='mf-trend';
+    if(prior>0&&sa>0){
+      const pct=((sa-prior)/prior)*100, dir=pct<=-5?'improving':pct>=5?'worsening':'stable';
+      tr.textContent=' → '+(pct>0?'+':'')+pct.toFixed(0)+'% vs prior ('+dir+')'; tr.classList.add(dir);
+      if(Math.abs(pct)>=50) warns.push('Surface area changed '+Math.abs(pct).toFixed(0)+'% from prior — large jump, double-check.');
+    } else tr.textContent='';
+    measFlags._warn.textContent = warns.length ? '⚠ '+warns.join('   ⚠ ') : '';
+    measFlags._warn.classList.toggle('show', warns.length>0);
+  }
+  function makeWidget(tk,lastLit,sink){
+    if(tk.type==='auto'){
+      const k=nextKey();
+      const label=tk.v.replace(/^auto\s*:?\s*/i,'').trim() || tk.v;
+      const wide=/facilit|location|site/i.test(label);
+      const inp=document.createElement('input'); inp.type='text'; inp.className='txt';
+      inp.style.width=wide?'180px':'90px'; inp.placeholder=label;
+      if(STATE[k]!=null) inp.value=STATE[k];
+      inp.oninput=()=>{STATE[k]=inp.value; persist(); resolveAll();};
+      sink.push(()=>{ const t=inp.value.trim(); return t ? t : '['+label+']'; });
+      return inp;
+    }
+    if(tk.type==='choice'){
+      const isUnder=/Undermining:\s*$/.test(lastLit), isTun=/Tunneling\/sinus tract:\s*$/.test(lastLit);
+      if(isUnder||isTun){   // "from [box] to [box]" — manual typing or the 🕐 clock fills both
+        const k1=nextKey(), k2=nextKey();
+        const wrap=document.createElement('span'); wrap.style.cssText='display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap';
+        const from=document.createElement('input'); from.type='text'; from.className='txt'; from.style.width='130px'; from.placeholder='from…';
+        const to=document.createElement('input'); to.type='text'; to.className='txt'; to.style.width='150px'; to.placeholder='to…';
+        if(STATE[k1]!=null) from.value=STATE[k1]; if(STATE[k2]!=null) to.value=STATE[k2];
+        from.oninput=()=>{STATE[k1]=from.value; persist(); resolveAll();};
+        to.oninput=()=>{STATE[k2]=to.value; persist(); resolveAll();};
+        const fl=document.createElement('span'); fl.className='lit'; fl.textContent='from';
+        const tl=document.createElement('span'); tl.className='lit'; tl.textContent='to';
+        wrap.appendChild(fl); wrap.appendChild(from); wrap.appendChild(tl); wrap.appendChild(to);
+        sink.push(()=>{ const a=from.value.trim(), b=to.value.trim(); return (a||b) ? 'from '+a+' to '+b : tk.raw; });
+        if(isUnder){ underFrom=from; underTo=to; } else { tunFrom=from; tunTo=to; }
+        return wrap;
+      }
+      if(/Dressings\s*$/.test(lastLit)) return makeDressings(tk, sink);
+      if(/Tissue Type Removed:\s*$/.test(lastLit)) return makeMultiCheck(tk, sink);
+      if(/Exposed structures:\s*$/.test(lastLit)) return makeMultiCheck(tk, sink);
+      if(/Instrument Used:\s*$/.test(lastLit)) return makeMultiCheck(tk, sink);
+      if(/Blood Loss Controlled Via:\s*$/.test(lastLit)) return makeMultiCheck(tk, sink);
+      if(/Anesthesia:\s*$/.test(lastLit)) return makeMultiCheck(tk, sink);
+      if(/Periwound:\s*$/.test(lastLit)) return makeMultiCheck(tk, sink);
+      if(/Offloading with\s*$/.test(lastLit)) return makeMultiCheck(tk, sink);
+      const k=nextKey(); const sel=document.createElement('select');
+      const blank=document.createElement('option'); blank.value=''; blank.textContent='Select…'; sel.appendChild(blank);
+      tk.opts.forEach(o=>{const op=document.createElement('option');op.value=o;op.textContent=o;sel.appendChild(op);});
+      const hasFill=tk.opts.some(isFillOpt);   // "other", "other: ***", or a bare "***"
+      let fillInp=null;
+      if(hasFill){ const fk=k+':fill'; fillInp=document.createElement('input'); fillInp.type='text'; fillInp.className='txt'; fillInp.placeholder='specify…'; fillInp.style.display='none';
+        if(STATE[fk]!=null) fillInp.value=STATE[fk];
+        fillInp.oninput=()=>{STATE[fk]=fillInp.value; persist(); resolveAll();}; }
+      const updFill=()=>{ if(fillInp) fillInp.style.display=isFillOpt(sel.value)?'':'none'; };
+      if(STATE[k]!=null && [...sel.options].some(o=>o.value===STATE[k])) sel.value=STATE[k];
+      sel.classList.toggle('unset',!sel.value); updFill();
+      sel.onchange=()=>{STATE[k]=sel.value; sel.classList.toggle('unset',!sel.value); updFill(); persist(); resolveAll();};
+      sink.push(()=>{ if(!sel.value) return tk.raw; if(!isFillOpt(sel.value)) return sel.value;
+        const t=fillInp&&fillInp.value.trim();
+        if(/\*\*\*/.test(sel.value)) return t ? sel.value.replace(/\*\*\*/, t)
+          : sel.value.replace(/:?\s*\*\*\*\s*$/,'').replace(/\*\*\*/,'').trim();  // empty box -> drop the ***, no leftover placeholder
+        return t || sel.value; });
+      if(fillInp){ const wrap=document.createElement('span'); wrap.style.cssText='display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap'; wrap.appendChild(sel); wrap.appendChild(fillInp); return wrap; }
+      return sel;
+    }
+    if(tk.type==='num'){
+      const k=nextKey(); const inp=document.createElement('input'); inp.type='text'; inp.className='num'; inp.placeholder='__';
+      if(STATE[k]!=null) inp.value=STATE[k];
+      inp.oninput=()=>{STATE[k]=inp.value; persist(); resolveAll();};
+      sink.push(()=> inp.value ? inp.value : '[ ]'); return inp;
+    }
+    if(tk.type==='canned'){
+      const k=nextKey(); const chip=document.createElement('span'); chip.className='toggle-chip'; chip.textContent=tk.v;
+      let on=STATE[k]===true; chip.classList.toggle('on',on);
+      chip.onclick=()=>{on=!on; STATE[k]=on; chip.classList.toggle('on',on); persist(); resolveAll();};
+      sink.push(()=> on ? tk.v : tk.raw); return chip;
+    }
+    if(tk.type==='text'){
+      const isSA=/surface area\s*\(auto\)\s*:?\s*$/i.test(lastLit)||/Total Surface Area debrided[^\n]*$/i.test(lastLit);
+      const inp=document.createElement('input'); inp.type='text';
+      if(isSA){ inp.className='sa'; inp.readOnly=true; inp.placeholder='auto'; saField=inp; sink.push(()=> inp.value|| (tk.raw||'***')); return inp; }
+      if(/Estimated Blood Loss[^\n]*:\s*$/i.test(lastLit)){   // free text + over-50 flag
+        const k=nextKey(); inp.className='txt'; inp.style.width='70px'; inp.placeholder='mL';
+        if(STATE[k]!=null) inp.value=STATE[k];
+        const warn=document.createElement('span'); warn.className='lit'; warn.style.color='var(--warn)'; warn.style.display='none'; warn.textContent='⚠ over 50 mL — verify / ensure hemostasis';
+        const chk=()=>{ warn.style.display=(parseFloat(inp.value)>50)?'':'none'; };
+        inp.oninput=()=>{STATE[k]=inp.value; persist(); resolveAll(); chk();}; chk();
+        sink.push(()=> inp.value ? inp.value : (tk.raw||'***'));
+        const wrap=document.createElement('span'); wrap.style.cssText='display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap'; wrap.appendChild(inp); wrap.appendChild(warn);
+        return wrap;
+      }
+      const k=nextKey(); inp.className='txt'; inp.placeholder='…';
+      if(STATE[k]!=null) inp.value=STATE[k];
+      inp.oninput=()=>{STATE[k]=inp.value; persist(); resolveAll(); recalcSA();};
+      if(/(^|\s)L:\s*$/.test(lastLit)) Lfield=inp;
+      if(/(^|\s)W:\s*$/.test(lastLit)) Wfield=inp;
+      if(/(^|\s)D:\s*$/.test(lastLit)) Dfield=inp;
+      sink.push(()=> inp.value ? inp.value : (tk.raw||'***')); return inp;
+    }
+    return null;
+  }
+
+  // Per-wound, multi-select dressings. Follows the wound count; output splits by wound when >1.
+  function makeDressings(tk, sink){
+    const OPTS = tk.opts.filter(o=>!/\*\*\*/.test(o)).map(o=>o.replace(/^drop down\s+/i,'').trim());
+    const wrap=document.createElement('div'); wrap.style.cssText='display:flex;flex-direction:column;gap:8px;width:100%';
+    const wk=i=>keyPrefix+':dress:'+i;
+    const read=i=>{ const v=STATE[wk(i)]; return (v&&typeof v==='object')?{sel:v.sel||[],other:v.other||''}:{sel:[],other:''}; };
+    const write=(i,v)=>{ STATE[wk(i)]=v; persist(); };
+    function build(){
+      wrap.innerHTML=''; const n=Math.max(1, woundRegistry.length);
+      for(let i=0;i<n;i++){ const st=read(i);
+        const row=document.createElement('div'); row.style.cssText='display:flex;flex-wrap:wrap;gap:6px;align-items:center';
+        if(n>1){ const lbl=document.createElement('span'); lbl.textContent='Wound '+(i+1)+':'; lbl.style.cssText='font-size:11.5px;color:var(--muted);min-width:62px'; row.appendChild(lbl); }
+        OPTS.forEach(o=>{ const lbl=document.createElement('label'); lbl.style.cssText='display:inline-flex;align-items:center;gap:5px;font-size:13px;color:var(--ink)';
+          const cb=document.createElement('input'); cb.type='checkbox'; cb.style.width='auto'; cb.checked=st.sel.includes(o);
+          cb.onchange=()=>{ const s=read(i); const x=s.sel.indexOf(o); if(cb.checked){ if(x<0)s.sel.push(o);} else if(x>=0)s.sel.splice(x,1); write(i,s); resolveAll(); };
+          lbl.appendChild(cb); lbl.appendChild(document.createTextNode(' '+o)); row.appendChild(lbl); });
+        const other=document.createElement('input'); other.className='txt'; other.placeholder='other…'; other.style.width='120px'; other.value=st.other;
+        other.oninput=()=>{ const s=read(i); s.other=other.value; write(i,s); resolveAll(); };
+        row.appendChild(other); wrap.appendChild(row);
+      }
+    }
+    build(); dressingsSync=build;
+    sink.push(()=>{ const n=Math.max(1, woundRegistry.length); const parts=[];
+      for(let i=0;i<n;i++){ const s=read(i); const list=[...s.sel]; if(s.other) list.push(s.other); parts.push(list.join(', ')); }
+      if(!parts.some(p=>p)) return tk.raw;
+      if(n===1) return parts[0];
+      return parts.map((p,i)=>'\nWound '+(i+1)+': '+(p||'—')).join('');
+    });
+    return wrap;
+  }
+
+  // multi-select checkboxes → comma-joined output (used for Tissue Type Removed)
+  function makeMultiCheck(tk, sink){
+    const k=nextKey(); const opts=tk.opts; const fillOpt=opts.find(isFillOpt); const fk=k+':fill';
+    const wrap=document.createElement('span'); wrap.style.cssText='display:inline-flex;flex-wrap:wrap;gap:4px 12px;align-items:center';
+    const getSel=()=> Array.isArray(STATE[k])?STATE[k]:[];
+    let fillInp=null;
+    const updFill=()=>{ if(fillInp) fillInp.style.display=getSel().includes(fillOpt)?'':'none'; };
+    opts.forEach(o=>{ const lbl=document.createElement('label'); lbl.style.cssText='display:inline-flex;align-items:center;gap:5px;font-size:13px;color:var(--ink)';
+      const cb=document.createElement('input'); cb.type='checkbox'; cb.style.width='auto'; cb.checked=getSel().includes(o);
+      cb.onchange=()=>{ let s=getSel().slice(); if(cb.checked){ if(!s.includes(o))s.push(o);} else s=s.filter(x=>x!==o); STATE[k]=s; persist(); updFill(); resolveAll(); };
+      lbl.appendChild(cb); lbl.appendChild(document.createTextNode(' '+o)); wrap.appendChild(lbl); });
+    if(fillOpt){ fillInp=document.createElement('input'); fillInp.type='text'; fillInp.className='txt'; fillInp.placeholder='specify…'; fillInp.style.display='none';
+      if(STATE[fk]!=null) fillInp.value=STATE[fk];
+      fillInp.oninput=()=>{STATE[fk]=fillInp.value; persist(); resolveAll();};
+      wrap.appendChild(fillInp); updFill(); }
+    sink.push(()=>{ const s=getSel().slice().sort((a,b)=>opts.indexOf(a)-opts.indexOf(b)); if(!s.length) return tk.raw;
+      return s.map(o=>{ if(o!==fillOpt) return o; const t=fillInp&&fillInp.value.trim();
+        if(t) return t; if(/^\*+$/.test(o.trim())) return ''; return o.replace(/:\s*\*\*\*\s*$/,'').trim(); }).filter(Boolean).join(', '); });
+    return wrap;
+  }
+
+  // Vascular exam fields → Right + Left leg, each its own dropdown with a ✕ to drop that leg
+  // (and ↩ to bring it back). Output: "Label — Right: x, Left: y." omitting any removed/blank side.
+  function renderBilateral(label, opts, rawLine, li){
+    const row=document.createElement('div'); row.className='frow';
+    const lab=document.createElement('div'); lab.className='flabel'; lab.textContent=label;
+    const ctr=document.createElement('div'); ctr.className='fctrls'; ctr.style.flexWrap='wrap';
+    const api=[];
+    [['L','Left'],['R','Right']].forEach(([sd,slabel])=>{
+      const vk=keyPrefix+':vasc:'+li+':'+sd, ok=vk+':on';
+      const grp=document.createElement('span'); grp.className='pair side-pair';
+      const l=document.createElement('span'); l.className='lit'; l.textContent=slabel;
+      const sel=document.createElement('select');
+      const blank=document.createElement('option'); blank.value=''; blank.textContent='Select…'; sel.appendChild(blank);
+      opts.forEach(o=>{const op=document.createElement('option');op.value=o;op.textContent=o;sel.appendChild(op);});
+      if(STATE[vk]!=null && [...sel.options].some(o=>o.value===STATE[vk])) sel.value=STATE[vk];
+      sel.classList.toggle('unset',!sel.value);
+      sel.onchange=()=>{STATE[vk]=sel.value; sel.classList.toggle('unset',!sel.value); persist(); resolveAll();};
+      const rm=document.createElement('button'); rm.type='button'; rm.className='side-rm';
+      const isOn=()=>STATE[ok]!==false;
+      const paint=()=>{ const on=isOn(); grp.classList.toggle('side-off',!on); sel.disabled=!on; rm.textContent=on?'✕':'↩'; rm.title=on?('Remove '+slabel.toLowerCase()+' leg from this field'):('Restore '+slabel.toLowerCase()+' leg'); };
+      rm.onclick=()=>{ STATE[ok]=!isOn(); persist(); paint(); resolveAll(); };
+      paint();
+      grp.appendChild(l); grp.appendChild(sel); grp.appendChild(rm); ctr.appendChild(grp);
+      api.push({slabel, val:()=>sel.value, on:isOn});
+    });
+    row.appendChild(lab); row.appendChild(ctr); container.appendChild(row);
+    addLine(row, ()=>{ const parts=[];
+      api.forEach(a=>{ if(a.on()){ const v=a.val(); if(v) parts.push(a.slabel+': '+v); } });
+      return parts.length ? label+' — '+parts.join(', ')+'.' : rawLine;
+    }, li, true);
+  }
+
+  const lines=[];
+  function attachToggle(el,obj,key){ el.classList.add('line');
+    const btn=document.createElement('button'); btn.className='rm-btn'; btn.type='button';
+    const paint=()=>{ el.classList.toggle('removed',!obj.included); btn.textContent=obj.included?'✕':'↩'; btn.title=obj.included?'Remove this line from the note':'Restore this line'; };
+    btn.onclick=(e)=>{ e.stopPropagation(); obj.included=!obj.included; STATE[key]=!obj.included; persist(); paint(); resolveAll(); };
+    paint(); el.appendChild(btn); }
+  function makeLineObj(el,resolve,key,toggleable){
+    const obj={included: toggleable ? (STATE[key]!==true) : true, resolve};
+    if(toggleable) attachToggle(el,obj,key); return obj; }
+  function addLine(el,resolve,li,toggleable){ lines.push(makeLineObj(el,resolve,keyPrefix+':rm:'+li,toggleable)); }
+  // Build the label+controls half of a row from tokens (shared by single-label rows and each
+  // segment of a split compound line). Returns the fctrls element and its ordered getter list.
+  function buildFctrls(toks,skipFirstLit){
+    const ctr=document.createElement('div'); ctr.className='fctrls';
+    const rowSink=[]; let lastLit='';
+    toks.forEach((tk,ti)=>{
+      if(tk.type==='lit'){
+        rowSink.push(()=>tk.v); lastLit=tk.v;
+        if(skipFirstLit && ti===0) return;
+        const rest=tk.v.replace(/\s+/g,' ');
+        if(rest.trim()!==''){ const s=document.createElement('span'); s.className='lit'; s.textContent=rest; ctr.appendChild(s); }
+        return;
+      }
+      const el=makeWidget(tk,lastLit,rowSink); lastLit=''; if(el) ctr.appendChild(el);
+    });
+    return {ctr, sink:rowSink};
+  }
+  text.split('\n').forEach((line,li)=>{
+    const toks=tokenize(line);
+    const fill=toks.filter(t=>t.type!=='lit');
+    const sink=[];
+
+    if(/^-?\s*Re-evaluation\b/i.test(line.trim())){   // optional free-text line just before Re-evaluation
+      const fk=keyPrefix+':pretext';
+      const box=document.createElement('div'); box.className='frow';
+      const lab=document.createElement('div'); lab.className='flabel'; lab.textContent='Additional plan (free text)';
+      const ctr=document.createElement('div'); ctr.className='fctrls';
+      const ta=document.createElement('textarea'); ta.rows=2; ta.placeholder='Optional — appears just before the Re-evaluation line';
+      ta.style.cssText='width:100%;background:var(--fill);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:6px 9px;font:inherit;font-size:13.5px;resize:vertical';
+      if(STATE[fk]!=null) ta.value=STATE[fk];
+      const obj={included: !!(STATE[fk]&&STATE[fk].trim()), resolve:()=>STATE[fk]||''};
+      ta.oninput=()=>{STATE[fk]=ta.value; obj.included=!!ta.value.trim(); persist(); resolveAll();};
+      ctr.appendChild(ta); box.appendChild(lab); box.appendChild(ctr); container.appendChild(box); lines.push(obj);
+    }
+
+    if(/^Type of Debridement:/.test(line.trim())){   // 2-choice dropdown + FYI (replaces the macro's prose/instruction)
+      const k=keyPrefix+':debtype';
+      const row=document.createElement('div'); row.className='frow';
+      const lab=document.createElement('div'); lab.className='flabel'; lab.textContent='Type of Debridement';
+      const ctr=document.createElement('div'); ctr.className='fctrls';
+      const sel=document.createElement('select');
+      const blank=document.createElement('option'); blank.value=''; blank.textContent='Select…'; sel.appendChild(blank);
+      ['Sharp excisional','selective'].forEach(o=>{const op=document.createElement('option');op.value=o;op.textContent=o;sel.appendChild(op);});
+      if(STATE[k]!=null && [...sel.options].some(o=>o.value===STATE[k])) sel.value=STATE[k];
+      sel.classList.toggle('unset',!sel.value);
+      const fyi=document.createElement('span'); fyi.className='lit'; fyi.style.fontStyle='italic'; fyi.textContent='ⓘ selective = only if removing superficial slough/biofilm';
+      sel.onchange=()=>{STATE[k]=sel.value; sel.classList.toggle('unset',!sel.value); persist(); resolveAll();};
+      ctr.appendChild(sel); ctr.appendChild(fyi);
+      row.appendChild(lab); row.appendChild(ctr); container.appendChild(row);
+      addLine(row, ()=> sel.value ? 'Type of Debridement: '+sel.value : line, li, true);
+      return;
+    }
+
+    if(/^Wound bed:/.test(line.trim())){   // 4 %'s sum to 100; eschar + exposed structure = yes/no
+      const row=document.createElement('div'); row.className='frow';
+      const lab=document.createElement('div'); lab.className='flabel'; lab.textContent='Wound bed';
+      const ctr=document.createElement('div'); ctr.className='fctrls'; ctr.style.flexDirection='column'; ctr.style.alignItems='flex-start'; ctr.style.gap='6px';
+      const pctRow=document.createElement('div'); pctRow.style.cssText='display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center';
+      const pctFields=[['gran','granulation'],['slough','slough'],['fib','fibrin/exudate'],['epi','epithelialization']];
+      const inputs={}; const total=document.createElement('span'); total.style.cssText='font-size:12px;margin-left:4px';
+      const recalc=()=>{ let t=0,any=false; pctFields.forEach(([key])=>{ const v=parseFloat(inputs[key].value); if(Number.isFinite(v)){t+=v;any=true;} });
+        total.textContent = any ? 'Total: '+t+'%'+(t===100?' ✓':'') : ''; total.style.color=(t===100)?'var(--good)':'var(--warn)'; };
+      pctFields.forEach(([key,lt])=>{ const sp=document.createElement('span'); sp.style.cssText='display:inline-flex;align-items:center;gap:3px';
+        const inp=document.createElement('input'); inp.className='num'; inp.placeholder='__'; inp.style.width='46px';
+        const sk=keyPrefix+':wb:'+key; if(STATE[sk]!=null) inp.value=STATE[sk];
+        inp.oninput=()=>{STATE[sk]=inp.value; persist(); recalc(); resolveAll();}; inputs[key]=inp;
+        const l=document.createElement('span'); l.className='lit'; l.textContent='% '+lt;
+        sp.appendChild(inp); sp.appendChild(l); pctRow.appendChild(sp); });
+      pctRow.appendChild(total); ctr.appendChild(pctRow);
+      const ynRow=document.createElement('div'); ynRow.style.cssText='display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center';
+      const yn={}; [['eschar','Eschar'],['exposed','Exposed structure']].forEach(([key,lt])=>{ const sp=document.createElement('span'); sp.style.cssText='display:inline-flex;align-items:center;gap:5px';
+        const l=document.createElement('span'); l.className='lit'; l.textContent=lt+':';
+        const sel=document.createElement('select'); ['','yes','no'].forEach(o=>{const op=document.createElement('option');op.value=o;op.textContent=o||'—';sel.appendChild(op);});
+        const sk=keyPrefix+':wb:'+key; if(STATE[sk]!=null) sel.value=STATE[sk];
+        sel.onchange=()=>{STATE[sk]=sel.value; persist(); resolveAll();}; yn[key]=sel;
+        sp.appendChild(l); sp.appendChild(sel); ynRow.appendChild(sp); });
+      ctr.appendChild(ynRow);
+      row.appendChild(lab); row.appendChild(ctr); container.appendChild(row); recalc();
+      addLine(row, ()=>{ const parts=[];
+        pctFields.forEach(([key,lt])=>{ const v=(inputs[key].value||'').trim(); if(v) parts.push(v+'% '+lt); });
+        if(yn.eschar.value) parts.push('eschar: '+yn.eschar.value);
+        if(yn.exposed.value) parts.push('exposed structure: '+yn.exposed.value);
+        return parts.length ? 'Wound bed: '+parts.join(', ')+'.' : line;
+      }, li, true);
+      return;
+    }
+
+    if(line.trim()==='***'){   // a line that is only free-text → a proper multi-line box (labeled from context)
+      const prevRaw=(text.split('\n')[li-1]||'').trim();
+      let taLabel='Assessment';
+      const lm=prevRaw.match(/^([A-Za-z][^:\[\]]{0,38}):$/);   // previous line was a "Label:" header
+      if(lm) taLabel=lm[1].trim(); else if(/^date\b/i.test(prevRaw)) taLabel='Subjective';
+      const big=/assess/i.test(taLabel);
+      const fk=keyPrefix+':ta:'+li;
+      const box=document.createElement('div'); box.className='frow';
+      const lab=document.createElement('div'); lab.className='flabel'; lab.textContent=taLabel;
+      const ctr=document.createElement('div'); ctr.className='fctrls';
+      const ta=document.createElement('textarea'); ta.rows=big?7:5; ta.placeholder='Type here…';
+      ta.style.cssText='width:100%;background:var(--fill);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:7px 10px;font:inherit;font-size:13.5px;resize:vertical;min-height:'+(big?'180px':'120px');
+      if(STATE[fk]!=null) ta.value=STATE[fk];
+      const obj={included:true, resolve:()=> (STATE[fk]&&STATE[fk].trim())? STATE[fk] : '***'};
+      ta.oninput=()=>{STATE[fk]=ta.value; persist(); resolveAll();};
+      ctr.appendChild(ta); box.appendChild(lab); box.appendChild(ctr); container.appendChild(box); lines.push(obj);
+      return;
+    }
+
+    if(line.trim()===''){ const sp=document.createElement('div'); sp.className='spacer'; container.appendChild(sp); addLine(sp,()=>'' ,li,false); return; }
+
+    if(fill.length===0){
+      toks.forEach(tk=> sink.push(()=>tk.v));
+      const t=line.trim();
+      const isHeader = t.length<=34 && !/^[-•]/.test(t) && !/[.]/.test(t.replace(/:$/,''));
+      const el=document.createElement('div');
+      if(isHeader){ el.className='subhead'; el.textContent=t.replace(/:$/,''); }
+      else{ el.className='prose-line canned'; el.textContent=t; }
+      container.appendChild(el); addLine(el,()=>sink.map(g=>g()).join(''),li,!isHeader); return;
+    }
+
+    const measMatch=/^L:\s*\*\*\*/.test(line);
+    const labelMatch=line.match(/^([^:\[\]\n]{1,42}):\s/);
+    let lastLit='';
+
+    if(labelMatch && fill.length===1 && BILAT.has(labelMatch[1].trim())){
+      const ch=toks.find(t=>t.type==='choice');
+      if(ch){ renderBilateral(labelMatch[1].trim(), ch.opts, line, li); return; }
+    }
+
+    if(measMatch){
+      const row=document.createElement('div'); row.className='frow';
+      const lab=document.createElement('div'); lab.className='flabel'; lab.textContent='Measurements (cm)';
+      const {ctr,sink:s}=buildFctrls(toks,false);
+      row.appendChild(lab); row.appendChild(ctr); container.appendChild(row);
+      measFlags=document.createElement('div'); measFlags.className='meas-flags';
+      const calcLine=document.createElement('div'); calcLine.className='mf-line';
+      const calc=document.createElement('span'); calc.className='mf-calc';
+      const trend=document.createElement('span'); trend.className='mf-trend';
+      const pl2=document.createElement('span'); pl2.className='mf-priorlbl'; pl2.textContent='Prior SA';
+      priorInput=document.createElement('input'); priorInput.className='mf-prior'; priorInput.placeholder='—';
+      const cm=document.createElement('span'); cm.className='mf-cm'; cm.textContent='cm²';
+      const pk=keyPrefix+':priorSA'; if(STATE[pk]!=null) priorInput.value=STATE[pk];
+      priorInput.oninput=()=>{STATE[pk]=priorInput.value; persist(); updateFlags();};
+      calcLine.appendChild(calc); calcLine.appendChild(pl2); calcLine.appendChild(priorInput); calcLine.appendChild(cm); calcLine.appendChild(trend);
+      const warn=document.createElement('div'); warn.className='mf-warn';
+      measFlags.appendChild(calcLine); measFlags.appendChild(warn);
+      measFlags._calc=calc; measFlags._trend=trend; measFlags._warn=warn;
+      container.appendChild(measFlags);
+      addLine(row,()=>s.map(g=>g()).join(''),li,true);
+    } else if(labelMatch && fill.length===1){
+      // single labeled field -> clean label column + one control
+      const row=document.createElement('div'); row.className='frow';
+      const lab=document.createElement('div'); lab.className='flabel'; lab.textContent=labelMatch[1].trim();
+      const {ctr,sink:s}=buildFctrls(toks,true);
+      row.appendChild(lab); row.appendChild(ctr); container.appendChild(row);
+      addLine(row,()=>s.map(g=>g()).join(''),li,true);
+    } else if(labelMatch){
+      // 2+ labeled fields share the line (e.g. DM/Tobacco/Chemo...) — keep them TOGETHER but pair
+      // each sub-label with its own box, clearly spaced, so it's obvious which box answers which.
+      const pl=document.createElement('div'); pl.className='prose-line grouped';
+      const s=[]; let pendingLit='';
+      toks.forEach(tk=>{
+        if(tk.type==='lit'){ s.push(()=>tk.v); lastLit=tk.v; pendingLit=tk.v; return; }
+        const el=makeWidget(tk,lastLit,s); lastLit='';
+        if(el){ const grp=document.createElement('span'); grp.className='pair';
+          let labelText=pendingLit.replace(/^\s*[.;,]\s*/,'').trim();   // drop leading separators for display
+          const dash=labelText.indexOf(' — ');   // e.g. "Risk factors — DM:" -> group header "Risk factors" + field "DM:"
+          if(dash>0 && pl.children.length===0){
+            const pre=document.createElement('span'); pre.className='group-prefix'; pre.textContent=labelText.slice(0,dash).trim()+' —';
+            pl.appendChild(pre); labelText=labelText.slice(dash+3).trim();
+          }
+          if(labelText){ const l=document.createElement('span'); l.className='lit'; l.textContent=labelText; grp.appendChild(l); }
+          grp.appendChild(el); pl.appendChild(grp); pendingLit=''; }
+      });
+      container.appendChild(pl);
+      addLine(pl,()=>s.map(g=>g()).join(''),li,true);
+    } else {
+      const pl=document.createElement('div'); pl.className='prose-line';
+      toks.forEach(tk=>{
+        if(tk.type==='lit'){ sink.push(()=>tk.v); lastLit=tk.v; pl.appendChild(document.createTextNode(tk.v)); return; }
+        const el=makeWidget(tk,lastLit,sink); lastLit=''; if(el) pl.appendChild(el);
+      });
+      container.appendChild(pl);
+      addLine(pl,()=>sink.map(g=>g()).join(''),li,true);
+    }
+  });
+
+  recalcSA();
+  return { resolve:()=> lines.filter(l=>l.included).map(l=>l.resolve()).join('\n'), underFrom, underTo, tunFrom, tunTo };
+}
+
+// Remove *** fill-markers from the composed note (they read as template junk once there are real
+// input boxes). Keeps option lists, colons, and everything else; only strips the ***.
+function stripStars(t){
+  if(!t) return t;
+  return t
+    .replace(/\[\s*\*\*\*\s*\]/g, '')                          // "[***]" (e.g. Total time) -> ""
+    .replace(/\[[^\]]*\*\*\*[^\]]*\]/g, m =>                     // only option brackets that contain ***
+      m.replace(/\s*[:\/]\s*\*\*\*/g,'')                        //   "other: ***" / "npwt / ***" -> drop the "specify" tail
+       .replace(/\*\*\*/g,'')                                   //   any stray ***
+       .replace(/\s+\]/,']').replace(/\[\s+/,'[').replace(/\s{2,}/g,' '))
+    .replace(/[ \t]*\*\*\*[ \t]*/g, ' ')                       // remaining bare *** -> single space (NOT newlines)
+    .replace(/ +([.,;)])/g, '$1')                             // tidy space before punctuation
+    .replace(/ {2,}/g, ' ')
+    .replace(/[ \t]+$/gm, '');                                 // trim trailing spaces per line
+}
+// Sentences that should vanish entirely when a certain option is chosen (not read literally).
+function dropDeadSentences(t){
+  if(!t) return t;
+  return t
+    .replace(/\s*It is believed to be secondary to unknown\.\s*/i,' ')  // etiology "unknown" → omit the whole sentence
+    .replace(/[ \t]{2,}/g,' ')
+    .replace(/ +([.,;)])/g,'$1');
+}
+function buildSection(name,idx,text){
+  const wrap=document.createElement('div'); wrap.className='section';
+  const h=document.createElement('h2'); h.innerHTML='<span class="num">§'+(idx+1)+'</span> '+name; wrap.appendChild(h);
+  const body=document.createElement('div'); body.className='body';
+
+  // Sections with per-wound findings become repeatable: systemic exam once, wound block per wound.
+  const marker='Per-wound findings below.';
+  const mi=text.indexOf(marker);
+  if(mi>=0){
+    const preText=text.slice(0,mi+marker.length);
+    const woundTmpl=text.slice(mi+marker.length).replace(/^\s+/,'');
+    const pre=renderLines(preText, body, idx+':g');
+
+    const woundsWrap=document.createElement('div'); body.appendChild(woundsWrap);
+    const addBtn=document.createElement('button'); addBtn.className='add-wound'; addBtn.textContent='+ Add another wound'; body.appendChild(addBtn);
+
+    const wounds=[]; let woundSeq=0; woundRegistry=wounds;
+    function renumber(){
+      wounds.forEach((w,i)=> w.title.textContent='Wound '+(i+1));
+      woundsWrap.querySelectorAll('.wound-rm').forEach(b=> b.style.display = wounds.length>1?'inline-block':'none');
+    }
+    function saveWounds(){ STATE['__wc_'+idx]=wounds.map(w=>w.id); persist(); }
+    function addWound(wid){
+      const id=(wid!=null)?wid:woundSeq; woundSeq=Math.max(woundSeq,id+1);
+      const card=document.createElement('div'); card.className='wound-card';
+      const head=document.createElement('div'); head.className='wound-head';
+      const title=document.createElement('span'); title.className='wound-title'; title.textContent='Wound';
+      const clockBtn=document.createElement('button'); clockBtn.className='wound-clock'; clockBtn.textContent='🕐 Clock';
+      clockBtn.title="Undermining / Tunneling clock — fills this wound's fields";
+      const rm=document.createElement('button'); rm.className='wound-rm'; rm.textContent='Remove';
+      head.appendChild(title); head.appendChild(clockBtn); head.appendChild(rm);
+      const inner=document.createElement('div'); inner.className='wound-body';
+      card.appendChild(head); card.appendChild(inner);
+      const block=renderLines(woundTmpl, inner, idx+':w'+id);
+      const w={id, resolve:block.resolve, title, keyPrefix:idx+':w'+id, underFrom:block.underFrom, underTo:block.underTo, tunFrom:block.tunFrom, tunTo:block.tunTo};
+      clockBtn.onclick=()=>openClock(w);
+      rm.onclick=()=>{ if(wounds.length<=1) return; const i=wounds.indexOf(w); if(i>=0){ wounds.splice(i,1); card.remove(); saveWounds(); renumber(); if(dressingsSync) dressingsSync(); resolveAll(); } };
+      wounds.push(w); woundsWrap.appendChild(card); renumber(); if(dressingsSync) dressingsSync();
+    }
+    addBtn.onclick=()=>{ addWound(); saveWounds(); resolveAll(); };
+
+    const saved=STATE['__wc_'+idx];
+    if(Array.isArray(saved) && saved.length) saved.forEach(id=>addWound(id)); else addWound();
+
+    sectionResolvers.push({name, resolve:()=>{
+      const wt=wounds.map(w=>w.resolve());
+      const tail = wt.length<=1 ? ' '+(wt[0]||'') : '\n\n'+wt.map((t,i)=>'Wound '+(i+1)+':\n'+t).join('\n\n');
+      return stripStars(pre.resolve()+tail);
+    }});
+    wrap.appendChild(body); return wrap;
+  }
+
+  const block=renderLines(text, body, ''+idx);
+  // dropDeadSentences (the "secondary to unknown" removal) is HPI-specific — scope it there so it
+  // can't strip the phrase if a provider happens to type it into another section's free text.
+  sectionResolvers.push({name, resolve:()=>{ const t=stripStars(block.resolve()); return /History of Present/i.test(name)?dropDeadSentences(t):t; }});
+  wrap.appendChild(body); return wrap;
+}
+
+/* ============ OUTPUT ============ */
+function resolveAll(){
+  const out=document.getElementById('output'); out.innerHTML='';
+  sectionResolvers.forEach((s,i)=>{
+    const box=document.createElement('div'); box.className='out-sec';
+    const cap=document.createElement('div'); cap.className='cap';
+    cap.innerHTML='<span>'+s.name+'</span>';
+    const btn=document.createElement('button'); btn.textContent='Copy';
+    const txt=s.resolve();
+    // If this box was copied but has since changed, drop the stale ✓ so it never misleads.
+    if(copiedState[s.name]!=null && copiedState[s.name]!==txt) delete copiedState[s.name];
+    const mark=document.createElement('span'); mark.className='copied-mark'; mark.textContent='✓ Copied';
+    if(copiedState[s.name]===txt){ box.classList.add('copied'); } else { mark.style.display='none'; }
+    btn.onclick=()=>{ copyText(txt,'Copied "'+s.name+'"'); copiedState[s.name]=txt; box.classList.add('copied'); mark.style.display=''; };
+    cap.appendChild(btn); cap.appendChild(mark);
+    const pre=document.createElement('pre'); pre.textContent=txt;
+    box.appendChild(cap); box.appendChild(pre); out.appendChild(box);
+  });
+  paintCompleteness();
+}
+// Highlight each fillable box: soft red when empty, soft green when filled. Skips read-only/auto
+// fields (surface area), removed sides/lines, and the advisory measurement panel.
+function paintCompleteness(){
+  const form=document.getElementById('form'); if(!form) return;
+  form.querySelectorAll('input:not([type=checkbox]):not([type=button]), select, textarea').forEach(el=>{
+    if(el.readOnly || el.disabled || el.classList.contains('sa') || el.closest('.side-off') || el.closest('.removed') || el.closest('.meas-flags')){
+      el.classList.remove('fld-empty','fld-filled'); return;
+    }
+    const filled = el.tagName==='SELECT' ? !!el.value : !!(el.value && el.value.trim());
+    el.classList.toggle('fld-filled', filled);
+    el.classList.toggle('fld-empty', !filled);
+  });
+}
+function copyAll(){
+  const all=sectionResolvers.map(s=>s.name.toUpperCase()+'\n'+s.resolve()).join('\n\n');
+  copyText(all,'Whole note copied');
+}
+function copyRaw(t){
+  const ta=document.createElement('textarea'); ta.value=t; document.body.appendChild(ta); ta.select();
+  try{ document.execCommand('copy'); }catch(e){} ta.remove();
+}
+function copyText(t,msg){ copyRaw(t); toast(msg); }
+function toast(m){const el=document.getElementById('toast');el.textContent=m;el.classList.add('show');setTimeout(()=>el.classList.remove('show'),1400);}
+
+/* ============ MODE ============ */
+function setMode(mode){
+  MODE=mode; STATE=STORE[mode]; dressingsSync=null;
+  syncPatientField();
+  document.getElementById('tab-new').classList.toggle('on',mode==='new');
+  document.getElementById('tab-fu').classList.toggle('on',mode==='fu');
+  const t=TEMPLATES[mode];
+  document.getElementById('noteType').textContent=t.noteType;
+  const form=document.getElementById('form'); form.innerHTML=''; sectionResolvers=[]; copiedState={};
+  t.sections.forEach(([name,text],i)=>form.appendChild(buildSection(name,i,text)));
+  resolveAll();
+}
+/* ============ SIGN-IN GATE — Microsoft Entra (LaVida M365 tenant) ============
+   Users are @lavidaheal.com, so identity = the LaVida M365 tenant (same one that guards
+   ClinicalVault). This gates the UI to signed-in LaVida users. WHO can sign in is controlled
+   in Entra (app "require assignment" + assigned users) — NOT by an editable list in this file.
+   Self-contained OAuth2 Authorization-Code + PKCE; only ever calls login.microsoftonline.com.
+
+   ⚠ UNVERIFIED until deployed: enabling this needs (1) an Entra SPA app registration in the
+   LaVida tenant, (2) this page hosted at a registered HTTPS redirect URI (not a file:// double-
+   click), (3) the users assigned in Entra, and (4) a real sign-in test. Admin steps are in
+   SETUP-Deploy-and-SignIn.md — those are Scott/admin actions (I can't register apps, assign
+   users, or enter Azure credentials). Leave enabled:false to run/test locally. */
+const AUTH = {
+  enabled: false,                          // flip to true once deployed + Entra app exists
+  demo: false,                             // set by ?demo=1 — simulates the gate, NO real Microsoft auth
+  tenantId: 'YOUR_LAVIDA_TENANT_ID',       // Entra "Directory (tenant) ID"
+  clientId: 'YOUR_ENTRA_APP_CLIENT_ID',    // the SPA app's "Application (client) ID"
+  scopes: 'openid profile email'
+};
+const redirectUri = () => location.origin + location.pathname;
+function b64url(bytes){ return btoa(String.fromCharCode.apply(null, bytes)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); }
+function randStr(n){ const a=new Uint8Array(n); crypto.getRandomValues(a); return b64url(a); }
+async function sha256url(v){ const d=await crypto.subtle.digest('SHA-256', new TextEncoder().encode(v)); return b64url(new Uint8Array(d)); }
+async function beginSignIn(){
+  if(AUTH.demo){ const claims={preferred_username:'operations@lavidaheal.com (demo)',name:'Demo User'};
+    sessionStorage.setItem('id_claims',JSON.stringify(claims)); document.getElementById('authGate').style.display='none'; showUser(claims); setMode('new'); return; }
+  const verifier=randStr(48); sessionStorage.setItem('pkce_v',verifier);
+  const state=randStr(16); sessionStorage.setItem('oauth_state',state);
+  const p=new URLSearchParams({client_id:AUTH.clientId,response_type:'code',redirect_uri:redirectUri(),
+    response_mode:'query',scope:AUTH.scopes,state,code_challenge:await sha256url(verifier),code_challenge_method:'S256'});
+  location.href='https://login.microsoftonline.com/'+AUTH.tenantId+'/oauth2/v2.0/authorize?'+p.toString();
+}
+async function completeSignIn(code){
+  const body=new URLSearchParams({client_id:AUTH.clientId,grant_type:'authorization_code',code,
+    redirect_uri:redirectUri(),code_verifier:sessionStorage.getItem('pkce_v')});
+  const r=await fetch('https://login.microsoftonline.com/'+AUTH.tenantId+'/oauth2/v2.0/token',
+    {method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});
+  const t=await r.json(); if(!t.id_token) throw new Error(t.error_description||'sign-in failed');
+  const claims=JSON.parse(atob(t.id_token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));
+  if(claims.tid!==AUTH.tenantId) throw new Error('Not a LaVida account.');
+  sessionStorage.setItem('id_claims',JSON.stringify(claims)); return claims;
+}
+function showUser(claims){
+  const el=document.getElementById('authUser'); if(!el) return;
+  el.innerHTML=''; const who=document.createElement('span'); who.textContent=(claims.preferred_username||claims.email||'signed in');
+  const out=document.createElement('button'); out.textContent='Sign out'; out.className='signout';
+  out.onclick=()=>{ sessionStorage.removeItem('id_claims'); location.href=redirectUri(); };
+  el.appendChild(who); el.appendChild(out);
+}
+function showGate(msg){ const g=document.getElementById('authGate');
+  document.getElementById('authMsg').textContent = msg || (AUTH.demo
+    ? 'DEMO — this simulates the sign-in gate (no real Microsoft account). Real sign-in needs deployment + an Entra app.'
+    : 'Sign in with your LaVida (Microsoft) account to continue.');
+  g.style.display='flex'; }
+async function startApp(){
+  if(new URLSearchParams(location.search).get('demo')==='1'){ AUTH.enabled=true; AUTH.demo=true; }
+  if(!AUTH.enabled){ setMode('new'); return; }
+  const params=new URLSearchParams(location.search);
+  if(params.get('code')){
+    try{ const c=await completeSignIn(params.get('code')); history.replaceState({},'',redirectUri()); showUser(c); setMode('new'); }
+    catch(e){ showGate('Sign-in failed: '+e.message); }
+    return;
+  }
+  const cached=sessionStorage.getItem('id_claims');
+  if(cached){ showUser(JSON.parse(cached)); setMode('new'); return; }
+  showGate();
+}
+startApp();
+
+// Keep --header-h synced to the header's real rendered height (it wraps to 2+ lines at medium
+// widths), so the sticky side panel's offset never drifts out of sync and hides under it.
+(() => {
+  const header=document.querySelector('header');
+  const sync=()=>document.documentElement.style.setProperty('--header-h', header.offsetHeight+'px');
+  sync();
+  new ResizeObserver(sync).observe(header);
+  window.addEventListener('resize', sync);   // belt-and-suspenders alongside ResizeObserver
+})();
+</script>
+</body>
+</html>
