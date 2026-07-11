@@ -1403,7 +1403,7 @@ function setMode(mode){
    (https://notes.lavidaheal.com/redirect.html) — a file:// double-click can't sign in.
    GO-LIVE SWITCH: flip enabled:true once that redirect URI is registered + the users are assigned. */
 const AUTH = {
-  enabled: false,     // ← flip to true for go-live (leave false while the link is open for testing)
+  enabled: true,      // GO-LIVE 2026-07-10 — gate ON (redirect URI verified registered)
   demo: false         // set by ?demo=1 — shows the gate UI with NO real Microsoft auth
 };
 const LOGIN_SCOPES = ['openid','profile','email'];
