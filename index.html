@@ -794,7 +794,8 @@ function openHandoff(){
        '<span class="ho-note" style="flex:0 1 auto">'+roster.length+' patient'+(roster.length===1?'':'s')+' in today’s handoff'+(roster.length?' — the buttons below produce the full roster':'')+'</span></div>'+
      (roster.length ? '<div class="ho-rlist">'+roster.map((p,i)=>'<span class="ho-rchip">'+(i+1)+'. '+esc(p.patient||'—')+((p.facility&&!hoBlank(p.facility))?' · '+esc(p.facility):'')+' <button onclick="removeFromRoster('+i+')">✕</button></span>').join('')+'<button class="ho-clear" onclick="clearRoster()">Clear roster</button></div>' : '')+
      '<div class="ho-actions"><button class="primary" onclick="downloadHandoff()">Download (.doc)</button>'+
-       '<button class="ghost" onclick="printHandoff()">Print / Save PDF</button></div>'+
+       '<button class="ghost" onclick="printHandoff()">Print / Save PDF</button>'+
+       '<span class="ho-note">Download/Print leave a copy of this PHI <b>on this computer</b> — on a shared or unencrypted device, prefer <b>☁ Save to ClinicalVault</b> below, which stores nothing locally.</span></div>'+
      '<div class="ho-vault"><button class="primary" id="saveVaultBtn" onclick="saveToVault()">☁ Save to ClinicalVault</button>'+
        '<span id="vaultResult" class="vault-result" style="display:none"></span>'+
        '<span class="ho-note">Signs in to your LaVida Microsoft account and uploads this handoff to <b>SharePoint → ClinicalVault → Daily Handoffs / facility / date</b>. Microsoft-only (login.microsoftonline.com + graph.microsoft.com) — the file goes straight into your own tenant, no third parties.</span></div>'+
