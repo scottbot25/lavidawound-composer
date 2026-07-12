@@ -186,7 +186,6 @@
     <button id="tab-fu" onclick="setMode('fu')">Follow-Up · Weekly</button>
   </div>
   <label class="pt-field" title="For your reference and the facility handoff only — this is never copied into the PCC note.">Patient <input id="patientName" placeholder="name / ID — not copied into the note" oninput="onPatientInput(this.value)"></label>
-  <div class="note-type">Pastes into: <b id="noteType"></b></div>
   <button class="ghost" onclick="openHandoff()" style="padding:6px 12px">📄 Facility Handoff</button>
   <span id="authUser" class="auth-user"></span>
   <span class="badge">● Local · autosaves in this browser only <span id="saveflag" style="color:#0c6d61;margin-left:4px"></span></span>
@@ -1388,7 +1387,6 @@ function setMode(mode){
   document.getElementById('tab-new').classList.toggle('on',mode==='new');
   document.getElementById('tab-fu').classList.toggle('on',mode==='fu');
   const t=TEMPLATES[mode];
-  document.getElementById('noteType').textContent=t.noteType;
   const form=document.getElementById('form'); form.innerHTML=''; sectionResolvers=[]; copiedState={};
   t.sections.forEach(([name,text],i)=>form.appendChild(buildSection(name,i,text)));
   resolveAll();
