@@ -695,7 +695,9 @@ async function _vaultToken(){
   const pca=await _getPca(), req={scopes:VAULT_CFG.scopes};
   const acct=pca.getAllAccounts()[0];
   if(acct){ try{ return (await pca.acquireTokenSilent(Object.assign({account:acct},req))).accessToken; }catch(e){} }
-  return (await pca.acquireTokenPopup(req)).accessToken;   // triggered by the Save click → popup allowed
+  // no popup (unreliable on static hosting) — get consent via a full-page redirect; on return, click Save again
+  await pca.acquireTokenRedirect(req);
+  throw new Error('redirecting to grant ClinicalVault access…');
 }
 function _gfetch(url,token,opts){ opts=opts||{}; opts.headers=Object.assign({Authorization:'Bearer '+token},opts.headers||{}); return fetch(url,opts); }
 function _encPath(rel){ return rel.split('/').map(encodeURIComponent).join('/'); }
@@ -1413,14 +1415,10 @@ async function beginSignIn(){
   const btn=document.querySelector('#authGate button'); if(btn) btn.disabled=true;
   try{
     const pca=await _getPca();
-    const res=await pca.loginPopup({scopes:LOGIN_SCOPES});
-    if(res && res.account) pca.setActiveAccount(res.account);
-    document.getElementById('authGate').style.display='none';
-    showUser(res.account); setMode('new');
+    await pca.loginRedirect({scopes:LOGIN_SCOPES});   // full-page redirect to Microsoft; returns via redirect.html (no popup)
   }catch(e){
-    showGate('Sign-in didn’t complete — use your LaVida (Microsoft) account. ('+((e&&e.message)||e)+')');
-  }finally{
-    const b=document.querySelector('#authGate button'); if(b) b.disabled=false;
+    if(btn) btn.disabled=false;
+    showGate('Sign-in couldn’t start — reload the page and try again. ('+((e&&e.message)||e)+')');
   }
 }
 function showUser(acct){
@@ -1443,7 +1441,8 @@ async function startApp(){
   if(AUTH.demo){ showGate(); return; }
   try{
     const pca=await _getPca();
-    const acct=pca.getAllAccounts()[0];
+    const res=await pca.handleRedirectPromise();   // finishes a returning sign-in AND clears any stuck "interaction_in_progress"
+    const acct=(res&&res.account) || pca.getAllAccounts()[0];
     if(acct){ pca.setActiveAccount(acct); showUser(acct); setMode('new'); return; }
   }catch(e){ showGate('Sign-in unavailable — reload the page. ('+((e&&e.message)||e)+')'); return; }
   showGate();
