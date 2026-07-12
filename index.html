@@ -1373,14 +1373,18 @@ function paintCompleteness(){
    Applied to the RIGHT-panel display and to what the Copy button puts on the clipboard (text/html),
    so it can carry into PCC's rich-text note fields. All user text is HTML-escaped (no injection). ===== */
 const BOLD_HEADERS = ['Physical exam'];
-const UL_LABELS = ['General','Cardiovascular','Respiratory','Abdomen','Neuro','Skin','Extremities','Vascular'];
 function escH(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-const UL_RE=new RegExp('\\b('+UL_LABELS.join('|')+'):','g');   // "General:" / "Cardiovascular:" / …
 function fmtLine(line){
   const trimmed=line.trim();
   if(!trimmed) return '';
-  if(BOLD_HEADERS.some(h=>trimmed.toLowerCase()===h.toLowerCase())) return '<b>'+escH(line)+'</b>';
-  return escH(line).replace(UL_RE, m=>'<u>'+m+'</u>');   // underline every exam sub-label occurrence in the line
+  if(BOLD_HEADERS.some(h=>trimmed.toLowerCase()===h.toLowerCase())) return '<b>'+escH(line)+'</b>';   // section header
+  // bilateral "Label — Left: x, Right: y." -> bold the leading label
+  let m=line.match(/^(\s*)([A-Za-z][A-Za-z0-9/() ]*?)\s—\s([\s\S]*)$/);
+  if(m) return escH(m[1])+'<b>'+escH(m[2])+'</b> — '+escH(m[3]);
+  // "Label: value" -> bold the "Label:" part
+  m=line.match(/^(\s*)([A-Za-z][A-Za-z0-9/() ]*?):(\s[\s\S]*|$)/);
+  if(m) return escH(m[1])+'<b>'+escH(m[2])+':</b>'+escH(m[3]);
+  return escH(line);
 }
 function richDisplay(text){ return String(text||'').split('\n').map(fmtLine).join('\n'); }   // inline tags; <pre> keeps the \n
 function richClipboard(text){ return String(text||'').split('\n').map(l=>{ const h=fmtLine(l); return h?'<div>'+h+'</div>':'<div><br></div>'; }).join(''); }  // block-per-line for paste
