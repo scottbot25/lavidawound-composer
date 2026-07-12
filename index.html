@@ -34,7 +34,7 @@
   .auth-user .signout:hover{border-color:var(--accent)}
   .wrap{display:grid;grid-template-columns:1fr 500px;gap:0;min-height:calc(100vh - var(--header-h))}
   @media (max-width:1050px){.wrap{grid-template-columns:1fr}}
-  .form{padding:18px 22px;overflow:auto;min-width:0}
+  .form{padding:18px 22px;min-width:0}
   .side{border-left:1px solid var(--line);background:var(--panel);padding:18px;display:flex;flex-direction:column;gap:12px;position:sticky;top:var(--header-h);height:calc(100vh - var(--header-h));min-width:0}
   @media (max-width:1050px){.side{position:static;height:auto;border-left:none;border-top:1px solid var(--line)}}
 
@@ -162,7 +162,9 @@
   .out-sec .cap .copied-mark{margin-left:8px;display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;text-transform:none;letter-spacing:0;color:var(--good);background:#e5f5ec;border:1px solid #bfe3cd;border-radius:999px;padding:2px 9px}
   .out-sec.copied .cap{background:linear-gradient(180deg,#e3f5ea,#eef7f1)}
   .out-sec.copied .cap button{border-color:var(--good)}
-  .out-sec pre{margin:0;padding:9px 11px;white-space:pre-wrap;font:12.5px/1.5 ui-monospace,Consolas,monospace;color:#2a2925;min-height:78px;max-height:360px;overflow:auto;resize:vertical}
+  .out-sec pre{margin:0;padding:9px 11px;white-space:pre-wrap;font:12.5px/1.5 ui-monospace,Consolas,monospace;color:#2a2925;min-height:78px}
+  .out-sec{transition:box-shadow .18s ease}
+  .out-sec.sync-hi{box-shadow:0 0 0 2px var(--accent)}
   .out-scroll{overflow:auto;display:flex;flex-direction:column;gap:10px;flex:1}
   .btnrow{display:flex;gap:9px;flex-wrap:wrap}
   button.primary{background:var(--accent);border:1px solid var(--accent);color:#ffffff;font-weight:650;padding:10px 15px;border-radius:9px;cursor:pointer;font:inherit;font-weight:650}
@@ -1457,6 +1459,40 @@ startApp();
   sync();
   new ResizeObserver(sync).observe(header);
   window.addEventListener('resize', sync);   // belt-and-suspenders alongside ResizeObserver
+})();
+
+// Section sync: keep the composed-note panel aligned with the section you're working on. Focus a
+// field (or scroll) on the left -> the matching output box slides into view + briefly highlights.
+// Left .section[i] maps 1:1 to right .out-sec[i] (both built in template order). Desktop only.
+(() => {
+  const form = document.getElementById('form');
+  if (!form) return;
+  const isDesktop = () => !window.matchMedia('(max-width:1050px)').matches;
+  let hiT;
+  function syncTo(i, smooth) {
+    if (!isDesktop() || i < 0) return;
+    const sc = document.querySelector('.out-scroll'); if (!sc) return;
+    const box = sc.querySelectorAll('.out-sec')[i]; if (!box) return;
+    const scR = sc.getBoundingClientRect(), bR = box.getBoundingClientRect();
+    sc.scrollTo({ top: sc.scrollTop + (bR.top - scR.top) - 8 });   // CSS scroll-behavior handles smoothness
+    document.querySelectorAll('.out-sec.sync-hi').forEach(b => b.classList.remove('sync-hi'));
+    box.classList.add('sync-hi'); clearTimeout(hiT); hiT = setTimeout(() => box.classList.remove('sync-hi'), 1100);
+  }
+  const idxOf = el => { const s = el && el.closest('.section'); return s ? [...document.querySelectorAll('#form .section')].indexOf(s) : -1; };
+  form.addEventListener('focusin', e => syncTo(idxOf(e.target), true));
+  form.addEventListener('click', e => syncTo(idxOf(e.target), true));
+  let scrollT;
+  window.addEventListener('scroll', () => {
+    if (!isDesktop()) return;
+    clearTimeout(scrollT);
+    scrollT = setTimeout(() => {
+      const hh = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--header-h')) || 58;
+      const secs = [...document.querySelectorAll('#form .section')];
+      let best = -1, bestD = Infinity;
+      secs.forEach((s, i) => { const r = s.getBoundingClientRect(); if (r.bottom > hh + 4) { const d = Math.abs(r.top - (hh + 8)); if (d < bestD) { bestD = d; best = i; } } });
+      if (best >= 0) syncTo(best);
+    }, 90);
+  }, { passive: true });
 })();
 </script>
 </body>
