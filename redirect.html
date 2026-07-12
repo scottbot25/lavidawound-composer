@@ -2,10 +2,29 @@
 <meta charset="utf-8">
 <title>Signing in…</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<body style="font:15px system-ui,Segoe UI,Arial;padding:24px;color:#44545f">
-  Signing you in… this window will close automatically.
-</body>
-<!-- Blank MSAL redirect landing page for POPUP sign-in.
-     It intentionally runs NO script: the main app window monitors this page,
-     reads the sign-in response, completes the token exchange, and closes this window.
-     (The redirect page must NOT run MSAL itself in popup mode.) -->
+<body style="font:15px system-ui,Segoe UI,Arial;padding:24px;color:#44545f">Signing you in… one moment; this window closes automatically.</body>
+<!-- MSAL redirect landing. It RUNS MSAL to complete the sign-in handshake:
+     - popup sign-in: handleRedirectPromise processes the response, notifies the opener
+       (BroadcastChannel), then this window closes;
+     - full-page redirect: it caches the result, then returns to the app.
+     A blank/no-script page leaves the opener waiting -> MSAL "timed_out" on newer MSAL. -->
+<script src="msal-browser.min.js"></script>
+<script>
+(async function () {
+  try {
+    var pca = new msal.PublicClientApplication({
+      auth: {
+        clientId: '3702875f-471b-4878-a009-8a2575b41db3',
+        authority: 'https://login.microsoftonline.com/cc541639-168a-4a8d-9880-4e3628918b70',
+        redirectUri: location.origin + location.pathname   // = .../redirect.html
+      },
+      cache: { cacheLocation: 'sessionStorage' }
+    });
+    await pca.initialize();
+    await pca.handleRedirectPromise();
+  } catch (e) { try { console.error('redirect handler:', e); } catch (_) {} }
+  // popup -> let it close; full-page redirect -> return to the app (index.html in this folder)
+  if (window.opener && window.opener !== window) { window.close(); }
+  else { location.replace(location.pathname.replace(/[^/]*$/, '')); }
+})();
+</script>
