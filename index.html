@@ -548,6 +548,8 @@ const FACILITY_CONTACTS = [
   // AT GO-LIVE, replace the test address with the real approved facility contact(s) — kept in the
   // private ops vault, not in this file (this repo is hosted publicly).
   { name: 'University Heights (TEST → admin)', email: 'admin@lavidaheal.com' },
+  // TEMPORARY self-test recipient — REMOVE at go-live (Scott is testing the email-draft flow to himself).
+  { name: 'TEST → me (operations@)', email: 'operations@lavidaheal.com' },
   // add more approved facility contacts here, one line each — name + secure address
 ];
 function esc(s){ return (s==null?'':String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
