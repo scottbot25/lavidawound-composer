@@ -244,13 +244,21 @@ const TEMPLATES = {
 `This is a ***. The patient ***. This wound was first noted on / around ***. It is believed to be secondary to [pressure/ diabetes/ venous/ arterial /trauma /surgical /unknown]. Current facility treatment has included: [dressings/offloading/compression/antibiotics/other].
 Prior treatments have included ***.
 The patient reports ***.
-Risk factors — DM: [yes/no]; Tobacco: [yes/no]; Chemotherapy: [yes/no]; Radiation: [yes/no]; Steroids: [yes/no]; Other immunocompromise: [yes/no].
-History of blood clots, clotting disorders, or bleeding disorders: [yes / no]. On blood thinners or other anticoagulant therapy: [yes / no].
+Risk factors:
+DM: [yes/no].
+Tobacco: [yes/no].
+Chemotherapy: [yes/no].
+Radiation: [yes/no].
+Steroids: [yes/no].
+Other immunocompromise: [yes/no].
+History of blood clots, clotting disorders, or bleeding disorders: [yes / no].
+On blood thinners or other anticoagulant therapy: [yes / no].
 Their baseline mobility is: [wheelchair/ bed bound/ independent / other: ***].
 Their offloading ability is: [independent / requires staff / completely dependent]
 Their nutritional plans include: [regular / supplements / tube feeds / other: ***]
 Their continence status is [continent / incontinent]
-Interval health changes: [none / yes: ***]. Sick contacts: [none / yes].
+Interval health changes: [none / yes: ***].
+Sick contacts: [none / yes].
 Review of systems: [negative except as noted in HPI / additional findings: ***].`],
       ["Family History",
 `[Unknown / Known: ***] family history of bleeding or clotting disorders.`],
@@ -279,12 +287,14 @@ Hair growth: [present/absent].
 Compression device in use: [yes/no].
 Neuropathy/protective sensation: [intact/decreased/absent/not tested].
 Other findings: ***
-Per-wound findings below. Periwound signs of infection / inflammation: [absent / present — erythema / induration / ecchymosis / fluctuance / increased warmth / tenderness].
+Per-wound findings below.
+Periwound signs of infection / inflammation: [absent / present — erythema / induration / ecchymosis / fluctuance / increased warmth / tenderness].
 Location / laterality: *** — [left / right / midline / other].
 L: *** cm W: *** cm D: *** cm
 Surface area (auto): *** cm²
 Etiology/classification: [pressure injury stage / diabetic ulcer Wagner grade / venous / arterial / surgical / traumatic / MASD / other].
-If pressure injury → Stage: [1 / 2 / 3 / 4 / unstageable / DTI]. If diabetic ulcer → Wagner grade: [0 / 1 / 2 / 3 / 4 / 5].
+If pressure injury → Stage: [1 / 2 / 3 / 4 / unstageable / DTI].
+If diabetic ulcer → Wagner grade: [0 / 1 / 2 / 3 / 4 / 5].
 Status: [new/not healed/improving/stable/worsening/healed].
 Wound bed: [ ]% granulation, [ ]% slough, [ ]% eschar, [ ]% epithelialization, [ ]% fibrin/exudate, [ ]% exposed structure.
 Exposed structures: [none/subcutaneous tissue/tendon/muscle/bone/hardware].
@@ -339,13 +349,15 @@ Hair growth: [present/absent].
 Compression device in use: [yes/no].
 Neuropathy/protective sensation: [intact/decreased/absent/not tested].
 Other findings: ***
-Per-wound findings below. Periwound signs of infection / inflammation: [absent / present — erythema / induration / ecchymosis / fluctuance / increased warmth / tenderness].
+Per-wound findings below.
+Periwound signs of infection / inflammation: [absent / present — erythema / induration / ecchymosis / fluctuance / increased warmth / tenderness].
 Location / laterality: *** — [left / right / midline / other].
 L: *** cm W: *** cm D: *** cm
 Surface area (auto): *** cm²
 Prior Measurements: Please copy from my previous on the EMR
 Etiology/classification: [pressure injury stage / diabetic ulcer Wagner grade / venous / arterial / surgical / traumatic / MASD / other].
-If pressure injury → Stage: [1 / 2 / 3 / 4 / unstageable / DTI]. If diabetic ulcer → Wagner grade: [0 / 1 / 2 / 3 / 4 / 5].
+If pressure injury → Stage: [1 / 2 / 3 / 4 / unstageable / DTI].
+If diabetic ulcer → Wagner grade: [0 / 1 / 2 / 3 / 4 / 5].
 Status: [new/not healed/improving/stable/worsening/healed].
 Wound bed: [ ]% granulation, [ ]% slough, [ ]% eschar, [ ]% epithelialization, [ ]% fibrin/exudate, [ ]% exposed structure.
 Exposed structures: [none/subcutaneous tissue/tendon/muscle/bone/hardware].
@@ -1403,10 +1415,10 @@ function fmtLine(line){
     return escH(lead)+'<u>'+escH(trimmed)+'</u>';
   }
   // bilateral "Label — Left: x, Right: y." -> bold the leading label
-  let m=line.match(/^(\s*)([A-Za-z][A-Za-z0-9/() ]*?)\s—\s([\s\S]*)$/);
+  let m=line.match(/^(\s*)([A-Za-z][A-Za-z0-9/()→ ]*?)\s—\s([\s\S]*)$/);
   if(m) return escH(m[1])+'<b>'+escH(m[2])+'</b> — '+escH(m[3]);
-  // "Label: value" -> bold the "Label:" part
-  m=line.match(/^(\s*)([A-Za-z][A-Za-z0-9/() ]*?):(\s[\s\S]*|$)/);
+  // "Label: value" -> bold the "Label:" part (label may carry a "→" conditional, e.g. "If pressure injury → Stage:")
+  m=line.match(/^(\s*)([A-Za-z][A-Za-z0-9/()→ ]*?):(\s[\s\S]*|$)/);
   if(m) return escH(m[1])+'<b>'+escH(m[2])+':</b>'+escH(m[3]);
   return escH(line);
 }
