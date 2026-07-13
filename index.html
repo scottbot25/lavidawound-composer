@@ -194,6 +194,7 @@
     <button id="tab-fu" onclick="setMode('fu')">Follow-Up · Weekly</button>
   </div>
   <label class="pt-field" title="For your reference and the facility handoff only — this is never copied into the PCC note.">Patient <input id="patientName" placeholder="name / ID — not copied into the note" oninput="onPatientInput(this.value)"></label>
+  <button class="ghost" onclick="addToRoster()" title="Snapshot the current patient into today’s running handoff list. Build it up patient by patient, then open Facility Handoff to review/send the whole list." style="padding:6px 12px">➕ Add to today’s list (<span id="rosterCount">0</span>)</button>
   <button class="ghost" onclick="openHandoff()" style="padding:6px 12px">📄 Facility Handoff</button>
   <span id="authUser" class="auth-user"></span>
   <span class="badge">● Local · autosaves in this browser only <span id="saveflag" style="color:#0c6d61;margin-left:4px"></span></span>
@@ -263,29 +264,29 @@ Review of systems: [negative except as noted in HPI / additional findings: ***].
       ["Family History",
 `[Unknown / Known: ***] family history of bleeding or clotting disorders.`],
       ["Physical Exam",
-`General: [alert, no acute distress / ill-appearing / lethargic / altered mental status / febrile-appearing].
-Cardiovascular: [regular rate per pulse / tachycardic / irregular].
-Respiratory: [normal effort / tachypneic / increased work of breathing].
-Abdomen: [non-distended / distended / tender].
-Neuro: [grossly non-focal / focal deficit / altered mental status].
-Skin: [warm and dry / diaphoretic / cool / mottled].
+`General: [alert, no acute distress / ill-appearing / lethargic / altered mental status / febrile-appearing / other: ***].
+Cardiovascular: [regular rate per pulse / tachycardic / irregular / other: ***].
+Respiratory: [normal effort / tachypneic / increased work of breathing / other: ***].
+Abdomen: [non-distended / distended / tender / other: ***].
+Neuro: [grossly non-focal / focal deficit / altered mental status / other: ***].
+Skin: [warm and dry / diaphoretic / cool / mottled / other: ***].
 Extremities:
-Extremity skin: [warm and dry / cool / mottled / cyanotic].
-Edema: [none/trace/1+/2+/3+].
+Extremity skin: [warm and dry / cool / mottled / cyanotic / other: ***].
+Edema: [none/trace/1+/2+/3+/other: ***].
 Hemosiderosis: [yes/no].
 Hyperpigmentation: [yes/no].
 Lipodermatosclerosis: [yes/no].
 Hyperkeratosis: [yes/no].
 Maceration: [yes/no].
 Vascular:
-DP/PT pulses: [palpable/doppler/nonpalpable].
-Capillary refill: [<3 sec/>3 sec].
-Temperature: [warm/cool].
+DP/PT pulses: [palpable/doppler/nonpalpable/other: ***].
+Capillary refill: [<3 sec/>3 sec/other: ***].
+Temperature: [warm/cool/other: ***].
 Dependent rubor: [yes/no].
 Erythema: [yes/no].
 Hair growth: [present/absent].
 Compression device in use: [yes/no].
-Neuropathy/protective sensation: [intact/decreased/absent/not tested].
+Neuropathy/protective sensation: [intact/decreased/absent/not tested/other: ***].
 Other findings: ***
 Per-wound findings below.
 Periwound signs of infection / inflammation: [absent / present — erythema / induration / ecchymosis / fluctuance / increased warmth / tenderness].
@@ -325,29 +326,29 @@ Plans:
 Prior subjective: Please copy from my previous on the EMR`],
       ["Objective",
 `Physical exam
-General: [alert, no acute distress / ill-appearing / lethargic / altered mental status / febrile-appearing].
-Cardiovascular: [regular rate per pulse / tachycardic / irregular].
-Respiratory: [normal effort / tachypneic / increased work of breathing].
-Abdomen: [non-distended / distended / tender].
-Neuro: [grossly non-focal / focal deficit / altered mental status].
-Skin: [warm and dry / diaphoretic / cool / mottled].
+General: [alert, no acute distress / ill-appearing / lethargic / altered mental status / febrile-appearing / other: ***].
+Cardiovascular: [regular rate per pulse / tachycardic / irregular / other: ***].
+Respiratory: [normal effort / tachypneic / increased work of breathing / other: ***].
+Abdomen: [non-distended / distended / tender / other: ***].
+Neuro: [grossly non-focal / focal deficit / altered mental status / other: ***].
+Skin: [warm and dry / diaphoretic / cool / mottled / other: ***].
 Extremities:
-Extremity skin: [warm and dry / cool / mottled / cyanotic].
-Edema: [none/trace/1+/2+/3+].
+Extremity skin: [warm and dry / cool / mottled / cyanotic / other: ***].
+Edema: [none/trace/1+/2+/3+/other: ***].
 Hemosiderosis: [yes/no].
 Hyperpigmentation: [yes/no].
 Lipodermatosclerosis: [yes/no].
 Hyperkeratosis: [yes/no].
 Maceration: [yes/no].
 Vascular:
-DP/PT pulses: [palpable/doppler/nonpalpable].
-Capillary refill: [<3 sec/>3 sec].
-Temperature: [warm/cool].
+DP/PT pulses: [palpable/doppler/nonpalpable/other: ***].
+Capillary refill: [<3 sec/>3 sec/other: ***].
+Temperature: [warm/cool/other: ***].
 Dependent rubor: [yes/no].
 Erythema: [yes/no].
 Hair growth: [present/absent].
 Compression device in use: [yes/no].
-Neuropathy/protective sensation: [intact/decreased/absent/not tested].
+Neuropathy/protective sensation: [intact/decreased/absent/not tested/other: ***].
 Other findings: ***
 Per-wound findings below.
 Periwound signs of infection / inflammation: [absent / present — erythema / induration / ecchymosis / fluctuance / increased warmth / tenderness].
@@ -389,7 +390,7 @@ Deepest tissue debrided: [epidermis / dermis / sq tissue / fascia / muscle / bon
 Type of Debridement: Excisional debridement (scalpel and/or curette). [Change to selective if removing only superficial slough/biofilm.]
 Instrument Used: [curette / curved scissors / scalpel / forceps / other]
 Estimated Blood Loss (mL): *** mL
-Blood Loss Controlled Via: [pressure / silver nitrate / hemostatic agent / electrocautery / none needed]
+Blood Loss Controlled Via: [pressure / suture ligation / silver nitrate / hemostatic agent / electrocautery / none needed]
 Consent: [risks, benefits, and alternatives discussed and agreed]
 Anesthesia: [topical / local lidocaine / none]
 Cleansing / prep: [wound cleanser / saline / other: ***]
@@ -551,7 +552,15 @@ const FACILITY_CONTACTS = [
 ];
 function esc(s){ return (s==null?'':String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 function val(id){ const e=document.getElementById(id); return e?e.value:''; }
-function currentHeader(){ return {patient:val('ho_patient'),facility:val('ho_facility'),date:val('ho_date'),provider:val('ho_provider'),dx:val('ho_dx')}; }
+// Works whether or not the handoff modal is open: when a ho_ field isn't in the DOM (modal closed),
+// fall back to the last-saved handoff header + the main patient-name field, so "Add to today's list"
+// works straight from the header button.
+function currentHeader(){
+  const hs=STATE['__handoff']||{};
+  const fld=(id,fb)=>{ const e=document.getElementById(id); return e ? e.value : fb; };
+  return { patient:fld('ho_patient', getPatient()||hs.patient||''), facility:fld('ho_facility', hs.facility||''),
+    date:fld('ho_date', hs.date||''), provider:fld('ho_provider', hs.provider||''), dx:fld('ho_dx', hs.dx||'') };
+}
 function saveHandoff(){ STATE['__handoff']=currentHeader(); persist(); }
 // --- field extraction from resolved note text (pull, don't duplicate) ---
 function grab(t,re){ const m=t.match(re); return m? m[1].trim().replace(/\s*\.\s*$/,'') : ''; }
@@ -595,9 +604,19 @@ function extractPatient(){
 // running roster of patients seen that day (own sessionStorage key, so clearing the note doesn't wipe it)
 function rosterGet(){ try{ return JSON.parse(sessionStorage.getItem('lavida_handoff_roster')||'[]'); }catch(e){ return []; } }
 function rosterSet(r){ try{ sessionStorage.setItem('lavida_handoff_roster', JSON.stringify(r)); }catch(e){} }
-function addToRoster(){ const p=extractPatient(); if(hoBlank(p.patient)){ toast('Enter the patient name/ID first'); return; } const r=rosterGet(); r.push(p); rosterSet(r); toast('Added — '+r.length+' in today’s handoff'); openHandoff(); }
-function removeFromRoster(i){ const r=rosterGet(); r.splice(i,1); rosterSet(r); openHandoff(); }
-function clearRoster(){ if(!confirm('Clear today’s handoff roster? (does not affect the note)')) return; rosterSet([]); openHandoff(); }
+function updateRosterBadge(){ const el=document.getElementById('rosterCount'); if(el) el.textContent=rosterGet().length; }
+function addToRoster(){
+  const p=extractPatient();
+  if(hoBlank(p.patient)){ toast('Enter the patient name/ID first (top of the page)'); return; }
+  const r=rosterGet();
+  if(r.some(x=>(x.patient||'').trim().toLowerCase()===(p.patient||'').trim().toLowerCase())){ toast(p.patient+' is already in today’s handoff'); return; }
+  r.push(p); rosterSet(r); updateRosterBadge();
+  toast('Added '+p.patient+' — '+r.length+' in today’s handoff');
+  const modal=document.getElementById('handoffModal');
+  if(modal && modal.style.display!=='none') openHandoff();   // refresh the list if the modal is open
+}
+function removeFromRoster(i){ const r=rosterGet(); r.splice(i,1); rosterSet(r); updateRosterBadge(); openHandoff(); }
+function clearRoster(){ if(!confirm('Clear today’s handoff roster? (does not affect the note)')) return; rosterSet([]); updateRosterBadge(); openHandoff(); }
 function renderPatient(p){
   const row=(l,v)=>'<tr><td class="l">'+esc(l)+'</td><td>'+esc(hoVal(v))+'</td></tr>';
   const block=(title,pairs)=>{ const rows=pairs.filter(x=>!hoBlank(x[1])).map(x=>row(x[0],x[1])).join(''); return rows?'<div class="w"><h3>'+esc(title)+'</h3><table>'+rows+'</table></div>':''; };
@@ -822,9 +841,10 @@ function openHandoff(){
        '<div><label>Dx / ICD-10 <span style="color:var(--muted);font-weight:400">— copy from EMR</span></label><input id="ho_dx" placeholder="copy from EMR (e.g. L89.153, E11.621)" value="'+esc(hs.dx||'')+'"></div>'+
      '</div>'+
      '<div class="ho-note">Wound findings, procedure &amp; orders pull automatically from the note you filled — this only adds what the note doesn’t capture.</div>'+
-     '<div class="ho-roster"><button class="primary" onclick="addToRoster()">+ Add this patient to today’s handoff</button>'+
-       '<span class="ho-note" style="flex:0 1 auto">'+roster.length+' patient'+(roster.length===1?'':'s')+' in today’s handoff'+(roster.length?' — the buttons below produce the full roster':'')+'</span></div>'+
-     (roster.length ? '<div class="ho-rlist">'+roster.map((p,i)=>'<span class="ho-rchip">'+(i+1)+'. '+esc(p.patient||'—')+((p.facility&&!hoBlank(p.facility))?' · '+esc(p.facility):'')+' <button onclick="removeFromRoster('+i+')">✕</button></span>').join('')+'<button class="ho-clear" onclick="clearRoster()">Clear roster</button></div>' : '')+
+     '<div class="ho-roster"><button class="primary" onclick="addToRoster()">➕ Add current patient to the list</button>'+
+       '<span class="ho-note" style="flex:1 1 auto"><b>Today’s handoff: '+roster.length+' patient'+(roster.length===1?'':'s')+'.</b> '+
+         (roster.length ? 'Download / Print / Email / Save below produce the whole list.' : 'Add each patient as you finish their note (or use ➕ Add to today’s list up top). Until you add one, the buttons below act on the current patient.')+'</span></div>'+
+     (roster.length ? '<div class="ho-rlist">'+roster.map((p,i)=>'<span class="ho-rchip">'+(i+1)+'. '+esc(p.patient||'—')+((p.facility&&!hoBlank(p.facility))?' · '+esc(p.facility):'')+' <button title="Remove from list" onclick="removeFromRoster('+i+')">✕</button></span>').join('')+'<button class="ho-clear" onclick="clearRoster()">Clear list</button></div>' : '')+
      '<div class="ho-actions"><button class="primary" onclick="downloadHandoff()">Download (.doc)</button>'+
        '<button class="ghost" onclick="printHandoff()">Print / Save PDF</button>'+
        '<span class="ho-note">Download/Print leave a copy of this PHI <b>on this computer</b> — on a shared or unencrypted device, prefer <b>☁ Save to ClinicalVault</b> below, which stores nothing locally.</span></div>'+
@@ -950,10 +970,11 @@ function renderLines(text, container, keyPrefix){
       if(/Blood Loss Controlled Via:\s*$/.test(lastLit)) return makeMultiCheck(tk, sink);
       if(/Anesthesia:\s*$/.test(lastLit)) return makeMultiCheck(tk, sink);
       if(/Periwound:\s*$/.test(lastLit)) return makeMultiCheck(tk, sink);
+      if(/Etiology\/classification:\s*$/.test(lastLit)) return makeMultiCheck(tk, sink);
       if(/Offloading with\s*$/.test(lastLit)) return makeMultiCheck(tk, sink);
       const k=nextKey(); const sel=document.createElement('select');
       const blank=document.createElement('option'); blank.value=''; blank.textContent='Select…'; sel.appendChild(blank);
-      tk.opts.forEach(o=>{const op=document.createElement('option');op.value=o;op.textContent=o;sel.appendChild(op);});
+      tk.opts.forEach(o=>{const op=document.createElement('option');op.value=o;op.textContent=/^other\b/i.test(o)?'other…':o;sel.appendChild(op);});
       const hasFill=tk.opts.some(isFillOpt);   // "other", "other: ***", or a bare "***"
       let fillInp=null;
       if(hasFill){ const fk=k+':fill'; fillInp=document.createElement('input'); fillInp.type='text'; fillInp.className='txt'; fillInp.placeholder='specify…'; fillInp.style.display='none';
@@ -965,6 +986,9 @@ function renderLines(text, container, keyPrefix){
       sel.onchange=()=>{STATE[k]=sel.value; sel.classList.toggle('unset',!sel.value); updFill(); persist(); resolveAll();};
       sink.push(()=>{ if(!sel.value) return tk.raw; if(!isFillOpt(sel.value)) return sel.value;
         const t=fillInp&&fillInp.value.trim();
+        // "other" / "other: ***" -> emit ONLY the free text (no "other:" prefix); empty -> drop it entirely
+        if(/^other\b/i.test(sel.value)) return t || '';
+        // "Label: ***" (e.g. Family History "Known: ***") -> keep the label, drop the *** in place
         if(/\*\*\*/.test(sel.value)) return t ? sel.value.replace(/\*\*\*/, t)
           : sel.value.replace(/:?\s*\*\*\*\s*$/,'').replace(/\*\*\*/,'').trim();  // empty box -> drop the ***, no leftover placeholder
         return t || sel.value; });
@@ -1077,24 +1101,29 @@ function renderLines(text, container, keyPrefix){
     const row=document.createElement('div'); row.className='frow';
     const lab=document.createElement('div'); lab.className='flabel'; lab.textContent=label;
     const ctr=document.createElement('div'); ctr.className='fctrls'; ctr.style.flexWrap='wrap';
-    const api=[];
+    const api=[]; const fillOpt=opts.find(isFillOpt);   // if the field carries an "other: ***" option, each side gets a free-text box
     [['L','Left'],['R','Right']].forEach(([sd,slabel])=>{
-      const vk=keyPrefix+':vasc:'+li+':'+sd, ok=vk+':on';
+      const vk=keyPrefix+':vasc:'+li+':'+sd, ok=vk+':on', fkk=vk+':fill';
       const grp=document.createElement('span'); grp.className='pair side-pair';
       const l=document.createElement('span'); l.className='lit'; l.textContent=slabel;
       const sel=document.createElement('select');
       const blank=document.createElement('option'); blank.value=''; blank.textContent='Select…'; sel.appendChild(blank);
-      opts.forEach(o=>{const op=document.createElement('option');op.value=o;op.textContent=o;sel.appendChild(op);});
+      opts.forEach(o=>{const op=document.createElement('option');op.value=o;op.textContent=isFillOpt(o)?'other…':o;sel.appendChild(op);});
       if(STATE[vk]!=null && [...sel.options].some(o=>o.value===STATE[vk])) sel.value=STATE[vk];
       sel.classList.toggle('unset',!sel.value);
-      sel.onchange=()=>{STATE[vk]=sel.value; sel.classList.toggle('unset',!sel.value); persist(); resolveAll();};
+      let fillInp=null;
+      if(fillOpt){ fillInp=document.createElement('input'); fillInp.type='text'; fillInp.className='txt'; fillInp.style.width='120px'; fillInp.placeholder='specify…'; fillInp.style.display='none';
+        if(STATE[fkk]!=null) fillInp.value=STATE[fkk];
+        fillInp.oninput=()=>{STATE[fkk]=fillInp.value; persist(); resolveAll();}; }
+      const updFill=()=>{ if(fillInp) fillInp.style.display=isFillOpt(sel.value)?'':'none'; };
+      sel.onchange=()=>{STATE[vk]=sel.value; sel.classList.toggle('unset',!sel.value); updFill(); persist(); resolveAll();};
       const rm=document.createElement('button'); rm.type='button'; rm.className='side-rm';
       const isOn=()=>STATE[ok]!==false;
-      const paint=()=>{ const on=isOn(); grp.classList.toggle('side-off',!on); sel.disabled=!on; rm.textContent=on?'✕':'↩'; rm.title=on?('Remove '+slabel.toLowerCase()+' leg from this field'):('Restore '+slabel.toLowerCase()+' leg'); };
+      const paint=()=>{ const on=isOn(); grp.classList.toggle('side-off',!on); sel.disabled=!on; if(fillInp) fillInp.disabled=!on; rm.textContent=on?'✕':'↩'; rm.title=on?('Remove '+slabel.toLowerCase()+' leg from this field'):('Restore '+slabel.toLowerCase()+' leg'); };
       rm.onclick=()=>{ STATE[ok]=!isOn(); persist(); paint(); resolveAll(); };
-      paint();
-      grp.appendChild(l); grp.appendChild(sel); grp.appendChild(rm); ctr.appendChild(grp);
-      api.push({slabel, val:()=>sel.value, on:isOn});
+      paint(); updFill();
+      grp.appendChild(l); grp.appendChild(sel); if(fillInp) grp.appendChild(fillInp); grp.appendChild(rm); ctr.appendChild(grp);
+      api.push({slabel, on:isOn, val:()=>{ const v=sel.value; if(!v) return ''; if(!isFillOpt(v)) return v; return (fillInp&&fillInp.value.trim())||''; }});
     });
     row.appendChild(lab); row.appendChild(ctr); container.appendChild(row);
     addLine(row, ()=>{ const parts=[];
@@ -1484,6 +1513,7 @@ function setMode(mode){
   const form=document.getElementById('form'); form.innerHTML=''; sectionResolvers=[]; copiedState={};
   t.sections.forEach(([name,text],i)=>form.appendChild(buildSection(name,i,text)));
   resolveAll();
+  updateRosterBadge();   // keep the header "Add to today’s list (N)" count in sync after any (re)build
 }
 /* ============ SIGN-IN GATE — Microsoft Entra (LaVida M365 tenant) ============
    Users are @lavidaheal.com, so identity = the LaVida M365 tenant (same one that guards
