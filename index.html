@@ -932,7 +932,15 @@ function renderLines(text, container, keyPrefix){
         const tl=document.createElement('span'); tl.className='lit'; tl.textContent='to';
         wrap.appendChild(fl); wrap.appendChild(from); wrap.appendChild(tl); wrap.appendChild(to);
         sink.push(()=>{ const a=from.value.trim(), b=to.value.trim(); return (a||b) ? 'from '+a+' to '+b : tk.raw; });
-        if(isUnder){ underFrom=from; underTo=to; } else { tunFrom=from; tunTo=to; }
+        if(isUnder){ underFrom=from; underTo=to;
+          // Clock trigger lives right here on the Undermining line (adjacent to Tunneling) instead of
+          // up in the card header — opens the dial that fills both fields. Reads under/tun inputs
+          // lazily at click time, so the (later-rendered) tunneling boxes are already wired.
+          const clk=document.createElement('button'); clk.type='button'; clk.className='wound-clock'; clk.style.marginLeft='8px';
+          clk.textContent='🕐 Clock'; clk.title='Undermining / Tunneling clock — fills both fields on this wound';
+          clk.onclick=()=>openClock({underFrom, underTo, tunFrom, tunTo});
+          wrap.appendChild(clk);
+        } else { tunFrom=from; tunTo=to; }
         return wrap;
       }
       if(/Dressings\s*$/.test(lastLit)) return makeDressings(tk, sink);
@@ -1344,15 +1352,12 @@ function buildSection(name,idx,text){
       const card=document.createElement('div'); card.className='wound-card';
       const head=document.createElement('div'); head.className='wound-head';
       const title=document.createElement('span'); title.className='wound-title'; title.textContent='Wound';
-      const clockBtn=document.createElement('button'); clockBtn.className='wound-clock'; clockBtn.textContent='🕐 Clock';
-      clockBtn.title="Undermining / Tunneling clock — fills this wound's fields";
       const rm=document.createElement('button'); rm.className='wound-rm'; rm.textContent='Remove';
-      head.appendChild(title); head.appendChild(clockBtn); head.appendChild(rm);
+      head.appendChild(title); head.appendChild(rm);
       const inner=document.createElement('div'); inner.className='wound-body';
       card.appendChild(head); card.appendChild(inner);
       const block=renderLines(woundTmpl, inner, idx+':w'+id);
       const w={id, resolve:block.resolve, title, keyPrefix:idx+':w'+id, underFrom:block.underFrom, underTo:block.underTo, tunFrom:block.tunFrom, tunTo:block.tunTo};
-      clockBtn.onclick=()=>openClock(w);
       rm.onclick=()=>{ if(wounds.length<=1) return; const i=wounds.indexOf(w); if(i>=0){ wounds.splice(i,1); card.remove(); saveWounds(); renumber(); if(dressingsSync) dressingsSync(); resolveAll(); } };
       wounds.push(w); woundsWrap.appendChild(card); renumber(); if(dressingsSync) dressingsSync();
     }
