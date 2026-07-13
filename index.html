@@ -606,19 +606,35 @@ function extractPatient(){
 // running roster of patients seen that day (own sessionStorage key, so clearing the note doesn't wipe it)
 function rosterGet(){ try{ return JSON.parse(sessionStorage.getItem('lavida_handoff_roster')||'[]'); }catch(e){ return []; } }
 function rosterSet(r){ try{ sessionStorage.setItem('lavida_handoff_roster', JSON.stringify(r)); }catch(e){} }
-function updateRosterBadge(){ const el=document.getElementById('rosterCount'); if(el) el.textContent=rosterGet().length; }
+// The roster lives in sessionStorage (wiped when the browser TAB closes — no PHI at rest, per the
+// HIPAA posture). Track whether the current list has been captured somewhere durable (ClinicalVault /
+// download / print / email) so we can (a) badge it amber while unsaved and (b) warn before an
+// accidental tab-close throws the day's list away.
+function rosterSavedGet(){ try{ return sessionStorage.getItem('lavida_handoff_saved')==='1'; }catch(e){ return false; } }
+function rosterSavedSet(v){ try{ v ? sessionStorage.setItem('lavida_handoff_saved','1') : sessionStorage.removeItem('lavida_handoff_saved'); }catch(e){} updateRosterBadge(); }
+function updateRosterBadge(){
+  const el=document.getElementById('rosterCount'); if(!el) return;
+  const n=rosterGet().length; el.textContent=n;
+  const unsaved = n>0 && !rosterSavedGet();
+  el.style.background = unsaved ? '#f4b740' : 'rgba(255,255,255,.28)';   // amber = unsaved patients in the list
+  el.style.color = unsaved ? '#3a2d00' : '';
+  const btn=document.getElementById('addTodayBtn');
+  if(btn) btn.title = n>0
+    ? (unsaved ? n+' patient'+(n>1?'s':'')+' in today’s list — NOT yet saved. Open 📄 Facility Handoff and Save to ClinicalVault before you close the tab.' : n+' patient'+(n>1?'s':'')+' in today’s list, saved to ClinicalVault.')
+    : 'Add the current patient to today’s running handoff list — build it up patient by patient.';
+}
 function addToRoster(){
   const p=extractPatient();
   if(hoBlank(p.patient)){ toast('Enter the patient name/ID first (top of the page)'); return; }
   const r=rosterGet();
   if(r.some(x=>(x.patient||'').trim().toLowerCase()===(p.patient||'').trim().toLowerCase())){ toast(p.patient+' is already in today’s handoff'); return; }
-  r.push(p); rosterSet(r); updateRosterBadge();
+  r.push(p); rosterSet(r); rosterSavedSet(false);
   toast('Added '+p.patient+' — '+r.length+' in today’s handoff');
   const modal=document.getElementById('handoffModal');
   if(modal && modal.style.display!=='none') openHandoff();   // refresh the list if the modal is open
 }
-function removeFromRoster(i){ const r=rosterGet(); r.splice(i,1); rosterSet(r); updateRosterBadge(); openHandoff(); }
-function clearRoster(){ if(!confirm('Clear today’s handoff roster? (does not affect the note)')) return; rosterSet([]); updateRosterBadge(); openHandoff(); }
+function removeFromRoster(i){ const r=rosterGet(); r.splice(i,1); rosterSet(r); rosterSavedSet(false); openHandoff(); }
+function clearRoster(){ if(!confirm('Clear today’s handoff roster? (does not affect the note)')) return; rosterSet([]); rosterSavedSet(false); openHandoff(); }
 function renderPatient(p){
   const row=(l,v)=>'<tr><td class="l">'+esc(l)+'</td><td>'+esc(hoVal(v))+'</td></tr>';
   const block=(title,pairs)=>{ const rows=pairs.filter(x=>!hoBlank(x[1])).map(x=>row(x[0],x[1])).join(''); return rows?'<div class="w"><h3>'+esc(title)+'</h3><table>'+rows+'</table></div>':''; };
@@ -684,11 +700,13 @@ function downloadHandoff(){
   const blob=new Blob(['﻿'+handoffHTML()],{type:'application/msword'});
   const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=fileName();
   document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),1000); toast('Handoff downloaded');
+  if(rosterGet().length) rosterSavedSet(true);   // the whole list is now in a downloaded file
 }
 function printHandoff(){
   const f=document.createElement('iframe'); f.style.cssText='position:fixed;right:0;bottom:0;width:0;height:0;border:0';
   document.body.appendChild(f); const d=f.contentDocument; d.open(); d.write(handoffHTML()); d.close();
   f.contentWindow.focus(); setTimeout(()=>{ f.contentWindow.print(); setTimeout(()=>f.remove(),600); },250);
+  if(rosterGet().length) rosterSavedSet(true);
 }
 function emailHandoffSelected(){
   const sel=document.getElementById('ho_contact'); const i=sel&&sel.value;
@@ -714,6 +732,7 @@ function emailHandoffSelected(){
   toast(usedClipboard
     ? 'Draft opened — press Ctrl+V in the body to paste the handoff (it’s on your clipboard). Check the recipient, then send.'
     : 'Draft opened with the handoff filled in (also on your clipboard). Check the recipient, then send.');
+  if(rosterGet().length) rosterSavedSet(true);
 }
 function refreshHandoffPreview(){ const f=document.getElementById('ho_preview'); if(f) f.srcdoc=handoffHTML(); }
 
@@ -817,6 +836,7 @@ async function saveToVault(){
     const item=await _vaultUpload(token,driveId,segs,fileName(),blob);
     _vaultStatus('✓ Saved');
     _vaultResult(true,'Saved to '+segs.join(' / ')+' — '+fileName(),(item&&item.webUrl)||'');
+    if(rosterGet().length) rosterSavedSet(true);   // the whole list is now durably in ClinicalVault
   }catch(e){
     _vaultStatus('Save failed');
     _vaultResult(false,(e&&e.message)||String(e),'');
@@ -845,7 +865,10 @@ function openHandoff(){
      '<div class="ho-note">Wound findings, procedure &amp; orders pull automatically from the note you filled — this only adds what the note doesn’t capture.</div>'+
      '<div class="ho-roster"><button class="primary" onclick="addToRoster()">➕ Add current patient to the list</button>'+
        '<span class="ho-note" style="flex:1 1 auto"><b>Today’s handoff: '+roster.length+' patient'+(roster.length===1?'':'s')+'.</b> '+
-         (roster.length ? 'Download / Print / Email / Save below produce the whole list.' : 'Add each patient as you finish their note (or use ➕ Add to today’s list up top). Until you add one, the buttons below act on the current patient.')+'</span></div>'+
+         (roster.length
+           ? (rosterSavedGet() ? '<b style="color:var(--good)">✓ Saved to ClinicalVault.</b> ' : '<b style="color:var(--warn)">Not saved yet.</b> ')
+             + 'Download / Print / Email / Save below produce the whole list. <b>Closing this window keeps the list</b> — it clears only when you close the browser tab, so Save to ClinicalVault to keep it.'
+           : 'Add each patient as you finish their note (or use ➕ Add to today’s list up top). Until you add one, the buttons below act on the current patient.')+'</span></div>'+
      (roster.length ? '<div class="ho-rlist">'+roster.map((p,i)=>'<span class="ho-rchip">'+(i+1)+'. '+esc(p.patient||'—')+((p.facility&&!hoBlank(p.facility))?' · '+esc(p.facility):'')+' <button title="Remove from list" onclick="removeFromRoster('+i+')">✕</button></span>').join('')+'<button class="ho-clear" onclick="clearRoster()">Clear list</button></div>' : '')+
      '<div class="ho-actions"><button class="primary" onclick="downloadHandoff()">Download (.doc)</button>'+
        '<button class="ghost" onclick="printHandoff()">Print / Save PDF</button>'+
@@ -1577,6 +1600,13 @@ async function startApp(){
   showGate();
 }
 startApp();
+
+// Guard against accidental loss: the running handoff list lives only for this browser tab, so warn
+// if the provider tries to close/reload the tab while patients are in the list and it hasn't been
+// captured (ClinicalVault / download / print / email) yet. Browsers show their own generic prompt.
+window.addEventListener('beforeunload', (e)=>{
+  if(rosterGet().length>0 && !rosterSavedGet()){ e.preventDefault(); e.returnValue=''; return ''; }
+});
 
 // Keep --header-h synced to the header's real rendered height (it wraps to 2+ lines at medium
 // widths), so the sticky side panel's offset never drifts out of sync and hides under it.
