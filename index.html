@@ -807,7 +807,7 @@ async function saveToVault(){
 function closeHandoff(){ document.getElementById('handoffModal').style.display='none'; }
 function openHandoff(){
   const card=document.getElementById('handoffCard'); const hs=STATE['__handoff']||{}; const roster=rosterGet();
-  const claims=JSON.parse(sessionStorage.getItem('id_claims')||'{}'); const today=new Date().toISOString().slice(0,10);
+  const claims=JSON.parse(sessionStorage.getItem('id_claims')||'{}'); const today=todayISO();
   const contactOpts=FACILITY_CONTACTS.length
     ? '<option value="">— choose facility contact —</option>'+FACILITY_CONTACTS.map((c,i)=>'<option value="'+i+'">'+esc(c.name)+'</option>').join('')
     : '<option value="">— no facility contacts configured —</option>';
@@ -875,6 +875,9 @@ function tokenize(text){
 }
 
 // Render a block of template text into `container`; keys namespaced by keyPrefix; own surface-area wiring.
+// Local calendar date as YYYY-MM-DD. NOT toISOString() — that returns the UTC date, which is a day
+// ahead once it's evening in the US, and a service date must be the provider's local day.
+function todayISO(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
 function renderLines(text, container, keyPrefix){
   let seq=0, saField=null, Lfield=null, Wfield=null, Dfield=null, measFlags=null, priorInput=null, underFrom=null, underTo=null, tunFrom=null, tunTo=null;
   const nextKey=()=> keyPrefix+':'+(seq++);
@@ -973,6 +976,17 @@ function renderLines(text, container, keyPrefix){
       sink.push(()=> on ? tk.v : tk.raw); return chip;
     }
     if(tk.type==='text'){
+      // "date ***" (the weekly note's service date) → a real calendar picker that auto-fills today,
+      // stays editable, and outputs ISO YYYY-MM-DD (matches the handoff date + ClinicalVault path).
+      if(/(^|\s)date\s*$/i.test(lastLit)){
+        const k=nextKey();
+        const d=document.createElement('input'); d.type='date'; d.className='txt'; d.style.width='160px';
+        const today=todayISO();
+        d.value=(STATE[k]!=null && STATE[k]!=='') ? STATE[k] : today;   // today unless the provider changed it
+        d.oninput=()=>{STATE[k]=d.value; persist(); resolveAll();};
+        sink.push(()=> d.value ? d.value : (tk.raw||'***'));
+        return d;
+      }
       const isSA=/surface area\s*\(auto\)\s*:?\s*$/i.test(lastLit)||/Total Surface Area debrided[^\n]*$/i.test(lastLit);
       const inp=document.createElement('input'); inp.type='text';
       if(isSA){ inp.className='sa'; inp.readOnly=true; inp.placeholder='auto'; saField=inp; sink.push(()=> inp.value|| (tk.raw||'***')); return inp; }
