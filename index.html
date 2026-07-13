@@ -194,7 +194,7 @@
     <button id="tab-fu" onclick="setMode('fu')">Follow-Up · Weekly</button>
   </div>
   <label class="pt-field" title="For your reference and the facility handoff only — this is never copied into the PCC note.">Patient <input id="patientName" placeholder="name / ID — not copied into the note" oninput="onPatientInput(this.value)"></label>
-  <button class="ghost" onclick="addToRoster()" title="Snapshot the current patient into today’s running handoff list. Build it up patient by patient, then open Facility Handoff to review/send the whole list." style="padding:6px 12px">➕ Add to today’s list (<span id="rosterCount">0</span>)</button>
+  <button id="addTodayBtn" class="primary" onclick="addToRoster()" title="Snapshot the current patient into today’s running handoff list. Build it up patient by patient, then open Facility Handoff to review/send the whole list." style="padding:8px 15px;display:inline-flex;align-items:center;gap:8px;box-shadow:0 1px 5px rgba(15,138,124,.4)">➕ Add to today’s list<span id="rosterCount" style="background:rgba(255,255,255,.28);border-radius:999px;padding:1px 9px;font-size:12.5px;font-weight:700;min-width:22px;text-align:center">0</span></button>
   <button class="ghost" onclick="openHandoff()" style="padding:6px 12px">📄 Facility Handoff</button>
   <span id="authUser" class="auth-user"></span>
   <span class="badge">● Local · autosaves in this browser only <span id="saveflag" style="color:#0c6d61;margin-left:4px"></span></span>
