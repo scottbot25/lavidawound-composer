@@ -165,6 +165,14 @@
   .out-sec.copied .cap{background:linear-gradient(180deg,#e3f5ea,#eef7f1)}
   .out-sec.copied .cap button{border-color:var(--good)}
   .out-sec pre{margin:0;padding:9px 11px;white-space:pre-wrap;font:12.5px/1.5 ui-monospace,Consolas,monospace;color:#2a2925;min-height:78px}
+  /* composed-note display — one source line per block so each question sits on its own row, with
+     breathing room between them. Color here is DISPLAY-ONLY (CSS): it never reaches the clipboard
+     HTML, so paste into PCC still carries just the bold/underline structure. */
+  .out-sec .disp{margin:0;padding:9px 11px;font:12.5px/1.6 ui-monospace,Consolas,monospace;color:#2a2925;min-height:78px}
+  .out-sec .disp .ql{white-space:pre-wrap;padding:2px 0}
+  .out-sec .disp .ql.qgap{height:8px;padding:0}
+  .out-sec .disp .ql u{color:var(--accent);text-decoration-thickness:1.5px;text-underline-offset:2px}
+  .out-sec .disp .ql b{color:#0c6d61}
   .out-sec{transition:box-shadow .18s ease}
   .out-sec.sync-hi{box-shadow:0 0 0 2px var(--accent)}
   .out-scroll{overflow:auto;display:flex;flex-direction:column;gap:10px;flex:1}
@@ -307,7 +315,11 @@ Plans:
 Prior subjective: Please copy from my previous on the EMR`],
       ["Objective",
 `Physical exam
-General: [alert, no acute distress / ill-appearing / lethargic / altered mental status / febrile-appearing]. Cardiovascular: [regular rate per pulse / tachycardic / irregular]. Respiratory: [normal effort / tachypneic / increased work of breathing]. Abdomen: [non-distended / distended / tender]. Neuro: [grossly non-focal / focal deficit / altered mental status].
+General: [alert, no acute distress / ill-appearing / lethargic / altered mental status / febrile-appearing].
+Cardiovascular: [regular rate per pulse / tachycardic / irregular].
+Respiratory: [normal effort / tachypneic / increased work of breathing].
+Abdomen: [non-distended / distended / tender].
+Neuro: [grossly non-focal / focal deficit / altered mental status].
 Skin: [warm and dry / diaphoretic / cool / mottled].
 Extremities:
 Extremity skin: [warm and dry / cool / mottled / cyanotic].
@@ -329,7 +341,8 @@ Neuropathy/protective sensation: [intact/decreased/absent/not tested].
 Other findings: ***
 Per-wound findings below. Periwound signs of infection / inflammation: [absent / present — erythema / induration / ecchymosis / fluctuance / increased warmth / tenderness].
 Location / laterality: *** — [left / right / midline / other].
-L: *** cm W: *** cm D: *** cm Surface area (auto): *** cm²
+L: *** cm W: *** cm D: *** cm
+Surface area (auto): *** cm²
 Prior Measurements: Please copy from my previous on the EMR
 Etiology/classification: [pressure injury stage / diabetic ulcer Wagner grade / venous / arterial / surgical / traumatic / MASD / other].
 If pressure injury → Stage: [1 / 2 / 3 / 4 / unstageable / DTI]. If diabetic ulcer → Wagner grade: [0 / 1 / 2 / 3 / 4 / 5].
@@ -338,7 +351,8 @@ Wound bed: [ ]% granulation, [ ]% slough, [ ]% eschar, [ ]% epithelialization, [
 Exposed structures: [none/subcutaneous tissue/tendon/muscle/bone/hardware].
 Drainage: [none/scant/small/moderate/large], color [ ], consistency [thin/thick], odor [none/mild/strong].
 Undermining: [none/present from clock position/depth].
-Tunneling/sinus tract: [none/present location/depth]. Periwound: [normal/macerated/erythematous/indurated/ecchymotic/callused/fluctuant/warm/tender].`],
+Tunneling/sinus tract: [none/present location/depth].
+Periwound: [normal/macerated/erythematous/indurated/ecchymotic/callused/fluctuant/warm/tender].`],
       ["Assessment & Plan",
 `***
 -Debridement (see details above)
@@ -1351,8 +1365,8 @@ function resolveAll(){
     if(copiedState[s.name]===txt){ box.classList.add('copied'); } else { mark.style.display='none'; }
     btn.onclick=()=>{ copyRich(txt,'Copied "'+s.name+'"'); copiedState[s.name]=txt; box.classList.add('copied'); mark.style.display=''; };
     cap.appendChild(btn); cap.appendChild(mark);
-    const pre=document.createElement('pre'); pre.innerHTML=richDisplay(txt);
-    box.appendChild(cap); box.appendChild(pre); out.appendChild(box);
+    const disp=document.createElement('div'); disp.className='disp'; disp.innerHTML=richDisplayBlocks(txt);
+    box.appendChild(cap); box.appendChild(disp); out.appendChild(box);
   });
   paintCompleteness();
 }
@@ -1372,12 +1386,22 @@ function paintCompleteness(){
 /* ===== Rich formatting for the composed note — bold section headers, underline exam sub-labels.
    Applied to the RIGHT-panel display and to what the Copy button puts on the clipboard (text/html),
    so it can carry into PCC's rich-text note fields. All user text is HTML-escaped (no injection). ===== */
-const BOLD_HEADERS = ['Physical exam'];
+// Group/category headers get UNDERLINE only (not bold); the smaller field sub-labels below them
+// stay bold. Matched by exact label (case-insensitive, ignoring a trailing colon/period) so a
+// stripped-empty field like "Other findings:" is never mistaken for a header.
+const HEADER_LABELS = ['Physical exam','Extremities','Vascular','Debridement','Assessment','Plans'];
+function isHeaderLine(trimmed){
+  const key = trimmed.replace(/[:.\s]+$/,'').trim().toLowerCase();
+  return HEADER_LABELS.some(h=>h.toLowerCase()===key);
+}
 function escH(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function fmtLine(line){
   const trimmed=line.trim();
   if(!trimmed) return '';
-  if(BOLD_HEADERS.some(h=>trimmed.toLowerCase()===h.toLowerCase())) return '<b>'+escH(line)+'</b>';   // section header
+  if(isHeaderLine(trimmed)){                                                                    // group header -> underline only
+    const lead=(line.match(/^\s*/)||[''])[0];
+    return escH(lead)+'<u>'+escH(trimmed)+'</u>';
+  }
   // bilateral "Label — Left: x, Right: y." -> bold the leading label
   let m=line.match(/^(\s*)([A-Za-z][A-Za-z0-9/() ]*?)\s—\s([\s\S]*)$/);
   if(m) return escH(m[1])+'<b>'+escH(m[2])+'</b> — '+escH(m[3]);
@@ -1386,7 +1410,14 @@ function fmtLine(line){
   if(m) return escH(m[1])+'<b>'+escH(m[2])+':</b>'+escH(m[3]);
   return escH(line);
 }
-function richDisplay(text){ return String(text||'').split('\n').map(fmtLine).join('\n'); }   // inline tags; <pre> keeps the \n
+// Display (right panel): one <div> per source line so each question sits on its own row; blank
+// template lines become a small gap. Color is applied by CSS, not inline — see .out-sec .disp.
+function richDisplayBlocks(text){
+  return String(text||'').split('\n').map(l=>{
+    const h=fmtLine(l);
+    return h ? '<div class="ql">'+h+'</div>' : '<div class="ql qgap"></div>';
+  }).join('');
+}
 function richClipboard(text){ return String(text||'').split('\n').map(l=>{ const h=fmtLine(l); return h?'<div>'+h+'</div>':'<div><br></div>'; }).join(''); }  // block-per-line for paste
 async function copyRich(plainText, msg){
   const html=richClipboard(plainText);
