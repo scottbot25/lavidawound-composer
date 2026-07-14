@@ -3,6 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Defense-in-depth CSP: locks egress to Microsoft only, so even an injected script can't exfiltrate
+     PHI to a third party. GitHub Pages can't set response headers, so this is a meta CSP. 'unsafe-inline'
+     is required by the app's inline handlers/styles; the key control is connect/form/frame-src. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://graph.microsoft.com https://login.microsoftonline.com; form-action 'self' https://login.microsoftonline.com; frame-src https://login.microsoftonline.com; base-uri 'self'; object-src 'none'">
+<meta name="referrer" content="strict-origin-when-cross-origin">
 <title>LaVida Wound Note Composer — PCC Macro Filler</title>
 <style>
   :root{
@@ -548,8 +553,6 @@ const FACILITY_CONTACTS = [
   // AT GO-LIVE, replace the test address with the real approved facility contact(s) — kept in the
   // private ops vault, not in this file (this repo is hosted publicly).
   { name: 'University Heights (TEST → admin)', email: 'admin@lavidaheal.com' },
-  // TEMPORARY self-test recipient — REMOVE at go-live (Scott is testing the email-draft flow to himself).
-  { name: 'TEST → me (operations@)', email: 'operations@lavidaheal.com' },
   // add more approved facility contacts here, one line each — name + secure address
 ];
 function esc(s){ return (s==null?'':String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
@@ -814,7 +817,9 @@ function _vaultFacDate(){
   const roster=rosterGet(), h=currentHeader();
   let fac = roster.length ? ((roster.find(p=>p.facility&&!hoBlank(p.facility))||{}).facility||'') : h.facility;
   let date = roster.length ? ((roster.find(p=>p.dateVal&&!hoBlank(p.dateVal))||{}).dateVal||'') : h.date;
-  fac = String(fac||'').replace(/[\\/:*?"<>|#%]/g,'').replace(/\s+/g,' ').trim() || 'Unfiled';
+  fac = String(fac||'').replace(/[\\/:*?"<>|#%]/g,'').replace(/\s+/g,' ').trim();
+  if(/^\.+$/.test(fac)) fac='';          // neutralize a pure-dots segment (., .., …) — no traversal
+  fac = fac || 'Unfiled';
   date = /^\d{4}-\d{2}-\d{2}/.test(String(date||'')) ? date.slice(0,10) : 'undated';
   return { segs:['Daily Handoffs', fac, date] };
 }
