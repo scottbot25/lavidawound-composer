@@ -570,9 +570,10 @@ function saveHandoff(){ STATE['__handoff']=currentHeader(); persist(); }
 // --- field extraction from resolved note text (pull, don't duplicate) ---
 function grab(t,re){ const m=t.match(re); return m? m[1].trim().replace(/\s*\.\s*$/,'') : ''; }
 function tidy(v){ if(!v) return v; return v.split(',').map(s=>s.trim()).filter(s=> s && !/\[[^\]]*\]/.test(s)).join(', '); }
-// Unfilled if empty, a bare free-text star, or still showing an un-chosen [option / list] (with or
-// without trailing boilerplate) — keeps handoffs free of *** and raw dropdown lists.
-function hoBlank(v){ return !v || v==='[ ]' || /^\s*\*\*\*/.test(v) || /^\s*\[[^\]]*\]/.test(v); }
+// Unfilled if empty, a bare free-text star, or still carrying an un-chosen [option / list] ANYWHERE
+// in the value (a partially-filled field can leave a bracket mid-string), or the Type-of-Debridement
+// macro default (a plain sentence, not a bracket) — keeps handoffs free of *** and template defaults.
+function hoBlank(v){ return !v || v==='[ ]' || /^\s*\*\*\*/.test(v) || /\[[^\]]*\]/.test(v) || /scalpel and\/or curette/i.test(v); }
 function hoVal(v){ return hoBlank(v) ? '—' : v; }
 function dimsOf(t){ const m=t.match(/L:\s*(\S+)\s*cm\s*W:\s*(\S+)\s*cm\s*D:\s*(\S+)\s*cm/);
   if(!m || (m[1]==='***'&&m[2]==='***'&&m[3]==='***')) return ''; return m[1]+' × '+m[2]+' × '+m[3]+' cm'; }
