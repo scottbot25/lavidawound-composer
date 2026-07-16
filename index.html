@@ -1819,6 +1819,10 @@ function cleanForCopy(text){
     const t=l.trim();
     if(!t) return '';
     if(isHeaderLine(t)) return l;                                                     // group header — pruned in pass 2 if orphaned
+    // "Wound 1:" / "Wound 2:" are the per-wound SEPARATORS on a multi-wound note, not empty labels.
+    // Without this they hit the /:$/ rule below and get eaten — every wound's findings then run together
+    // in PCC with nothing saying which measurements belong to which wound. Keep them. (2026-07-16)
+    if(/^Wound\s+\d+:$/.test(t)) return l;
     const noTail=t.replace(/[.\s]+$/,'');
     if(/:$/.test(noTail)) return '';                                                  // empty "Label:" (with or without a trailing period)
     if(/(cm²?|%|mL|mm|minutes|o'clock)\s*\.?$/.test(t) && !/\d/.test(t)) return '';    // empty measurement/units line
