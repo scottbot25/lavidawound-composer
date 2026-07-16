@@ -1918,6 +1918,33 @@ async function startApp(){
 }
 startApp();
 
+// PHI hygiene — keep Chrome (and password managers) from REMEMBERING anything typed into the tool.
+// Patient names and note free-text are PHI; without this Chrome's autofill store could retain typed
+// names and even suggest them in other forms later. We stamp every text field with autocomplete-off
+// signals as it appears — a MutationObserver covers the dynamically-built note fields, wound blocks,
+// and the handoff modal, not just the static Patient box. (Selects/checkboxes aren't autofill-retained
+// as free text, so they're left alone.)
+function _hardenPHIInput(el){
+  if(!el || el.__phiHardened) return;
+  const tag=el.tagName, type=(el.type||'').toLowerCase();
+  if(tag!=='TEXTAREA' && !(tag==='INPUT' && (type===''||type==='text'||type==='search'||type==='date'))) return;
+  el.setAttribute('autocomplete','off'); el.setAttribute('autocorrect','off');
+  el.setAttribute('autocapitalize','off'); el.setAttribute('spellcheck','false');
+  el.setAttribute('data-lpignore','true'); el.setAttribute('data-1p-ignore','true');   // LastPass / 1Password: don't offer to save
+  el.__phiHardened=true;
+}
+(function(){
+  document.querySelectorAll('input,textarea').forEach(_hardenPHIInput);   // harden what's already on the page
+  try{
+    const mo=new MutationObserver(muts=>muts.forEach(m=>m.addedNodes&&m.addedNodes.forEach(n=>{
+      if(n.nodeType!==1) return;
+      if(n.matches&&n.matches('input,textarea')) _hardenPHIInput(n);
+      if(n.querySelectorAll) n.querySelectorAll('input,textarea').forEach(_hardenPHIInput);
+    })));
+    mo.observe(document.body,{childList:true,subtree:true});   // and everything created later
+  }catch(e){}
+})();
+
 // Guard against accidental loss: the running handoff list lives only for this browser tab, so warn
 // if the provider tries to close/reload the tab while patients are in the list and it hasn't been
 // captured (ClinicalVault / download / print / email) yet. Browsers show their own generic prompt.
