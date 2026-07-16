@@ -484,7 +484,9 @@ function getPatient(){ const p=activePt(); return p ? (p.name||'') : ''; }
 function setPatient(v){ const p=activePt(); if(p){ p.name=v||''; persist(); } }
 function paintPatient(){ const el=document.getElementById('patientName'); if(!el) return; const f=el.closest('.pt-field')||el; const filled=!!(el.value&&el.value.trim()); f.classList.toggle('fld-filled',filled); f.classList.toggle('fld-empty',!filled); }
 function syncPatientField(){ const el=document.getElementById('patientName'); if(el) el.value=getPatient(); paintPatient(); }
-function onPatientInput(v){ setPatient(v); paintPatient(); renderPatientBar(); const ho=document.getElementById('ho_patient'); if(ho && ho.value!==v){ ho.value=v; saveHandoff(); refreshHandoffPreview(); } }
+function onPatientInput(v){ setPatient(v); paintPatient(); renderPatientBar(); updateRosterBadge(); const ho=document.getElementById('ho_patient'); if(ho && ho.value!==v){ ho.value=v; saveHandoff(); refreshHandoffPreview(); } }
+// ^ updateRosterBadge() here keeps the "📄 Facility Handoff (N)" count live as a name is typed/cleared —
+//   the roster is derived from NAMED patients, so naming/un-naming must recount, not just add/remove.
 
 /* ---- patient workspace operations ---- */
 // Point STORE at the active patient's store and rebuild the form. The outgoing patient's edits are
@@ -1120,7 +1122,7 @@ function openHandoff(){
        '<span class="ho-note">Opens a draft in your default mail app with the handoff filled in — and copies it to your clipboard as a backup (paste with <b>Ctrl+V</b> if the draft looks empty). Recipient is limited to the approved contact above; <b>check it and hit send yourself</b>. Prefer a formatted file? Use Download / Print instead.</span></div>'+
      '<iframe class="ho-preview" id="ho_preview"></iframe>'+
    '</div>';
-  ['patient','facility','date','provider','dx'].forEach(k=>{ document.getElementById('ho_'+k).oninput=()=>{ if(k==='patient'){ setPatient(document.getElementById('ho_patient').value); syncPatientField(); } saveHandoff(); refreshHandoffPreview(); }; });
+  ['patient','facility','date','provider','dx'].forEach(k=>{ document.getElementById('ho_'+k).oninput=()=>{ if(k==='patient'){ setPatient(document.getElementById('ho_patient').value); syncPatientField(); updateRosterBadge(); } saveHandoff(); refreshHandoffPreview(); }; });
   document.getElementById('handoffModal').style.display='flex'; refreshHandoffPreview();
 }
 
