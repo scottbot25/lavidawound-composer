@@ -1784,7 +1784,12 @@ function cleanForCopy(text){
     if(/\[[^\]]*\]/.test(line)){
       // per top-level-comma sub-field: strip [placeholder]; keep only if a real value survives
       // (so "Location: sacrum — [laterality]" keeps "Location: sacrum", "color [ ]" drops).
-      const segs=line.split(/,(?![^\[]*\])/);
+      // Only comma-split lines with MULTIPLE bracket fields (e.g. "Drainage:[..], color[..], odor[..]").
+      // A single-bracket line whose LABEL contains commas (e.g. "History of blood clots, clotting
+      // disorders, or bleeding disorders: [yes/no]") must NOT be split, or an empty one leaks the
+      // pre-comma fragments ("History of blood clots, clotting disorders") instead of dropping whole.
+      const bracketGroups=(line.match(/\[[^\]]*\]/g)||[]).length;
+      const segs = bracketGroups>1 ? line.split(/,(?![^\[]*\])/) : [line];
       const kept=segs.map(seg=>{
         if(!/\[[^\]]*\]/.test(seg)) return seg;
         const s=seg.replace(/\[[^\]]*\]/g,'').replace(/\s{2,}/g,' ').replace(/\s*[—-]+\s*\.?\s*$/,'').trim();
