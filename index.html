@@ -986,6 +986,7 @@ function scheduleDraftSave(){ if(!DRAFTS_ENABLED() || !_draftRestoreDone) return
   clearTimeout(_draftT); _draftStatus('✎ saving soon…','busy'); _draftT=setTimeout(()=>saveDraft(false), 12000); }
 async function saveDraft(manual){
   if(!DRAFTS_ENABLED()){ if(manual) toast('Sign in to save to ClinicalVault'); return false; }
+  if(!_draftRestoreDone){ if(manual) toast('Reload the page first — your latest draft hasn’t loaded yet'); return false; }  // never save over an un-restored draft
   if(_draftBusy){ _draftDirty=true; return false; }
   clearTimeout(_draftT); _draftBusy=true; _draftStatus(manual?'Saving…':'Syncing…','busy');
   try{
@@ -1043,6 +1044,10 @@ async function maybeRestoreDraft(){
   const rb=document.getElementById('resumeBtn'), sb=document.getElementById('saveNowBtn'), lb=document.getElementById('localBadge');
   if(rb) rb.style.display=''; if(sb) sb.style.display=''; if(lb) lb.innerHTML='☁ Syncing to ClinicalVault <span id="saveflag" style="color:#0c6d61;margin-left:4px"></span>';
   _draftStatus('☁ checking…','busy');
+  // safeToSave gates ALL saving (auto + manual). It stays FALSE if a draft exists but we couldn't load
+  // it — otherwise an empty fresh session would autosave over the real cloud draft and destroy the day's
+  // work. Only a clean restore, or a confirmed no-draft-yet state, unlocks saving.
+  let safeToSave=false;
   try{
     const drafts=await listDrafts();
     const today=_draftFile();
@@ -1050,12 +1055,16 @@ async function maybeRestoreDraft(){
     const empty=!_wsHasContent();
     if(empty && todays){
       const obj=await loadDraft(today);
-      if(obj && applyDraft(obj)){ _draftStatus('☁ restored '+_hm(),'ok'); toast('Restored your work from earlier today'); return; }
+      if(obj && applyDraft(obj)){ _draftStatus('☁ restored '+_hm(),'ok'); toast('Restored your work from earlier today'); safeToSave=true; return; }
+      // The draft EXISTS but wouldn't load — DO NOT enable saving (would clobber it). Warn + bail.
+      _draftStatus('⚠ couldn’t load your saved work — reload','warn');
+      toast('Couldn’t load your saved work — please reload the page before editing');
+      return;
     }
     if(drafts.length){ showResumeBanner(drafts); }
-    _draftStatus('☁ ready','ok');
-  }catch(e){ _draftStatus('',''); }
-  finally{ _draftRestoreDone=true; }
+    _draftStatus('☁ ready','ok'); safeToSave=true;      // no draft for today (or session already has work) — safe
+  }catch(e){ _draftStatus('⚠ couldn’t reach ClinicalVault — reload before editing','warn'); }
+  finally{ _draftRestoreDone=safeToSave; }
 }
 function showResumeBanner(drafts){
   const el=document.getElementById('draftBanner'); if(!el||!drafts||!drafts.length) return;
