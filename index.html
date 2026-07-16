@@ -238,7 +238,6 @@
   <button id="handoffBtn" class="primary" onclick="openHandoff()" title="Open the facility handoff for today’s patients." style="padding:8px 15px;display:inline-flex;align-items:center;gap:8px;box-shadow:0 1px 5px rgba(15,138,124,.4)">📄 Facility Handoff<span id="rosterCount" style="background:rgba(255,255,255,.28);border-radius:999px;padding:1px 9px;font-size:12.5px;font-weight:700;min-width:22px;text-align:center;display:none">0</span></button>
   <span id="authUser" class="auth-user"></span>
   <button id="resumeBtn" class="ghost" onclick="openResume()" title="Reopen a saved day's work from ClinicalVault" style="display:none;padding:7px 11px">☁ Resume</button>
-  <button id="saveNowBtn" class="ghost" onclick="saveDraft(true)" title="Save the current workspace to ClinicalVault now" style="display:none;padding:7px 11px">Save now</button>
   <span id="draftStatus" class="draft-status"></span>
   <span class="badge" id="localBadge">● Local · autosaves in this browser only <span id="saveflag" style="color:#0c6d61;margin-left:4px"></span></span>
 </header>
@@ -1043,8 +1042,8 @@ function _wsHasContent(){ try{ return Object.keys(WS.patients).some(pid=>{ const
 // clobbers work in progress); otherwise offers a dated resume banner. Always ends with autosave armed.
 async function maybeRestoreDraft(){
   if(!DRAFTS_ENABLED()){ _draftRestoreDone=true; return; }
-  const rb=document.getElementById('resumeBtn'), sb=document.getElementById('saveNowBtn'), lb=document.getElementById('localBadge');
-  if(rb) rb.style.display=''; if(sb) sb.style.display=''; if(lb) lb.innerHTML='☁ Syncing to ClinicalVault <span id="saveflag" style="color:#0c6d61;margin-left:4px"></span>';
+  const rb=document.getElementById('resumeBtn'), lb=document.getElementById('localBadge');
+  if(rb) rb.style.display=''; if(lb) lb.innerHTML='☁ Syncing to ClinicalVault <span id="saveflag" style="color:#0c6d61;margin-left:4px"></span>';
   _draftStatus('☁ checking…','busy');
   // safeToSave gates ALL saving (auto + manual). It stays FALSE if a draft exists but we couldn't load
   // it — otherwise an empty fresh session would autosave over the real cloud draft and destroy the day's
