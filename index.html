@@ -963,7 +963,7 @@ let _draftCtx=null;               // {token,siteId,driveId} cached per session s
 let _draftT=null, _draftBusy=false, _draftDirty=false, _draftRestoreDone=false;
 function _two(n){ return String(n).padStart(2,'0'); }
 function _todayKey(){ const d=new Date(); return d.getFullYear()+'-'+_two(d.getMonth()+1)+'-'+_two(d.getDate()); }
-function _hm(){ const d=new Date(); return _two(d.getHours())+':'+_two(d.getMinutes()); }
+function _hm(){ const d=new Date(); let h=d.getHours(); const ap=h<12?'AM':'PM'; h=h%12||12; return h+':'+_two(d.getMinutes())+' '+ap; }
 function _draftUser(){ try{ const a=_pca&&_pca.getAllAccounts&&_pca.getAllAccounts()[0]; return (a&&(a.username||a.name))||''; }catch(e){ return ''; } }
 function _draftUserSeg(){ const u=(_draftUser()||'unknown').replace(/[\\/:*?"<>|#%]/g,'_').replace(/\s+/g,' ').trim(); return u||'unknown'; }
 function _draftSegs(){ return ['Drafts', _draftUserSeg()]; }
