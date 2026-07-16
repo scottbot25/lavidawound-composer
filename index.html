@@ -6,7 +6,7 @@
 <!-- Defense-in-depth CSP: locks egress to Microsoft only, so even an injected script can't exfiltrate
      PHI to a third party. GitHub Pages can't set response headers, so this is a meta CSP. 'unsafe-inline'
      is required by the app's inline handlers/styles; the key control is connect/form/frame-src. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://graph.microsoft.com https://login.microsoftonline.com; form-action 'self' https://login.microsoftonline.com; frame-src https://login.microsoftonline.com; base-uri 'self'; object-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://graph.microsoft.com https://login.microsoftonline.com https://lavidah.sharepoint.com; form-action 'self' https://login.microsoftonline.com; frame-src https://login.microsoftonline.com; base-uri 'self'; object-src 'none'">
 <meta name="referrer" content="strict-origin-when-cross-origin">
 <title>LaVida Wound Note Composer — PCC Macro Filler</title>
 <style>
@@ -1010,8 +1010,15 @@ async function listDrafts(){
 }
 async function loadDraft(fileName){
   const ctx=await _draftContext(); if(!ctx) return null;
-  const url='https://graph.microsoft.com/v1.0/drives/'+ctx.driveId+'/root:/'+_encPath(_draftSegs().join('/')+'/'+fileName)+':/content';
-  const r=await _gfetch(url, ctx.token); if(!r.ok) return null;
+  // Read via the item's pre-authenticated @microsoft.graph.downloadUrl (served from the tenant's own
+  // lavidah.sharepoint.com, allowed in CSP) rather than the /content endpoint — /content 302-redirects
+  // cross-origin and the browser strips the Authorization header on that hop, so it fails. The metadata
+  // GET stays on graph.microsoft.com; the downloadUrl is short-lived and needs no auth header.
+  const metaUrl='https://graph.microsoft.com/v1.0/drives/'+ctx.driveId+'/root:/'+_encPath(_draftSegs().join('/')+'/'+fileName);
+  const m=await _gfetch(metaUrl, ctx.token); if(!m.ok) return null;
+  const meta=await m.json(); const dl=meta && meta['@microsoft.graph.downloadUrl'];
+  if(!dl) return null;
+  const r=await fetch(dl); if(!r.ok) return null;
   try{ return JSON.parse(await r.text()); }catch(e){ return null; }
 }
 // Rebuild the live workspace from a draft object. Validates shape; never throws on bad data.
