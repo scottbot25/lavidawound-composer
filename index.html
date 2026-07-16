@@ -985,7 +985,7 @@ async function _draftContext(){
 // Debounced autosave. Guarded so it can NEVER fire before restore-on-load has finished (or it could
 // overwrite today's real draft with the empty fresh workspace).
 function scheduleDraftSave(){ if(!DRAFTS_ENABLED() || !_draftRestoreDone) return;
-  clearTimeout(_draftT); _draftStatus('✎ saving soon…','busy'); _draftT=setTimeout(()=>saveDraft(false), 12000); }
+  clearTimeout(_draftT); _draftStatus('✎ saving soon…','busy'); _draftT=setTimeout(()=>saveDraft(false), 5000); }
 async function saveDraft(manual){
   if(!DRAFTS_ENABLED()){ if(manual) toast('Sign in to save to ClinicalVault'); return false; }
   if(!_draftRestoreDone){ if(manual) toast('Reload the page first — your latest draft hasn’t loaded yet'); return false; }  // never save over an un-restored draft
