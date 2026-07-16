@@ -1673,19 +1673,27 @@ function buildSection(name,idx,text){
     const saved=STATE['__wc_'+idx];
     if(Array.isArray(saved) && saved.length) saved.forEach(id=>addWound(id)); else addWound();
 
-    sectionResolvers.push({name, resolve:()=>{
-      if(sectionRemoved(name)) return '';
+    const rawOf=()=>{
       const wt=wounds.map(w=>w.resolve());
       const tail = wt.length<=1 ? ' '+(wt[0]||'') : '\n\n'+wt.map((t,i)=>'Wound '+(i+1)+':\n'+t).join('\n\n');
-      return stripStars(pre.resolve()+tail);
-    }});
+      return pre.resolve()+tail;
+    };
+    // resolve() = what COPIES (stars stripped) — unchanged. resolveRaw() = display only: keeps the
+    // *** so the preview can ghost them, the same way it ghosts unfilled [options].
+    sectionResolvers.push({name,
+      resolve:   ()=> sectionRemoved(name) ? '' : stripStars(rawOf()),
+      resolveRaw:()=> sectionRemoved(name) ? '' : rawOf()
+    });
     wrap.appendChild(body); return wrap;
   }
 
   const block=renderLines(text, body, ''+idx);
   // dropDeadSentences (the "secondary to unknown" removal) is HPI-specific — scope it there so it
   // can't strip the phrase if a provider happens to type it into another section's free text.
-  sectionResolvers.push({name, resolve:()=>{ if(sectionRemoved(name)) return ''; const t=stripStars(block.resolve()); return /History of Present/i.test(name)?dropDeadSentences(t):t; }});
+  sectionResolvers.push({name,
+    resolve:   ()=>{ if(sectionRemoved(name)) return ''; const t=stripStars(block.resolve()); return /History of Present/i.test(name)?dropDeadSentences(t):t; },
+    resolveRaw:()=>{ if(sectionRemoved(name)) return ''; const t=block.resolve();            return /History of Present/i.test(name)?dropDeadSentences(t):t; }   // display only: keeps ***
+  });
   wrap.appendChild(body); return wrap;
 }
 
@@ -1706,7 +1714,10 @@ function resolveAll(){
     if(copiedState[s.name]===txt){ box.classList.add('copied'); } else { mark.style.display='none'; }
     btn.onclick=()=>{ copyRich(txt,'Copied "'+s.name+'"'); copiedState[s.name]=txt; box.classList.add('copied'); mark.style.display=''; };
     cap.appendChild(btn); cap.appendChild(mark);
-    const disp=document.createElement('div'); disp.className='disp'; disp.innerHTML=richDisplayBlocks(txt);
+    // DISPLAY uses resolveRaw (keeps *** so they ghost like unfilled [options]); the Copy button above
+    // still uses txt=s.resolve() — the clipboard is untouched by this.
+    const dispTxt = (typeof s.resolveRaw==='function') ? s.resolveRaw() : txt;
+    const disp=document.createElement('div'); disp.className='disp'; disp.innerHTML=richDisplayBlocks(dispTxt);
     box.appendChild(cap); box.appendChild(disp); out.appendChild(box);
   });
   paintCompleteness();
@@ -1760,7 +1771,10 @@ function fmtLine(line){
 function richDisplayBlocks(text){
   return String(text||'').split('\n').map(l=>{
     let h=fmtLine(l);
-    if(h) h=h.replace(/\[[^\]]*\]/g, m=>'<span class="ghost">'+m+'</span>');   // ghost unfilled placeholders (preview only; never copied)
+    // Ghost BOTH unfilled [options] AND *** free-text slots (preview only; never copied). One combined
+    // pass, brackets first, so a *** sitting inside a bracket (e.g. "[other: ***]") is consumed by the
+    // bracket match instead of being wrapped twice.
+    if(h) h=h.replace(/(\[[^\]]*\]|\*\*\*)/g, m=>'<span class="ghost">'+m+'</span>');
     return h ? '<div class="ql">'+h+'</div>' : '<div class="ql qgap"></div>';
   }).join('');
 }
