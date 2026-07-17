@@ -1218,12 +1218,14 @@ function renderPatient(p){
   const row=(l,v)=>'<tr><td class="l">'+esc(l)+'</td><td>'+esc(hoVal(v))+'</td></tr>';
   const block=(title,pairs)=>{ const rows=pairs.filter(x=>!hoBlank(x[1])).map(x=>row(x[0],x[1])).join(''); return rows?'<div class="w"><h3>'+esc(title)+'</h3><table>'+rows+'</table></div>':''; };
   let b='<div class="meta"><b>Patient:</b> '+esc(hoVal(p.patient))+' &nbsp; <b>Facility:</b> '+esc(hoVal(p.facility))+' &nbsp; <b>Date:</b> '+esc(hoVal(p.dateVal))+' &nbsp; <b>Provider:</b> '+esc(hoVal(p.provider))+' &nbsp; <b>Dx:</b> '+esc(hoVal(p.dx))+' &nbsp; <b>Wounds:</b> '+p.wounds.length+'</div>';
-  p.wounds.forEach(w=>{ const s=w.s; let et=s.etiology||''; if(s.stage&&!hoBlank(s.stage)) et+=(et?' — ':'')+'Stage '+s.stage; if(s.wagner&&!hoBlank(s.wagner)) et+=(et?' — ':'')+'Wagner '+s.wagner;
-    b+='<div class="w"><h3>Wound '+w.n+((s.location&&!hoBlank(s.location))?' — '+esc(s.location):'')+'</h3><table>'+
-      row('Etiology',et)+row('Dimensions (L×W×D)',s.dims)+row('Surface area',hoBlank(s.sa)?'':s.sa+' cm²')+
-      row('Prior surface area',hoBlank(s.priorSA)?'':s.priorSA+' cm²')+row('Tissue (gran/slough/eschar/epith)',s.bed)+
-      row('Undermining',s.undermining)+row('Tunneling',s.tunneling)+row('Drainage',s.drainage)+
-      row('Periwound',s.periwound)+row('Progress',s.status)+'</table></div>'; });
+  p.wounds.forEach(w=>{ const s=w.s||{}; let et=s.etiology||''; if(s.stage&&!hoBlank(s.stage)) et+=(et?' — ':'')+'Stage '+s.stage; if(s.wagner&&!hoBlank(s.wagner)) et+=(et?' — ':'')+'Wagner '+s.wagner;
+    // Only show rows that actually have a value — an empty wound was printing 10 "—" rows of loose data.
+    const wrows=[['Etiology',et],['Dimensions (L×W×D)',s.dims],['Surface area',hoBlank(s.sa)?'':s.sa+' cm²'],
+      ['Prior surface area',hoBlank(s.priorSA)?'':s.priorSA+' cm²'],['Tissue (gran/slough/eschar/epith)',s.bed],
+      ['Undermining',s.undermining],['Tunneling',s.tunneling],['Drainage',s.drainage],
+      ['Periwound',s.periwound],['Progress',s.status]].filter(x=>!hoBlank(x[1])).map(x=>row(x[0],x[1])).join('');
+    b+='<div class="w"><h3>Wound '+w.n+((s.location&&!hoBlank(s.location))?' — '+esc(s.location):'')+'</h3>'+
+      (wrows ? '<table>'+wrows+'</table>' : '<div class="wnote">No findings recorded for this wound yet.</div>')+'</div>'; });
   b+=block('Procedure',[['Tissue removed',p.procedure.removed],['Type',p.procedure.type],['Deepest tissue (DBT)',p.procedure.dbt],['Instrument',p.procedure.instrument],['Anesthetic',p.procedure.anesthesia]]);
   b+=block('Plan / Orders',[['Dressings',p.orders.dressings],['Offloading',p.orders.offloading],['Re-evaluation',p.orders.reeval]]);
   return b;
@@ -1239,7 +1241,11 @@ function handoffHTML(patients, facArg){
   // Each patient prints on its own page (Abby: multi-patient handoffs got cut off / mis-formatted when
   // patients flowed together). .patient-break carries the Word/print page-break; .w blocks avoid being
   // split mid-table across a page boundary (the "cut off" symptom). First patient has no leading break.
-  const style='body{font-family:Segoe UI,Arial,sans-serif;color:#111;font-size:11.5pt;line-height:1.4;margin:24px}h1{font-size:15pt;margin:0}h2.ph{font-size:12pt;margin:18px 0 2px;border-bottom:2px solid #ccd6e0;padding-bottom:3px}.meta{color:#333;margin:3px 0 12px;font-size:10.5pt}.patient-break{page-break-before:always}.w{border:1px solid #ccd6e0;border-radius:5px;margin:9px 0;page-break-inside:avoid}.w h3{font-size:11pt;margin:0;background:#eef2f7;padding:5px 9px;border-radius:5px 5px 0 0}.w table{width:100%;border-collapse:collapse;font-size:10.5pt}.w td{padding:3px 9px;vertical-align:top;border-top:1px solid #eef}.w td.l{color:#555;width:36%;white-space:nowrap}.foot{margin-top:16px;color:#777;font-size:9pt;border-top:1px solid #ddd;padding-top:8px}';
+  // Print/Word pagination: a "Patient N" heading (and its meta) must never be left alone at the bottom of
+  // a page — page-break-after:avoid keeps them with the following content. Tables flow across pages at ROW
+  // boundaries (tr break-inside:avoid) instead of the old block-level .w avoid, which made Word push a whole
+  // wound to the next page and leave a big gap (the "Patient 2 broken" symptom). First patient no page-break.
+  const style='body{font-family:Segoe UI,Arial,sans-serif;color:#111;font-size:11.5pt;line-height:1.4;margin:24px}h1{font-size:15pt;margin:0}h1,h2,h3{page-break-after:avoid;break-after:avoid}h2.ph{font-size:12pt;margin:18px 0 2px;border-bottom:2px solid #ccd6e0;padding-bottom:3px}.meta{color:#333;margin:3px 0 12px;font-size:10.5pt;page-break-after:avoid;break-after:avoid}.patient-break{page-break-before:always}.w{border:1px solid #ccd6e0;border-radius:5px;margin:9px 0}.w h3{font-size:11pt;margin:0;background:#eef2f7;padding:5px 9px;border-radius:5px 5px 0 0}.w table{width:100%;border-collapse:collapse;font-size:10.5pt}.w td{padding:3px 9px;vertical-align:top;border-top:1px solid #eef}.w td.l{color:#555;width:36%;white-space:nowrap}tr,td{page-break-inside:avoid;break-inside:avoid}.wnote{padding:5px 9px;color:#888;font-size:10pt}.foot{margin-top:16px;color:#777;font-size:9pt;border-top:1px solid #ddd;padding-top:8px}';
   let b='<h1>Wound Care Handoff'+(fac?' — '+esc(fac):'')+'</h1>';
   b+='<div class="meta"><b>Date:</b> '+esc(hoVal(date))+' &nbsp; <b>Patients:</b> '+patients.length+(isPreview?' &nbsp;<i>(preview — current patient, not yet added)</i>':'')+'</div>';
   patients.forEach((p,i)=>{ b+='<div'+(i>0?' class="patient-break"':'')+'>'; if(patients.length>1) b+='<h2 class="ph">Patient '+(i+1)+'</h2>'; b+=renderPatient(p)+'</div>'; });
