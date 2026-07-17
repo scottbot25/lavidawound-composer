@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>LaVida Round Card</title>
+<!-- Egress is Microsoft-ONLY, same discipline as the Note Composer. Phase 1 makes NO network calls
+     at all (everything is generated in the browser); the Speech/OpenAI hosts are pre-declared here
+     for Phase 2 so the policy is reviewed once, not loosened later under deadline. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://graph.microsoft.com https://login.microsoftonline.com https://*.cognitiveservices.azure.com https://*.openai.azure.com wss://*.cognitiveservices.azure.com; form-action 'self' https://login.microsoftonline.com; frame-src https://login.microsoftonline.com; base-uri 'self'; object-src 'none'">
+<style>
+  :root{
+    --bg:#f7f5f1; --panel:#fff; --ink:#1d2b2a; --muted:#6b7a79; --line:#dfdcd6;
+    --teal:#0f8a7c; --teal-dark:#0b6b60; --amber:#f4b740; --red:#c2453a;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
+  body{margin:0; background:var(--bg); color:var(--ink);
+    font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    padding-bottom:96px; /* room for the sticky footer */
+    padding-left:env(safe-area-inset-left); padding-right:env(safe-area-inset-right)}
+  h1{font-size:18px; margin:0}
+  header{position:sticky; top:0; z-index:20; background:var(--teal); color:#fff;
+    padding:12px 14px; padding-top:calc(12px + env(safe-area-inset-top));
+    display:flex; align-items:center; justify-content:space-between; gap:10px;
+    box-shadow:0 2px 10px rgba(0,0,0,.15)}
+  header .sub{font-size:12.5px; opacity:.9}
+  .wrap{max-width:720px; margin:0 auto; padding:14px}
+  .card{background:var(--panel); border:1px solid var(--line); border-radius:14px;
+    padding:14px; margin-bottom:14px; box-shadow:0 1px 3px rgba(0,0,0,.05)}
+  label{display:block; font-size:13px; font-weight:600; color:var(--muted); margin:10px 0 4px}
+  input,select,textarea{width:100%; font:inherit; font-size:16px; /* 16px stops iOS zoom-on-focus */
+    padding:11px 12px; border:1px solid var(--line); border-radius:10px; background:#fff; color:var(--ink)}
+  textarea{min-height:76px; resize:vertical}
+  input:focus,select:focus,textarea:focus{outline:2px solid var(--teal); outline-offset:1px; border-color:var(--teal)}
+  button{font:inherit; font-weight:650; border-radius:10px; border:1px solid var(--line);
+    background:#fff; color:var(--ink); padding:11px 14px; cursor:pointer; min-height:44px}
+  button.primary{background:var(--teal); color:#fff; border-color:var(--teal)}
+  button.primary:active{background:var(--teal-dark)}
+  button.ghost{background:transparent; border-style:dashed; color:var(--muted); width:100%}
+  button.tiny{padding:6px 10px; min-height:34px; font-size:13px; font-weight:600}
+  .row{display:flex; gap:8px; align-items:center; flex-wrap:wrap}
+  .dims{display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px}
+  .pill{background:#eef4f3; color:var(--teal-dark); border-radius:999px; padding:3px 10px;
+    font-size:12px; font-weight:700}
+  .muted{color:var(--muted); font-size:13px}
+  .tabs{display:flex; gap:8px; overflow-x:auto; padding:10px 14px 0; -webkit-overflow-scrolling:touch}
+  .tab{white-space:nowrap; border:1px solid var(--line); background:#fff; border-radius:999px;
+    padding:8px 14px; font-size:14px; font-weight:600; cursor:pointer; min-height:40px}
+  .tab.on{background:var(--ink); color:#fff; border-color:var(--ink)}
+  .wound-head{display:flex; justify-content:space-between; align-items:center;
+    border-bottom:1px solid var(--line); padding-bottom:8px; margin-bottom:4px}
+  .wound-head b{font-size:15px}
+  footer{position:fixed; bottom:0; left:0; right:0; z-index:20; background:rgba(255,255,255,.97);
+    border-top:1px solid var(--line); padding:10px 14px;
+    padding-bottom:calc(10px + env(safe-area-inset-bottom));
+    display:flex; gap:8px; justify-content:center; box-shadow:0 -2px 10px rgba(0,0,0,.06)}
+  footer button{flex:1; max-width:220px}
+  .modal{display:none; position:fixed; inset:0; z-index:90; background:rgba(6,10,15,.7);
+    padding:16px; overflow:auto}
+  .modal.on{display:block}
+  .sheet{background:var(--panel); border-radius:14px; max-width:720px; margin:0 auto; padding:16px}
+  .prev{border:1px solid var(--line); border-radius:10px; background:#fff; padding:12px;
+    max-height:46vh; overflow:auto; font-size:13.5px; white-space:pre-wrap; margin:10px 0}
+  .warn{background:#fdf3e3; border:1px solid var(--amber); border-radius:10px; padding:10px;
+    font-size:13px; margin:10px 0}
+  .toast{position:fixed; left:50%; bottom:96px; transform:translateX(-50%); background:var(--ink);
+    color:#fff; padding:10px 16px; border-radius:999px; font-size:14px; z-index:99; opacity:0;
+    transition:opacity .2s; pointer-events:none; max-width:90vw; text-align:center}
+  .toast.on{opacity:1}
+  @media print{
+    header,footer,.tabs,.no-print{display:none !important}
+    body{background:#fff; padding:0}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>Round Card</h1>
+    <div class="sub" id="hdrSub">orders for the nurse, before you leave</div>
+  </div>
+  <button class="tiny" onclick="clearAll()" title="Wipe this round from the phone">Clear</button>
+</header>
+
+<div class="wrap">
+  <!-- ROUND HEADER — facility is round-level; each facility gets its own sheet (never a shared list) -->
+  <div class="card">
+    <div class="row" style="justify-content:space-between">
+      <b style="font-size:15px">Today's round</b>
+      <span class="pill" id="countPill">0 patients</span>
+    </div>
+    <label for="r_fac">Facility</label>
+    <input id="r_fac" placeholder="e.g. Crestmore" oninput="setRound()" onchange="onFacChange()">
+    <div class="dims" style="grid-template-columns:1fr 1fr">
+      <div>
+        <label for="r_date">Date</label>
+        <input id="r_date" type="date" oninput="setRound()">
+      </div>
+      <div>
+        <label for="r_prov">Provider</label>
+        <input id="r_prov" placeholder="your name" oninput="setRound()">
+      </div>
+    </div>
+  </div>
+
+  <!-- PATIENT TABS -->
+  <div class="tabs no-print" id="tabs"></div>
+  <div class="wrap" style="padding:14px 0 0">
+    <div id="patientArea"></div>
+  </div>
+</div>
+
+<footer class="no-print">
+  <button class="primary" onclick="openReview()">Review &amp; send</button>
+</footer>
+
+<!-- REVIEW = the confirmation screen. Nothing reaches a nurse unseen. -->
+<div class="modal" id="review">
+  <div class="sheet">
+    <div class="row" style="justify-content:space-between">
+      <b>Check this, then send</b>
+      <button class="tiny" onclick="closeReview()">Close</button>
+    </div>
+    <div class="muted" style="margin-top:6px">This is exactly what the nurse gets. Anything blank shows as “—”.</div>
+    <div id="gaps"></div>
+    <div class="prev" id="prev"></div>
+    <label for="toSel">Send to</label>
+    <select id="toSel"></select>
+    <div class="muted" style="margin-top:6px">Fixed list on purpose — a typo can't send a patient's info to a stranger.</div>
+    <div class="row" style="margin-top:12px">
+      <button class="primary" style="flex:1" onclick="emailSheet()">Email it</button>
+      <button style="flex:1" onclick="printSheet()">Print it</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ============================================================================
+   LaVida ROUND CARD — Phase 1 (tap/type)
+   The problem this solves: nurses are measured on how fast orders land, and today
+   orders don't exist until charting is done, hours after rounds. This makes the
+   orders exist at the door.
+
+   PHI discipline (same as the Note Composer):
+   - Phase 1 makes ZERO network calls. Everything below is generated in the browser.
+   - The round lives in sessionStorage only -> it dies when the tab closes. No disk,
+     no localStorage, no cloud, no analytics.
+   - Email recipients come from a fixed allowlist. There is no free-typed recipient.
+   - Nothing is logged to the console.
+   Phase 2 (voice) adds Azure Speech + Azure OpenAI, both under the Microsoft BAA,
+   authenticated with the provider's own Entra token. Never Web Speech (Google).
+   ========================================================================== */
+
+/* Approved facility contacts. PLACEHOLDER — points at Scott's admin inbox so testing
+   cannot email a real facility. At go-live, replace with the real approved nurse
+   contacts, kept in the private ops vault (this file is hosted publicly). */
+const FACILITY_CONTACTS = [
+  { name: 'TEST — admin inbox (not a real facility)', email: 'admin@lavidaheal.com' },
+];
+
+const WOUND_TYPES = ['Pressure','Diabetic / neuropathic','Venous','Arterial','Surgical','Trauma','Moisture-associated','Other'];
+const STAGES      = ['Stage 1','Stage 2','Stage 3','Stage 4','Unstageable','Deep tissue injury'];
+const DRAINAGE    = ['None','Scant','Small','Moderate','Large'];
+
+/* ---------- state: sessionStorage only, wipes on tab close ---------- */
+const KEY = 'lavida_roundcard';
+let S = load();
+function blank(){ return { round:{fac:'',date:todayISO(),prov:''}, pts:[], active:0 }; }
+function load(){
+  try{ const r = sessionStorage.getItem(KEY); if(r) return JSON.parse(r); }catch(e){}
+  return blank();
+}
+function save(){ try{ sessionStorage.setItem(KEY, JSON.stringify(S)); }catch(e){} }
+function todayISO(){ const d=new Date(), p=n=>String(n).padStart(2,'0');
+  return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()); }
+
+/* ---------- helpers ---------- */
+function esc(s){ return (s==null?'':String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;')
+  .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+function v(s){ s=(s==null?'':String(s)).trim(); return s || '—'; }
+function toast(m){ const t=document.getElementById('toast'); t.textContent=m; t.classList.add('on');
+  clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove('on'),2600); }
+
+function newWound(){ return { loc:'', type:'', stage:'', l:'', w:'', d:'', drain:'', orders:'' }; }
+function newPt(){ return { name:'', wounds:[newWound()] }; }
+function activePt(){ return S.pts[S.active] || null; }
+
+/* Size prints only what was actually measured — a bare "cm" or a half-filled
+   dimension string is worse than saying nothing. */
+function sizeText(w){
+  const has = x => String(x||'').trim() !== '';
+  if(!has(w.l) && !has(w.w) && !has(w.d)) return '';
+  const dim = x => has(x) ? String(x).trim() : '?';
+  let s = dim(w.l)+' × '+dim(w.w);
+  if(has(w.d)) s += ' × '+dim(w.d);
+  s += ' cm';
+  if(has(w.l) && has(w.w)){
+    const a = parseFloat(w.l), b = parseFloat(w.w);
+    if(isFinite(a) && isFinite(b)) s += '  (area ' + (a*b).toFixed(1) + ' cm²)';
+  }
+  return s;
+}
+/* Stage only exists for pressure wounds — that's the nurses' own rule ("if pressure, what stage"). */
+function isPressure(w){ return /^Pressure/.test(w.type||''); }
+
+/* ---------- round header ---------- */
+function setRound(){
+  S.round.fac  = document.getElementById('r_fac').value;
+  S.round.date = document.getElementById('r_date').value;
+  S.round.prov = document.getElementById('r_prov').value;
+  save();
+}
+function paintRound(){
+  document.getElementById('r_fac').value  = S.round.fac || '';
+  document.getElementById('r_date').value = S.round.date || todayISO();
+  document.getElementById('r_prov').value = S.round.prov || '';
+}
+/* A sheet must only ever carry ONE facility's residents. The facility is round-level, so
+   editing it after patients are on the card silently re-labels them — Facility A's resident
+   would print under Facility B's header and get handed to B's nurse. That's a disclosure to
+   the wrong facility, not a cosmetic bug, so the switch has to be deliberate.
+   `facLock` = the facility the patients on this card belong to, set when the first one is added. */
+function onFacChange(){
+  const el=document.getElementById('r_fac'), nf=(el.value||'').trim(), lock=(S.round.facLock||'').trim();
+  if(!S.pts.length || !lock || nf===lock){ if(!S.pts.length) S.round.facLock=nf; setRound(); save(); return; }
+  const n=S.pts.length;
+  const ok=confirm('This card still has '+n+' patient'+(n===1?'':'s')+' from '+lock+'.\n\n'
+    + 'A sheet can only carry one facility\'s residents. Send '+lock+'\'s sheet first if you '
+    + 'haven\'t.\n\nOK = clear them and start ' + (nf||'the new facility')
+    + '\nCancel = stay on '+lock);
+  if(ok){ S.pts=[]; S.active=0; S.round.facLock=nf; setRound(); save(); render(); toast('Started '+(nf||'a new facility')); }
+  else  { el.value=lock; setRound(); save(); }
+}
+
+/* ---------- patients ---------- */
+function addPt(){
+  /* The first patient binds the card to whatever facility is in the header right now. */
+  if(!S.pts.length) S.round.facLock = (S.round.fac||'').trim();
+  S.pts.push(newPt()); S.active = S.pts.length-1; save(); render();
+  setTimeout(()=>{ const el=document.getElementById('p_name'); if(el) el.focus(); },50); }
+function delPt(i){
+  const nm = (S.pts[i]&&S.pts[i].name||'').trim();
+  if(!confirm('Remove '+(nm||'this patient')+' from today\'s card?')) return;
+  S.pts.splice(i,1);
+  if(S.active >= S.pts.length) S.active = Math.max(0, S.pts.length-1);
+  save(); render();
+}
+function pickPt(i){ S.active=i; save(); render(); }
+function setPt(f,val){ const p=activePt(); if(!p) return; p[f]=val; save(); paintTabs(); paintCount(); }
+
+/* ---------- wounds ---------- */
+function addWound(){ const p=activePt(); if(!p) return; p.wounds.push(newWound()); save(); render(); }
+function delWound(i){
+  const p=activePt(); if(!p) return;
+  if(p.wounds.length===1){ toast('A patient needs at least one wound'); return; }
+  if(!confirm('Remove wound '+(i+1)+'?')) return;
+  p.wounds.splice(i,1); save(); render();
+}
+function setW(i,f,val){
+  const p=activePt(); if(!p) return;
+  p.wounds[i][f]=val; save();
+  /* Type drives whether Stage is even a question -> repaint that card only */
+  if(f==='type') render();
+}
+
+/* ---------- render ---------- */
+function paintCount(){
+  const n = S.pts.filter(p=>(p.name||'').trim()).length;
+  document.getElementById('countPill').textContent = n+' patient'+(n===1?'':'s');
+}
+function paintTabs(){
+  const t=document.getElementById('tabs');
+  t.innerHTML = S.pts.map((p,i)=>
+    '<button class="tab'+(i===S.active?' on':'')+'" onclick="pickPt('+i+')">'+
+    esc((p.name||'').trim() || 'Patient '+(i+1))+'</button>').join('')
+    + '<button class="tab" onclick="addPt()">+ Patient</button>';
+}
+function woundHTML(w,i){
+  const opt=(list,cur)=> ['<option value=""></option>'].concat(
+      list.map(o=>'<option'+(o===cur?' selected':'')+'>'+esc(o)+'</option>')).join('');
+  return '<div class="card">'
+    + '<div class="wound-head"><b>Wound '+(i+1)+'</b>'
+    + '<button class="tiny no-print" onclick="delWound('+i+')">Remove</button></div>'
+
+    + '<label>Where is it</label>'
+    + '<input value="'+esc(w.loc)+'" placeholder="e.g. right great toe, sacrum" '
+    + 'oninput="setW('+i+',\'loc\',this.value)">'
+
+    + '<label>Type</label>'
+    + '<select onchange="setW('+i+',\'type\',this.value)">'+opt(WOUND_TYPES,w.type)+'</select>'
+
+    + (isPressure(w)
+        ? '<label>Stage</label><select onchange="setW('+i+',\'stage\',this.value)">'
+          + opt(STAGES,w.stage)+'</select>'
+        : '')
+
+    + '<label>Size (cm)</label>'
+    + '<div class="dims">'
+    +   '<input inputmode="decimal" value="'+esc(w.l)+'" placeholder="length" oninput="setW('+i+',\'l\',this.value)">'
+    +   '<input inputmode="decimal" value="'+esc(w.w)+'" placeholder="width"  oninput="setW('+i+',\'w\',this.value)">'
+    +   '<input inputmode="decimal" value="'+esc(w.d)+'" placeholder="depth"  oninput="setW('+i+',\'d\',this.value)">'
+    + '</div>'
+
+    + '<label>Drainage</label>'
+    + '<select onchange="setW('+i+',\'drain\',this.value)">'+opt(DRAINAGE,w.drain)+'</select>'
+
+    + '<label>Orders</label>'
+    + '<textarea placeholder="what the nurse should do — dressing, frequency, offloading, re-check" '
+    + 'oninput="setW('+i+',\'orders\',this.value)">'+esc(w.orders)+'</textarea>'
+    + '</div>';
+}
+function render(){
+  paintTabs(); paintCount();
+  const area=document.getElementById('patientArea'), p=activePt();
+  if(!p){
+    area.innerHTML='<div class="card" style="text-align:center">'
+      + '<div class="muted" style="margin-bottom:10px">No patients on this round yet.</div>'
+      + '<button class="primary" onclick="addPt()">Add the first patient</button></div>';
+    return;
+  }
+  area.innerHTML = '<div class="card">'
+    + '<label for="p_name">Patient</label>'
+    + '<input id="p_name" value="'+esc(p.name)+'" placeholder="name or room number" '
+    + 'oninput="setPt(\'name\',this.value)">'
+    + '<div class="row no-print" style="margin-top:10px">'
+    +   '<button class="tiny" onclick="delPt('+S.active+')">Remove patient</button></div>'
+    + '</div>'
+    + p.wounds.map(woundHTML).join('')
+    + '<button class="ghost no-print" onclick="addWound()">+ Add another wound</button>';
+}
+
+/* ---------- the sheet the nurse gets ---------- */
+function sheetText(){
+  const r=S.round, L=[];
+  L.push('WOUND CARE ORDERS');
+  L.push('Facility: '+v(r.fac)+'    Date: '+v(r.date));
+  L.push('Provider: '+v(r.prov));
+  L.push('');
+  const pts = S.pts.filter(p=>(p.name||'').trim());
+  pts.forEach(p=>{
+    L.push('----------------------------------------');
+    L.push('PATIENT: '+v(p.name));
+    p.wounds.forEach((w,i)=>{
+      L.push('');
+      L.push('  Wound '+(i+1)+' — '+v(w.loc));
+      L.push('    Type:     '+v(w.type) + (isPressure(w) ? '   Stage: '+v(w.stage) : ''));
+      L.push('    Size:     '+v(sizeText(w)));
+      L.push('    Drainage: '+v(w.drain));
+      L.push('    ORDERS:   '+v(w.orders));
+    });
+    L.push('');
+  });
+  L.push('----------------------------------------');
+  L.push('Care-coordination orders for facility use. Not an official medical record or');
+  L.push('billing document; the signed EHR note is the authoritative record.');
+  return L.join('\n');
+}
+function sheetHTML(){
+  const r=S.round;
+  const pts = S.pts.filter(p=>(p.name||'').trim());
+  let b='<html><head><meta charset="utf-8"><title>Wound Care Orders</title><style>'
+   + 'body{font:13pt/1.4 Georgia,serif; color:#111; margin:26px}'
+   + 'h1{font-size:17pt; margin:0 0 2px} .hd{color:#444; font-size:11pt; margin-bottom:14px}'
+   + '.pt{page-break-inside:avoid; border-top:2px solid #111; padding-top:8px; margin-top:14px}'
+   + '.pt h2{font-size:13.5pt; margin:0 0 6px}'
+   + '.w{margin:0 0 10px 0; padding-left:10px; border-left:3px solid #bbb}'
+   + '.w b{display:block; font-size:12pt}'
+   + 'table{border-collapse:collapse; margin-top:3px} td{padding:1px 10px 1px 0; vertical-align:top; font-size:11.5pt}'
+   + 'td.k{color:#555; white-space:nowrap} .ord{font-weight:bold}'
+   + '.ft{margin-top:22px; border-top:1px solid #999; padding-top:6px; color:#555; font-size:9.5pt}'
+   + '</style></head><body>';
+  b += '<h1>Wound Care Orders</h1><div class="hd">'+esc(v(r.fac))+' &nbsp;·&nbsp; '+esc(v(r.date))
+     + ' &nbsp;·&nbsp; '+esc(v(r.prov))+'</div>';
+  pts.forEach(p=>{
+    b += '<div class="pt"><h2>'+esc(v(p.name))+'</h2>';
+    p.wounds.forEach((w,i)=>{
+      b += '<div class="w"><b>Wound '+(i+1)+' — '+esc(v(w.loc))+'</b><table>'
+         + '<tr><td class="k">Type</td><td>'+esc(v(w.type))+'</td></tr>'
+         + (isPressure(w) ? '<tr><td class="k">Stage</td><td>'+esc(v(w.stage))+'</td></tr>' : '')
+         + '<tr><td class="k">Size</td><td>'+esc(v(sizeText(w)))+'</td></tr>'
+         + '<tr><td class="k">Drainage</td><td>'+esc(v(w.drain))+'</td></tr>'
+         + '<tr><td class="k">Orders</td><td class="ord">'+esc(v(w.orders))+'</td></tr>'
+         + '</table></div>';
+    });
+    b += '</div>';
+  });
+  b += '<div class="ft">Care-coordination orders for facility use. Not an official medical record, '
+     + 'provider note, or billing document; the signed EHR note is the authoritative record.</div>'
+     + '</body></html>';
+  return b;
+}
+
+/* ---------- review / confirm ---------- */
+/* Has the provider actually put anything into this patient? Used to tell an empty
+   just-tapped-+Patient card apart from one with real work in it. */
+function hasContent(p){
+  return p.wounds.some(w => ['loc','type','stage','l','w','d','drain','orders']
+    .some(f => String(w[f]||'').trim()));
+}
+function findGaps(){
+  const g=[];
+  if(!(S.round.fac||'').trim()) g.push('Facility is blank');
+  S.pts.forEach((p,pi)=>{
+    const named = (p.name||'').trim();
+    /* An unnamed patient is DROPPED from the sheet (the nurse can't act on "somebody").
+       If it's unnamed but has orders in it, that's a silent loss of real work — the one
+       failure mode that must never be quiet. Say so first and loudly. */
+    if(!named){
+      if(hasContent(p)) g.push('⚠ Patient '+(pi+1)+' has no name — IT WILL NOT BE SENT. Add a name or room number.');
+      return;   // nothing else to say about an empty unnamed card
+    }
+    p.wounds.forEach((w,i)=>{
+      const tag = named+' · wound '+(i+1);
+      if(!(w.orders||'').trim()) g.push(tag+': no orders — the nurse gets nothing to do');
+      if(!(w.loc||'').trim())    g.push(tag+': no location');
+      if(isPressure(w) && !(w.stage||'').trim()) g.push(tag+': pressure wound with no stage');
+    });
+  });
+  return g;
+}
+function openReview(){
+  const named = S.pts.filter(p=>(p.name||'').trim());
+  if(!named.length){
+    /* Don't say "add a patient" to someone who just filled a whole round in and only
+       missed the names — that reads as though their work is gone. Name the real problem. */
+    toast(S.pts.some(hasContent)
+      ? 'Nothing can be sent yet — your patients still need a name or room number'
+      : 'Add a patient first');
+    return;
+  }
+  const gaps=findGaps();
+  document.getElementById('gaps').innerHTML = gaps.length
+    ? '<div class="warn"><b>Worth a look before you send:</b><br>· '+gaps.map(esc).join('<br>· ')+'</div>'
+    : '';
+  document.getElementById('prev').textContent = sheetText();
+  const sel=document.getElementById('toSel');
+  sel.innerHTML = FACILITY_CONTACTS.map((c,i)=>'<option value="'+i+'">'+esc(c.name)+' — '+esc(c.email)+'</option>').join('');
+  document.getElementById('review').classList.add('on');
+}
+function closeReview(){ document.getElementById('review').classList.remove('on'); }
+
+/* ---------- deliver ---------- */
+function printSheet(){
+  const f=document.createElement('iframe');
+  f.style.cssText='position:fixed;right:0;bottom:0;width:0;height:0;border:0';
+  document.body.appendChild(f);
+  const d=f.contentDocument; d.open(); d.write(sheetHTML()); d.close();
+  /* A document.write'n iframe may be ready BEFORE onload fires (mobile Safari) or only after
+     (Chrome) — so both paths have to be able to trigger the print. `done` makes sure exactly one
+     of them wins: without it the provider gets two print dialogs and prints the sheet twice. */
+  let done=false;
+  const go=()=>{
+    if(done) return; done=true;
+    try{ f.contentWindow.focus(); f.contentWindow.print(); }catch(e){ toast('Couldn’t open the print dialog'); }
+    setTimeout(()=>f.remove(), 1000);
+  };
+  f.onload=go;
+  setTimeout(go, 400);
+}
+function emailSheet(){
+  const i=document.getElementById('toSel').value;
+  const c=FACILITY_CONTACTS[i];
+  if(!c){ toast('No facility contact set up yet'); return; }
+  const r=S.round, n=S.pts.filter(p=>(p.name||'').trim()).length;
+  const subj='Wound care orders — '+(r.fac||'')+' — '+(r.date||'')+' ('+n+' patient'+(n===1?'':'s')+')';
+  const body=sheetText();
+  /* Stage on the clipboard first: older mail apps silently truncate a long mailto body,
+     so the paste-fallback has to exist BEFORE the draft opens. */
+  try{ navigator.clipboard && navigator.clipboard.writeText(body); }catch(e){}
+  const url='mailto:'+encodeURIComponent(c.email)+'?subject='+encodeURIComponent(subj)
+    +'&body='+encodeURIComponent(body);
+  if(url.length > 1900){
+    const short='The orders are on your clipboard — tap in the message body and paste.';
+    location.href='mailto:'+encodeURIComponent(c.email)+'?subject='+encodeURIComponent(subj)
+      +'&body='+encodeURIComponent(short);
+    toast('Draft opened — paste the orders in, then check it and send');
+  } else {
+    location.href=url;
+    toast('Draft opened — check it, then send');
+  }
+}
+
+/* ---------- clear ---------- */
+function clearAll(){
+  if(!confirm('Wipe today\'s round off this phone? This can\'t be undone.')) return;
+  S=blank(); try{ sessionStorage.removeItem(KEY); }catch(e){}
+  paintRound(); render(); toast('Cleared');
+}
+
+/* ---------- boot ---------- */
+if(!S.round.date) S.round.date=todayISO();
+paintRound(); render(); save();
+</script>
+</body>
+</html>
