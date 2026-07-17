@@ -1821,7 +1821,9 @@ function richClipboard(text){ return String(text||'').split('\n').map(l=>{ const
 function cleanForCopy(text){
   // a stripped sub-field has no real value left if it's empty, a dangling "label:", a bare label word,
   // or an empty "%-label" (e.g. "% granulation" with no number).
-  const emptySeg=(s)=>{ const n=String(s).replace(/[.\s]+$/,'').replace(/^\s+/,''); return !n || /:$/.test(n) || /^[A-Za-z][A-Za-z /()]*$/.test(n) || (/%/.test(n)&&!/\d/.test(n)); };
+  // Strip a leading "-" bullet before judging emptiness, so a plan bullet whose dropdown is unset
+  // ("-Dressings [..]" -> "-Dressings") is recognised as the bare label it is and dropped.
+  const emptySeg=(s)=>{ const n=String(s).replace(/[.\s]+$/,'').replace(/^\s+/,'').replace(/^[-–]\s*/,''); return !n || /:$/.test(n) || /^[A-Za-z][A-Za-z /()]*$/.test(n) || (/%/.test(n)&&!/\d/.test(n)); };
   // The "Per-wound findings below." scaffolding marker separates the systemic exam (which carries the
   // Extremities/Vascular group headers) from per-wound content. We only need to know WHERE the per-wound
   // block begins so orphan-header pruning doesn't count wound findings as a systemic group's content —
@@ -1833,12 +1835,15 @@ function cleanForCopy(text){
     if(/\[[^\]]*\]/.test(line)){
       // per top-level-comma sub-field: strip [placeholder]; keep only if a real value survives
       // (so "Location: sacrum — [laterality]" keeps "Location: sacrum", "color [ ]" drops).
-      // NOTE (2026-07-16): do NOT "only split when 2+ brackets" — tried and REVERTED. It fixed the
-      // comma-in-label case ("History of blood clots, clotting disorders…") but regressed the far more
-      // common partial fill: once only one bracket remains (e.g. odor unset), the line stopped splitting
-      // and leaked a dangling "odor." into the chart. Correct fix needs template-level knowledge of which
-      // lines are multi-subfield — deferred to the Friday batch. See QA Audit 2026-07-15.
-      const segs=line.split(/,(?![^\[]*\])/);
+      // WHICH line it is — not how many brackets survive. Drainage is the only line that is genuinely
+      // several independent sub-fields sharing a row (amount, color, consistency, odor); everywhere else
+      // a top-level comma is just punctuation inside ONE field's label, and splitting there mangles it
+      // ("History of blood clots, clotting disorders, or bleeding disorders: [yes/no]" leaked the
+      // fragment "History of blood clots, clotting disorders" when left empty).
+      // Do NOT go back to inferring this from the remaining bracket count — that was e199601, and it
+      // regressed the common partial fill (Drainage with only `odor` unset leaked a dangling "odor.").
+      const MULTI_SUBFIELD=/^\s*Drainage:/;
+      const segs = MULTI_SUBFIELD.test(line) ? line.split(/,(?![^\[]*\])/) : [line];
       const kept=segs.map(seg=>{
         if(!/\[[^\]]*\]/.test(seg)) return seg;
         const s=seg.replace(/\[[^\]]*\]/g,'').replace(/\s{2,}/g,' ').replace(/\s*[—-]+\s*\.?\s*$/,'').trim();
