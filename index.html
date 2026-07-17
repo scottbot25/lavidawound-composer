@@ -1602,6 +1602,36 @@ function renderLines(text, container, keyPrefix){
 
 // Remove *** fill-markers from the composed note (they read as template junk once there are real
 // input boxes). Keeps option lists, colons, and everything else; only strips the ***.
+/* A sentence whose free-text is still unfilled is pure scaffolding — pasting "Prior treatments have
+   included." or "The patient reports." into a chart is worse than pasting nothing (Scott: "if the
+   section isnt filled out the text from before those sentences SHOULD NOT carry over"). An unfilled
+   free-text always resolves to the literal '***', so its presence marks the slot as empty.
+
+   DELIBERATELY CONSERVATIVE — a sentence is dropped only when ALL of:
+     1. it holds exactly ONE ***  (multi-field lines like "L: 2 × W: *** × D: ***" are left alone —
+        a blunt rule there would throw away a measurement she actually typed),
+     2. that *** sits at the END, so the sentence dangles ("…have included ***." ). A mid-sentence ***
+        still has real text after it ("-ABI/TBI ***, vascular surgery referral as indicated…") and the
+        sentence stays,
+     3. the sentence has NO digits — anything carrying a number carries real data, so keep it.
+   Bracketed lines are skipped entirely: cleanForCopy already handles those. Runs BEFORE stripStars,
+   while the *** are still visible; the preview (resolveRaw) is untouched, so she still SEES the ghost. */
+function dropUnfilledSentences(t){
+  if(!t) return t;
+  return String(t).split('\n').map(line=>{
+    if(!/\*\*\*/.test(line)) return line;          // nothing unfilled here
+    if(/\[[^\]]*\]/.test(line)) return line;       // bracket field — cleanForCopy's job, not ours
+    const parts=line.split(/(?<=\.)\s+/);          // keep sentence terminators
+    const kept=parts.filter(s=>{
+      const seg=s.trim();
+      if(!/\*\*\*/.test(seg)) return true;                       // sentence has no empty slot -> keep
+      if((seg.match(/\*\*\*/g)||[]).length!==1) return true;     // 2+ slots -> too risky, keep
+      if(/\d/.test(seg)) return true;                            // carries a number -> real data, keep
+      return !/\*\*\*\s*[.;]?\s*$/.test(seg);                    // drop only if the *** dangles at the end
+    });
+    return kept.join(' ');
+  }).join('\n');
+}
 function stripStars(t){
   if(!t) return t;
   return t
@@ -1687,7 +1717,7 @@ function buildSection(name,idx,text){
     // resolve() = what COPIES (stars stripped) — unchanged. resolveRaw() = display only: keeps the
     // *** so the preview can ghost them, the same way it ghosts unfilled [options].
     sectionResolvers.push({name,
-      resolve:   ()=> sectionRemoved(name) ? '' : stripStars(rawOf()),
+      resolve:   ()=> sectionRemoved(name) ? '' : stripStars(dropUnfilledSentences(rawOf())),
       resolveRaw:()=> sectionRemoved(name) ? '' : rawOf()
     });
     wrap.appendChild(body); return wrap;
@@ -1697,7 +1727,7 @@ function buildSection(name,idx,text){
   // dropDeadSentences (the "secondary to unknown" removal) is HPI-specific — scope it there so it
   // can't strip the phrase if a provider happens to type it into another section's free text.
   sectionResolvers.push({name,
-    resolve:   ()=>{ if(sectionRemoved(name)) return ''; const t=stripStars(block.resolve()); return /History of Present/i.test(name)?dropDeadSentences(t):t; },
+    resolve:   ()=>{ if(sectionRemoved(name)) return ''; const t=stripStars(dropUnfilledSentences(block.resolve())); return /History of Present/i.test(name)?dropDeadSentences(t):t; },
     resolveRaw:()=>{ if(sectionRemoved(name)) return ''; const t=block.resolve();            return /History of Present/i.test(name)?dropDeadSentences(t):t; }   // display only: keeps ***
   });
   wrap.appendChild(body); return wrap;
