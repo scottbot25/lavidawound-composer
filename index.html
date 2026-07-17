@@ -58,15 +58,17 @@
   .pb-fgroup{flex:0 0 auto;font-size:10.5px;font-weight:700;letter-spacing:.2px;color:var(--accent);padding:0 4px 0 8px;white-space:nowrap}
   .pb-fgroup.first{padding-left:2px}
   /* one box per facility: name + patient dropdown + add/remove — compact no matter how many patients */
-  .pb-fbox{display:inline-flex;align-items:center;gap:6px;flex:0 0 auto;background:var(--fill);border:1px solid var(--line);border-radius:10px;padding:5px 7px 5px 11px}
-  .pb-fbox.on{border-color:var(--accent);background:#d6efe9}
-  .pb-fbox-name{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:700;color:var(--accent);white-space:nowrap}
-  .pb-fbox-n{background:var(--accent);color:#fff;border-radius:999px;font-size:10px;font-weight:700;padding:0 6px;min-width:18px;text-align:center}
-  .pb-ptsel{background:#fff;border:1px solid var(--line);border-radius:7px;padding:4px 8px;font:inherit;font-size:13px;color:var(--ink);max-width:180px}
+  .pb-fbox{display:inline-flex;align-items:center;gap:8px;flex:0 0 auto;background:var(--fill);border:1px solid var(--line);border-radius:10px;padding:5px 8px 5px 12px}
+  .pb-fbox.on{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+  .pb-fbox-name{font-size:12px;font-weight:700;color:var(--accent);white-space:nowrap}
+  .pb-ptsel{background:#fff;border:1px solid var(--line);border-radius:7px;padding:5px 9px;font:inherit;font-size:13px;color:var(--ink);max-width:180px}
   .pb-ptsel:focus{border-color:var(--accent);outline:none}
-  .pb-fbox-add,.pb-fbox-rm{background:none;border:none;cursor:pointer;font-size:13px;line-height:1;padding:3px 5px;border-radius:5px;color:var(--muted)}
-  .pb-fbox-add:hover{color:var(--accent);background:rgba(15,138,124,.12)}
-  .pb-fbox-rm:hover{color:var(--bad);background:var(--panel2)}
+  /* clear, obvious buttons — not tiny grey icons */
+  .pb-fbox-add,.pb-fbox-rm{cursor:pointer;width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;font-size:16px;font-weight:700;line-height:1;border-radius:7px;border:1px solid var(--line);background:#fff}
+  .pb-fbox-add{color:var(--accent);border-color:rgba(15,138,124,.45)}
+  .pb-fbox-add:hover{background:rgba(15,138,124,.12);border-color:var(--accent)}
+  .pb-fbox-rm{color:var(--muted)}
+  .pb-fbox-rm:hover{color:var(--bad);border-color:rgba(192,57,43,.5);background:#fdeeee}
   .pb-newfac{display:inline-flex;align-items:center;gap:6px;flex:0 0 auto}
   .wrap{display:grid;grid-template-columns:1fr 500px;gap:0;min-height:calc(100vh - var(--header-h))}
   @media (max-width:1050px){.wrap{grid-template-columns:1fr}}
@@ -852,10 +854,10 @@ function renderPatientBar(){
   order.forEach(k=>{ const g=gmap[k]; const isOn=(k===activeFacKey);
     // the box shows the active patient if they're in it, otherwise the box's first patient
     const shownPid=(isOn && g.pids.indexOf(activePid)>=0) ? activePid : g.pids[0];
-    const opts=g.pids.map(pid=>{ const nm=(WS.patients[pid].name&&WS.patients[pid].name.trim())||'Unnamed';
+    const opts=g.pids.map(pid=>{ const nm=(WS.patients[pid].name&&WS.patients[pid].name.trim())||'New patient';
       return '<option value="'+pid+'"'+(pid===shownPid?' selected':'')+'>'+esc(nm)+'</option>'; }).join('');
     h+='<div class="pb-fbox'+(isOn?' on':'')+'">'+
-       '<span class="pb-fbox-name">'+esc(g.fac)+'<span class="pb-fbox-n">'+g.pids.length+'</span></span>'+
+       '<span class="pb-fbox-name">'+esc(g.fac)+'</span>'+
        '<select class="pb-ptsel" title="Pick a patient at '+esc(g.fac)+'">'+opts+'</select>'+
        '<button class="pb-fbox-add" data-fac="'+esc(g.fac)+'" title="Add a patient at '+esc(g.fac)+'">＋</button>'+
        '<button class="pb-fbox-rm" data-pid="'+esc(shownPid)+'" title="Remove the patient shown here">✕</button>'+
