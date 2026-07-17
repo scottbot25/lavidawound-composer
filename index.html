@@ -827,8 +827,8 @@ function renderPatientBar(){
   // Facility switcher — reflects the ACTIVE patient's facility. Changing it moves only this patient
   // (onchange, not oninput, so it doesn't regroup on every keystroke). New patients inherit it.
   let h='<span class="pb-label">Facility</span>'+
-    '<input id="pbFac" class="pb-fac" placeholder="e.g. Crestmore" value="'+esc(ap.facility||'')+'" '+
-      'title="Facility for the current patient. Changing it moves only this patient — everyone else keeps theirs.">'+
+    facilitySelectHTML('pbFac','pb-fac', ap.facility||'',
+      'Facility for the current patient. Changing it moves only this patient — everyone else keeps theirs.')+
     '<span class="pb-sep"></span><span class="pb-label">Patients</span>';
   // Group the tabs by facility so it's obvious who belongs where; show the facility label only when a
   // day spans more than one facility (single-facility days stay clean).
@@ -845,7 +845,10 @@ function renderPatientBar(){
   });
   h+='<button class="pb-new" onclick="newPatient()" title="Start a new patient (keeps the others)">＋ New patient</button>';
   bar.innerHTML=h;
-  const fe=document.getElementById('pbFac'); if(fe) fe.onchange=()=>onBarFacChange(fe.value);
+  const fe=document.getElementById('pbFac'); if(fe) fe.onchange=()=>{
+    if(fe.value==='__add__'){ const nf=facilityAddPrompt(); if(nf){ onBarFacChange(nf); } else { fe.value=String((activePt()||{}).facility||''); } return; }
+    onBarFacChange(fe.value);
+  };
 }
 // Re-stamp ONLY the active patient's facility, and remember it as the sticky default for the next new
 // patient. A follow-up's prior-visit lookup is keyed on facility, so refresh that banner when it changes.
@@ -989,6 +992,41 @@ const FACILITY_CONTACTS = [
   { name: 'University Heights (TEST → admin)', email: 'admin@lavidaheal.com' },
   // add more approved facility contacts here, one line each — name + secure address
 ];
+
+/* Facilities the provider PICKS from a dropdown (no free-typing). Canonical spelling matters: a typo or
+   "Crestmoor" vs "Crestmore" would split that building's handoff group and scatter its wound-history
+   folders. Seeded with the currently-live CO Beecan buildings; add each one as it onboards. The full
+   23-building directory lives in the private ops vault (Facilities & Network) — this repo is public, so
+   the roster is kept lean here. Anything already stamped on a patient, plus anything added via the
+   dropdown's "Add a facility…" option, also shows automatically. */
+const FACILITIES = ['University Heights', 'Crestmoor'];
+let SESSION_FACILITIES = [];   // added on the fly this session (in-tab only; not persisted, not published)
+// The de-duped option set for a facility <select>: configured + added-this-session + any facility already
+// on a patient (so migrated/older values never disappear) + the currently-selected value.
+function facilityList(){
+  const set=new Set();
+  FACILITIES.forEach(f=>{ const s=String(f||'').trim(); if(s) set.add(s); });
+  SESSION_FACILITIES.forEach(f=>{ const s=String(f||'').trim(); if(s) set.add(s); });
+  try{ Object.keys(WS.patients).forEach(pid=>{ const s=String(WS.patients[pid].facility||'').trim(); if(s) set.add(s); }); }catch(e){}
+  return Array.from(set).sort((a,b)=>a.localeCompare(b));
+}
+// Build the <select>. __add__ is the sentinel for the "Add a facility…" escape hatch.
+function facilitySelectHTML(id, cls, selected, title){
+  selected=String(selected||'').trim();
+  const opts=facilityList(); if(selected && opts.indexOf(selected)<0) opts.push(selected);   // never drop the current value
+  let h='<option value="">— choose facility —</option>';
+  h+=opts.map(f=>'<option value="'+esc(f)+'"'+(f===selected?' selected':'')+'>'+esc(f)+'</option>').join('');
+  h+='<option value="__add__">＋ Add a facility…</option>';
+  return '<select id="'+esc(id)+'"'+(cls?' class="'+esc(cls)+'"':'')+(title?' title="'+esc(title)+'"':'')+'>'+h+'</select>';
+}
+// Escape hatch: prompt for a facility not yet in the list, remember it for this session. Returns the name
+// (trimmed) or null if cancelled — callers revert the select to the patient's current facility on null.
+function facilityAddPrompt(){
+  const name=(prompt('New facility name — exact spelling. It becomes this patient’s facility and names their handoff folder.','')||'').trim();
+  if(!name) return null;
+  if(FACILITIES.indexOf(name)<0 && SESSION_FACILITIES.indexOf(name)<0) SESSION_FACILITIES.push(name);
+  return name;
+}
 function esc(s){ return (s==null?'':String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 function val(id){ const e=document.getElementById(id); return e?e.value:''; }
 // Works whether or not the handoff modal is open: when a ho_ field isn't in the DOM (modal closed),
@@ -1532,7 +1570,7 @@ function openHandoff(){
    '<div class="ho-body">'+
      '<div class="ho-grid">'+
        '<div><label>Patient (name or ID) <span style="color:var(--muted);font-weight:400">— this patient</span></label><input id="ho_patient" value="'+esc(getPatient())+'"></div>'+
-       '<div><label>Facility <span style="color:var(--accent);font-weight:400">— this patient</span></label><input id="ho_facility" value="'+esc(ap.facility||'')+'"></div>'+
+       '<div><label>Facility <span style="color:var(--accent);font-weight:400">— this patient</span></label>'+facilitySelectHTML('ho_facility','', ap.facility||'')+'</div>'+
        '<div><label>Date of service <span style="color:var(--accent);font-weight:400">— whole round</span></label><input id="ho_date" type="date" value="'+esc(rnd.date||today)+'"></div>'+
        '<div><label>Provider <span style="color:var(--accent);font-weight:400">— whole round</span></label><input id="ho_provider" value="'+esc(rnd.provider||claims.name||'')+'"></div>'+
        '<div><label>Dx / ICD-10 <span style="color:var(--muted);font-weight:400">— this patient, copy from EMR</span></label><input id="ho_dx" placeholder="copy from EMR (e.g. L89.153, E11.621)" value="'+esc(ap.dx||'')+'"></div>'+
@@ -1546,11 +1584,18 @@ function openHandoff(){
   // Facility is per-patient: on CHANGE (not each keystroke) re-stamp the active patient, keep it as the
   // sticky default, and regroup. No scary "re-label everyone" prompt — it only ever moves this patient.
   const fe=document.getElementById('ho_facility');
-  if(fe) fe.onchange=()=>{ const p=activePt(); const nf=(fe.value||'').trim(); if(p && nf===String(p.facility||'').trim()) return;   // no real change
+  if(fe) fe.onchange=()=>{ const p=activePt();
+    let nf=(fe.value||'').trim();
+    if(nf==='__add__'){ const added=facilityAddPrompt(); if(!added){ fe.value=String((p||{}).facility||''); return; } nf=added;
+      // the header grid isn't re-rendered here, so add the new option to this select and select it
+      if(![].some.call(fe.options,o=>o.value===nf)) fe.add(new Option(nf,nf), fe.options[fe.options.length-1]);
+      fe.value=nf;
+    }
+    if(p && nf===String(p.facility||'').trim()) return;   // no real change
     if(p) p.facility=nf; WS.round=WS.round||{}; WS.round.facility=nf; saveWS();
     markWorkspaceEdited();   // moving a patient between facilities changes which sheets exist -> re-arm "unsaved"
     if(MODE==='fu'){ _whPrior=null; if(typeof whApplyPrior==='function') whApplyPrior(); }
-    renderHandoffGroups(); };
+    renderHandoffGroups(); renderPatientBar(); };
   document.getElementById('handoffModal').style.display='flex'; renderHandoffGroups();
 }
 
