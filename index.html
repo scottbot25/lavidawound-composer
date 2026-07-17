@@ -50,6 +50,13 @@
   .pb-x:hover{color:var(--bad);background:var(--panel2)}
   .pb-new{background:transparent;border:1px dashed var(--accent);color:var(--accent);border-radius:999px;padding:5px 13px;cursor:pointer;font:inherit;font-size:13px;font-weight:600;flex:0 0 auto}
   .pb-new:hover{background:rgba(15,138,124,.08)}
+  /* facility switcher: sets the current patient's facility; patient tabs group under a facility label */
+  .pb-fac{background:var(--fill);border:1px solid var(--line);border-radius:999px;padding:5px 13px;font:inherit;font-size:13px;color:var(--ink);flex:0 0 auto;max-width:190px}
+  .pb-fac:focus{border-color:var(--accent);outline:none}
+  .pb-fac::placeholder{color:var(--muted)}
+  .pb-sep{flex:0 0 auto;align-self:stretch;width:1px;background:var(--line);margin:2px 4px}
+  .pb-fgroup{flex:0 0 auto;font-size:10.5px;font-weight:700;letter-spacing:.2px;color:var(--accent);padding:0 4px 0 8px;white-space:nowrap}
+  .pb-fgroup.first{padding-left:2px}
   .wrap{display:grid;grid-template-columns:1fr 500px;gap:0;min-height:calc(100vh - var(--header-h))}
   @media (max-width:1050px){.wrap{grid-template-columns:1fr}}
   .form{padding:18px 22px;min-width:0}
@@ -134,6 +141,24 @@
   .wound-card{border:1px solid var(--line);border-radius:10px;margin:12px 0 6px;overflow:hidden;background:rgba(43,179,163,.04)}
   .wound-head{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--panel2);border-bottom:1px solid var(--line)}
   .wound-title{font-size:12px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#2f8f83}
+  /* PRIOR BLOCK — last visit's numbers, shown ABOVE this visit's fields for comparison.
+     Deliberately styled as an inert reference card (muted, boxed, no inputs) so it never reads as
+     something you fill in or something that prints. It is not wired to any resolver. */
+  .prior-block{margin:10px 12px 2px;padding:8px 10px;border:1px dashed #c9c2b4;border-left:3px solid #b9b1a2;
+    border-radius:8px;background:rgba(0,0,0,.025);font-size:12.5px;color:#4a4740}
+  .pb-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:10.5px;font-weight:700;
+    letter-spacing:.5px;text-transform:uppercase;color:#6b6459;margin-bottom:5px}
+  .pb-tag{font-weight:600;letter-spacing:.2px;text-transform:none;color:#8a8377;font-style:italic;margin-left:auto}
+  .pb-loc{font-weight:700;letter-spacing:.2px;text-transform:none;color:#2f8f83;font-size:11.5px}
+  .pb-row{padding:1px 0}
+  .pb-k{display:inline-block;min-width:76px;color:#8a8377;font-size:11px}
+  .pb-none{color:#8a8377;font-style:italic}
+  /* Carry-forward status banner. A follow-up that found no prior visit must say so LOUDLY — an empty
+     prior block looks identical to "all these wounds are new", which is the error we're preventing. */
+  .wh-banner{margin:0 0 10px;padding:9px 12px;border-radius:8px;font-size:13px;line-height:1.45;border:1px solid}
+  .wh-ok{background:rgba(43,179,163,.09);border-color:#9ad5cd;color:#1d6a61}
+  .wh-warn{background:#fff4e2;border-color:#f0c98a;color:#7a4d10}
+  .wh-busy{background:var(--panel2);border-color:var(--line);color:var(--muted)}
   .wound-clock{background:transparent;border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:3px 9px;cursor:pointer;font-size:11.5px}
   .wound-clock:hover{border-color:var(--accent)}
   .wound-rm{margin-left:auto;background:transparent;border:1px solid var(--line);color:#c0392b;border-radius:6px;padding:3px 9px;cursor:pointer;font-size:11.5px}
@@ -176,6 +201,13 @@
   .vault-result a{color:var(--accent);font-weight:600}
   .ho-note{font-size:11px;color:var(--muted);flex:1;min-width:200px}
   .ho-preview{width:100%;height:280px;border:1px solid var(--line);border-radius:8px;background:#fff}
+  /* one card per facility — each carries only its own residents + its own send controls */
+  .ho-group{border:1px solid var(--line);border-radius:10px;padding:13px 15px;margin:12px 0;background:var(--panel2);display:flex;flex-direction:column;gap:11px}
+  .ho-ghead{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .ho-gname{font-size:14.5px;font-weight:700;color:var(--accent)}
+  .ho-gcount{font-size:12px;color:var(--muted);font-weight:600}
+  .ho-gsaved{margin-left:auto;font-size:12px;font-weight:700;color:var(--warn);background:#fff5e0;border:1px solid #f0d79a;border-radius:999px;padding:2px 11px}
+  .ho-gsaved.is-saved{color:var(--good);background:#eaf6ef;border-color:#bfe3cd}
   .ho-roster{display:flex;align-items:center;gap:10px;flex-wrap:wrap;border-top:1px solid var(--line);padding-top:12px}
   .ho-rlist{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
   .ho-rchip{display:inline-flex;align-items:center;gap:6px;background:var(--fill);border:1px solid var(--line);border-radius:999px;padding:3px 6px 3px 11px;font-size:12px;color:var(--ink)}
@@ -308,7 +340,7 @@ Immobility: [bed bound / other: ***].
 History of blood clots, clotting disorders, or bleeding disorders: [yes / no].
 On blood thinners or other anticoagulant therapy: [yes / no].
 Enteral feeding: [yes / no].
-Their continence status is [continent / incontinent]
+Their continence status is [continent / incontinent].
 Review of systems: [negative except as noted in HPI / additional findings: ***].`],
       ["Physical Exam",
 `General: [alert, no acute distress / ill-appearing / lethargic / altered mental status / febrile-appearing / other: ***].
@@ -337,10 +369,10 @@ Compression device in use: [yes/no].
 Neuropathy/protective sensation: [intact/decreased/absent/not tested/other: ***].
 Other findings: ***
 Per-wound findings below.
-Periwound signs of infection / inflammation: [absent / present — erythema / induration / ecchymosis / fluctuance / increased warmth / tenderness].
-Location / laterality: *** — [left / right / midline / other].
+Location / laterality: ***
 L: *** cm W: *** cm D: *** cm
 Surface area (auto): *** cm²
+Volume (auto): *** cm³
 Etiology/classification: [pressure injury stage / diabetic ulcer Wagner grade / venous / arterial / surgical / traumatic / MASD / other].
 If pressure injury → Stage: [1 / 2 / 3 / 4 / unstageable / DTI].
 If diabetic ulcer → Wagner grade: [0 / 1 / 2 / 3 / 4 / 5].
@@ -359,18 +391,28 @@ Plans:
 -Dressings [collagen / HFB or alginate /foam / betadine / npwt / *** ]
 -Offloading with [ heel protectors / PRAFO / air mattress / q2h turns / wheelchair cushion / other: ***]
 -ABI/TBI/arterial duplex ***, vascular surgery referral as indicated pending results review
-- Encourage protein supplementation and dietitian evaluation as needed
+-Encourage protein supplementation and dietitian evaluation as needed
 -Re-evaluation in [1 week / 2 weeks / PRN]. Notify LaVida MD or APP sooner for any concerns- conveyed to facility wound care RN and DON.`],
-      ["Procedures", PROC()],
-      ["Medical Decision-Making Summary", MDM()]
+      ["Procedures", PROC()]
+      /* Medical Decision-Making Summary DELETED — Abby, on the record (7/16 Zoom): "Claude record
+         that: MDM deleted." It was byte-identical boilerplate she hand-copied into PCC's separate MDM
+         box every single note ("I was cursing every time"), and Shevie already had a PCC dot-phrase
+         (.sktime) that fills it in six keystrokes. PCC requires the box; PCC fills it. Scott: "we're
+         over-complicating it by making Scott add." This also removes the `Total time: [***] minutes`
+         dangling-text leak by deletion rather than logic. See MDM() below — kept, unreferenced, so the
+         wording survives for whoever authors the Global Macro dot-phrase. */
     ]
   },
   fu: {
     noteType: "LaVida Wound Care Weekly Progress Note",
     sections: [
+      /* "Prior subjective: Please copy from my previous on the EMR" DELETED (Scott, 2026-07-16).
+         It was an instruction to the provider that PASTED INTO THE CHART on every follow-up note —
+         authoring scaffolding sitting in a patient record, the same family as the "drop down" text and
+         "Per-wound findings below." Abby copies her prior subjective from the EMR either way; the
+         sentence never belonged in the note itself. */
       ["Subjective", `date ***
-***
-Prior subjective: Please copy from my previous on the EMR`],
+***`],
       ["Objective",
 `Physical exam
 General: [alert, no acute distress / ill-appearing / lethargic / altered mental status / febrile-appearing / other: ***].
@@ -399,11 +441,10 @@ Compression device in use: [yes/no].
 Neuropathy/protective sensation: [intact/decreased/absent/not tested/other: ***].
 Other findings: ***
 Per-wound findings below.
-Periwound signs of infection / inflammation: [absent / present — erythema / induration / ecchymosis / fluctuance / increased warmth / tenderness].
-Location / laterality: *** — [left / right / midline / other].
+Location / laterality: ***
 L: *** cm W: *** cm D: *** cm
 Surface area (auto): *** cm²
-Prior Measurements: Please copy from my previous on the EMR
+Volume (auto): *** cm³
 Etiology/classification: [pressure injury stage / diabetic ulcer Wagner grade / venous / arterial / surgical / traumatic / MASD / other].
 If pressure injury → Stage: [1 / 2 / 3 / 4 / unstageable / DTI].
 If diabetic ulcer → Wagner grade: [0 / 1 / 2 / 3 / 4 / 5].
@@ -419,10 +460,16 @@ Periwound: [normal/macerated/erythematous/indurated/ecchymotic/callused/fluctuan
 -Dressings [collagen / HFB or alginate /foam / betadine / npwt / *** ]
 -Offloading with [ heel protectors / PRAFO / air mattress / q2h turns / wheelchair cushion / other: ***]
 -ABI/TBI/arterial duplex ***, vascular surgery referral as indicated pending results review
-- Encourage protein supplementation and dietitian evaluation as needed
+-Encourage protein supplementation and dietitian evaluation as needed
 -Re-evaluation in [1 week / 2 weeks / PRN]. Notify LaVida MD or APP sooner for any concerns- conveyed to facility wound care RN and DON.`],
-      ["Procedures", PROC()],
-      ["Medical Decision-Making Summary", MDM()]
+      ["Procedures", PROC()]
+      /* Medical Decision-Making Summary DELETED — Abby, on the record (7/16 Zoom): "Claude record
+         that: MDM deleted." It was byte-identical boilerplate she hand-copied into PCC's separate MDM
+         box every single note ("I was cursing every time"), and Shevie already had a PCC dot-phrase
+         (.sktime) that fills it in six keystrokes. PCC requires the box; PCC fills it. Scott: "we're
+         over-complicating it by making Scott add." This also removes the `Total time: [***] minutes`
+         dangling-text leak by deletion rather than logic. See MDM() below — kept, unreferenced, so the
+         wording survives for whoever authors the Global Macro dot-phrase. */
     ]
   }
 };
@@ -457,15 +504,22 @@ const PKEY='lavida_patient_name';             // legacy patient-name key — mig
 const WKEY='lavida_wound_patients';           // the multi-patient workspace
 let MODE='new';
 function newStore(){ return {new:{}, fu:{}}; }
+/* Older workspaces (and drafts) stored facility once on WS.round and overlaid it onto everyone — that's
+   the mixing bug. Bring them forward by stamping each patient with the round's old facility (they were
+   all under one facility anyway), so from here on each patient carries its own. Only fills a MISSING
+   stamp; never overwrites one that's already set. */
+function migrateFacility(ws){ if(!ws||!ws.patients) return; const rf=String((ws.round&&ws.round.facility)||'').trim();
+  Object.keys(ws.patients).forEach(pid=>{ const p=ws.patients[pid]; if(p && p.facility==null) p.facility=rf; }); }
 function loadWorkspace(){
   try{ const r=sessionStorage.getItem(WKEY); if(r){ const o=JSON.parse(r);
-    if(o&&o.patients&&Object.keys(o.patients).length){ if(!o.patients[o.activePid]) o.activePid=Object.keys(o.patients)[0]; if(!o.round) o.round={}; return o; } } }catch(e){}
+    if(o&&o.patients&&Object.keys(o.patients).length){ if(!o.patients[o.activePid]) o.activePid=Object.keys(o.patients)[0]; if(!o.round) o.round={}; migrateFacility(o); return o; } } }catch(e){}
   // migrate a pre-existing single note (+ its patient name) into patient #1 so nothing is lost
   let store=newStore(), name='';
   try{ const old=sessionStorage.getItem(SKEY); if(old){ const oo=JSON.parse(old); store={new:oo.new||{}, fu:oo.fu||{}}; } }catch(e){}
   try{ name=sessionStorage.getItem(PKEY)||''; }catch(e){}
-  // round = header shared across ALL patients this session (one facility/date/provider per round)
-  return { seq:2, activePid:'p1', round:{}, patients:{ p1:{ name, store, updatedAt:0 } } };
+  // round = date + provider shared across the round; facility is PER-PATIENT (round.facility is only the
+  // sticky default the next new patient inherits). See migrateFacility.
+  return { seq:2, activePid:'p1', round:{}, patients:{ p1:{ name, store, updatedAt:0, facility:'' } } };
 }
 let WS=loadWorkspace();
 let activePid=WS.activePid;
@@ -482,38 +536,325 @@ function getPatient(){ const p=activePt(); return p ? (p.name||'') : ''; }
 function setPatient(v){ const p=activePt(); if(p){ p.name=v||''; persist(); } }
 function paintPatient(){ const el=document.getElementById('patientName'); if(!el) return; const f=el.closest('.pt-field')||el; const filled=!!(el.value&&el.value.trim()); f.classList.toggle('fld-filled',filled); f.classList.toggle('fld-empty',!filled); }
 function syncPatientField(){ const el=document.getElementById('patientName'); if(el) el.value=getPatient(); paintPatient(); }
-function onPatientInput(v){ setPatient(v); paintPatient(); renderPatientBar(); updateRosterBadge(); const ho=document.getElementById('ho_patient'); if(ho && ho.value!==v){ ho.value=v; saveHandoff(); refreshHandoffPreview(); } }
+let _whNameT=null;
+function onPatientInput(v){ setPatient(v); paintPatient(); renderPatientBar(); updateRosterBadge(); const ho=document.getElementById('ho_patient'); if(ho && ho.value!==v){ ho.value=v; saveHandoff(); refreshHandoffPreview(); }
+  // The patient name IS the carry-forward key, so retyping it re-pulls the prior visit. Debounced so a
+  // half-typed name doesn't fire a lookup per keystroke.
+  if(MODE==='fu'){ _whPrior=null; if(typeof whPaintBanner==='function') whPaintBanner();
+    clearTimeout(_whNameT); _whNameT=setTimeout(()=>{ if(MODE==='fu' && typeof whApplyPrior==='function') whApplyPrior(); }, 600); }
+}
 // ^ updateRosterBadge() here keeps the "📄 Facility Handoff (N)" count live as a name is typed/cleared —
 //   the roster is derived from NAMED patients, so naming/un-naming must recount, not just add/remove.
+
+/* ============ PERMANENT WOUND IDENTITY ============
+   A wound's NUMBER is its identity for the life of the wound — NOT its position in a list.
+   Decided with Abby + Shevie on the 2026-07-16 Zoom: Wound 1 stays Wound 1 until it resolves; when it
+   resolves the others NEVER slide up to fill the gap; a reopened wound is a NEW wound with a NEW number.
+   Scott's reasoning: "if not, you have no way to — you're pulling numbers and you're going to end up
+   conflating them." Abby has patients with "wound 106".
+
+   This matters because carry-forward matches THIS week's wound to LAST week's BY NUMBER. A silent
+   renumber would compare the wrong pair — which is exactly the "wound looks bigger than it is" error
+   the whole feature exists to prevent.
+
+     wid = internal key. Also the STATE keyPrefix component (idx:w<wid>), so it must NEVER change once
+           assigned or the wound's saved answers orphan.
+     num = the permanent human number. Assigned once, never reused, never renumbered.
+
+   The registry lives on the PATIENT, not the store, because `store.new` and `store.fu` are separate
+   key-spaces describing the SAME physical wounds — a follow-up must reuse the initial's wids. */
+function wreg(p){ p=p||activePt(); if(!p) return {seq:1, widSeq:0, byId:{}};
+  if(!p.wreg) p.wreg={seq:1, widSeq:null, byId:{}};
+  return p.wreg; }
+// Mint a wid that has never been used by THIS patient in EITHER store. Seeded above any wid already
+// present so pre-registry drafts (which used a per-render counter) can't collide on restore.
+function mintWid(p){ p=p||activePt(); const R=wreg(p);
+  if(R.widSeq==null){
+    let mx=-1;
+    try{ ['new','fu'].forEach(m=>{ const st=(p&&p.store&&p.store[m])||{};
+      Object.keys(st).forEach(k=>{ if(/^__wc_/.test(k) && Array.isArray(st[k]))
+        st[k].forEach(id=>{ const n=parseInt(id,10); if(!isNaN(n)&&n>mx) mx=n; }); }); }); }catch(e){}
+    Object.keys(R.byId).forEach(k=>{ const n=parseInt(k,10); if(!isNaN(n)&&n>mx) mx=n; });
+    R.widSeq=mx+1;
+  }
+  return R.widSeq++;
+}
+// The permanent number for a wid. Assigns on first sight (this is also the migration path for drafts
+// written before the registry existed — they get numbered in the order they appear in __wc_).
+function woundNum(wid, p){ p=p||activePt(); const R=wreg(p); const k=String(wid);
+  if(!R.byId[k]){ R.byId[k]={ num:R.seq++, label:'', openedOn:(typeof todayISO==='function'?todayISO():''), resolvedOn:null };
+    try{ persist(); }catch(e){} }
+  return R.byId[k].num;
+}
+function woundMeta(wid, p){ p=p||activePt(); const R=wreg(p); woundNum(wid,p); return R.byId[String(wid)]; }
+
+/* ============ WOUND HISTORY — the carry-forward store ============
+   Abby (7/16 Zoom): on a follow-up she needs LAST visit's wound bed + measurements sitting next to
+   this week's blank fields, per wound — because she measures partly by gestalt and a sloppy number
+   makes a healing wound look like a worsening one. "I need the numbers to actually show that it's
+   getting better." Vasquez's old sheet did this, which is the bar.
+
+   DECIDED (grill with Scott, 7/16):
+   - COMMIT POINT = the copy-to-PCC event. Copying the wound section is the signal that the data is
+     real. Last copy wins; a same-day recopy OVERWRITES that date's record; once the day passes the
+     record is immutable. A note that is never copied never becomes history. PCC stays the legal truth.
+   - PULL THE PREVIOUS COMMITTED VISIT — never a date window. Abby's Epic analogy: ".data doesn't pull
+     a CBC based on a certain date, it just pulls the last 10." Survives a skipped week, a Wed-then-Thu
+     visit, a biweekly facility.
+   - PRIOR DATA IS REFERENCE ONLY (Scott): it must NEVER print into the note. Enforced STRUCTURALLY —
+     the prior block is DOM injected into the card and is never wired into a resolver sink, so there is
+     no filter that could regress and leak it into the chart.
+   - NEVER FAIL SILENTLY: a follow-up with no prior record says so out loud. Silent-empty is the
+     dangerous mode — it looks identical to "this wound is new".
+   - Lives in ClinicalVault at  WoundHistory/<facility>/<patient>.json  — deliberately NOT in Drafts/,
+     which auto-cleans; carry-forward must outlive a skipped week. Under ?preview=1 it is backed by
+     sessionStorage so the whole flow is testable without touching the real vault. */
+const WH_ENABLED = () => true;
+const WH_LOCAL   = () => !((typeof AUTH!=='undefined') && AUTH.enabled && !AUTH.demo);   // preview/demo -> sessionStorage
+// Facility is PER-PATIENT — the active patient's own stamp. This is what keys the carry-forward store
+// (WoundHistory/<facility>/<patient>.json), so a follow-up is always looked up and committed under the
+// facility THIS patient belongs to, never whatever was last typed in the header.
+function whFacility(){ const p=activePt(); return String((p&&p.facility)||'').trim() || 'Unassigned'; }
+function whSlug(s){ return String(s||'').replace(/[\\/:*?"<>|#%]/g,'_').replace(/\s+/g,' ').trim() || 'unknown'; }
+// Word-order- and punctuation-insensitive key: "Smith, Robert" == "robert smith" == "SMITH  ROBERT".
+function whNameKey(s){ return String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim().split(' ').filter(Boolean).sort().join(' '); }
+function whSegs(){ return ['WoundHistory', whSlug(whFacility())]; }
+function whFile(name){ return whSlug(name)+'.json'; }
+function whLocalKey(name){ return 'lavida_wh::'+whSlug(whFacility())+'::'+whNameKey(name); }
+
+function whBlank(name){ return { v:1, tool:'wound-composer', patient:name||'', facility:whFacility(), visits:[] }; }
+
+async function whLoad(name){
+  if(!name || !name.trim()) return null;
+  if(WH_LOCAL()){
+    try{ const r=sessionStorage.getItem(whLocalKey(name)); return r?JSON.parse(r):null; }catch(e){ return null; }
+  }
+  try{
+    const ctx=await _draftContext(); if(!ctx) return null;
+    const metaUrl='https://graph.microsoft.com/v1.0/drives/'+ctx.driveId+'/root:/'+_encPath(whSegs().join('/')+'/'+whFile(name));
+    const m=await _gfetch(metaUrl, ctx.token); if(!m.ok) return null;
+    const meta=await m.json();
+    // Read via @microsoft.graph.downloadUrl: /content 302s to sharepoint and the auth header survives.
+    const dl=meta['@microsoft.graph.downloadUrl']; if(!dl) return null;
+    const c=await fetch(dl); if(!c.ok) return null;
+    return await c.json();
+  }catch(e){ return null; }
+}
+async function whSave(name, hist){
+  if(!name || !name.trim()) return false;
+  if(WH_LOCAL()){
+    try{ sessionStorage.setItem(whLocalKey(name), JSON.stringify(hist)); return true; }catch(e){ return false; }
+  }
+  try{
+    const ctx=await _draftContext(); if(!ctx) return false;
+    await _vaultEnsureFolders(ctx.token, ctx.driveId, whSegs());
+    const url='https://graph.microsoft.com/v1.0/drives/'+ctx.driveId+'/root:/'+_encPath(whSegs().join('/')+'/'+whFile(name))+':/content';
+    const r=await _gfetch(url, ctx.token, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(hist)});
+    return r.ok;
+  }catch(e){ return false; }
+}
+
+/* Snapshot THIS visit's wounds straight from the live resolvers — the same text that goes to PCC, so
+   history can never disagree with the chart. */
+function whSnapshotWounds(){
+  const out={};
+  // A per-wound resolve() is RAW — an untouched field still reads as its own placeholder
+  // ("[new/not healed/improving/…]", "*** — [left/right]"). hoBlank() is the existing detector the
+  // handoff already uses for this; run every field through it so history stores only what was really
+  // charted. Without this, next week's prior block would show a placeholder as if it were a finding.
+  const v=x=>hoBlank(x)?'':String(x||'').trim();
+  (woundRegistry||[]).forEach(w=>{
+    const t=w.resolve(); const meta=woundMeta(w.id);
+    const s=woundSummary(t, STATE[w.keyPrefix+':priorSA']);
+    out[String(w.id)]={ num:meta.num, label:meta.label||'', dims:v(s.dims), sa:v(s.sa), vol:volOf(t),
+                        bed:v(s.bed), status:v(s.status), drainage:v(s.drainage),
+                        undermining:v(s.undermining), tunneling:v(s.tunneling), location:v(s.location) };
+  });
+  return out;
+}
+// Commit-on-copy. Same-day recopy overwrites that date's record (last copy wins).
+async function whCommit(){
+  try{
+    if(!WH_ENABLED()) return false;
+    const name=getPatient(); if(!name || !name.trim()) return false;
+    if(!woundRegistry || !woundRegistry.length) return false;
+    const h=(await whLoad(name)) || whBlank(name);
+    h.patient=name; h.facility=whFacility();
+    const hdr=currentHeader(); const date=(hdr.date||todayISO());
+    const rec={ date, provider:hdr.provider||'', mode:MODE, savedAt:Date.now(), wounds:whSnapshotWounds(),
+                wreg:JSON.parse(JSON.stringify(wreg().byId||{})) };
+    const i=h.visits.findIndex(v=>v.date===date);
+    if(i>=0) h.visits[i]=rec; else h.visits.push(rec);           // same-day recopy overwrites
+    h.visits.sort((a,b)=> a.date<b.date?-1:a.date>b.date?1:0);
+    const ok=await whSave(name,h);
+    if(ok) _whPriorCache=null;
+    return ok;
+  }catch(e){ return false; }
+}
+/* The prior visit = the most recent COMMITTED visit before today. Not a date window. */
+let _whPriorCache=null;
+async function whPriorVisit(name, exceptDate){
+  const h=await whLoad(name); if(!h || !h.visits || !h.visits.length) return null;
+  const d=exceptDate||todayISO();
+  const past=h.visits.filter(v=>v.date < d);
+  return past.length ? past[past.length-1] : null;
+}
+
+/* ---- prior state for the ACTIVE patient ---- */
+let _whPrior=null;        // {key, name, visit}  — visit===null means "looked, found nothing"
+let _whLoading=false;
+function _whKey(){ return whNameKey(getPatient())+'|'+whNameKey(whFacility()); }
+function whPriorReady(){ return !!(_whPrior && _whPrior.key===_whKey()); }
+async function whRefreshPrior(){
+  const key=_whKey();
+  if(whPriorReady() || _whLoading) return _whPrior;
+  _whLoading=true;
+  try{
+    const name=getPatient();
+    const visit=(name&&name.trim()) ? await whPriorVisit(name) : null;
+    _whPrior={ key, name, visit:visit||null };
+    // Rehydrate the permanent numbers from history, so a wound keeps its number across sessions and
+    // across providers — a fresh browser would otherwise renumber from 1 and defeat the whole point.
+    if(visit && visit.wreg){
+      const R=wreg(); let mx=R.seq;
+      Object.keys(visit.wreg).forEach(k=>{ if(!R.byId[k]) R.byId[k]=JSON.parse(JSON.stringify(visit.wreg[k]));
+        mx=Math.max(mx, (R.byId[k].num||0)+1); });
+      R.seq=Math.max(R.seq, mx);
+      try{ persist(); }catch(e){}
+    }
+  }catch(e){ _whPrior={key, name:getPatient(), visit:null}; }
+  finally{ _whLoading=false; }
+  return _whPrior;
+}
+// Which wids a fresh follow-up should open with: every wound from the prior visit that is NOT healed.
+// A healed wound stops carrying forward and its number is retired permanently.
+function whSeedIds(){
+  const v=_whPrior && _whPrior.visit; if(!v || !v.wounds) return null;
+  const ids=Object.keys(v.wounds).filter(wid=>!/healed|resolved/i.test(String(v.wounds[wid].status||'')));
+  return ids.length?ids:null;
+}
+function whPriorFor(wid){ const v=_whPrior&&_whPrior.visit; return (v&&v.wounds&&v.wounds[String(wid)])||null; }
+
+/* Paint the reference block above each wound's fields. Display only — never resolved, never copied. */
+function whPaintPrior(){
+  const showFor = (MODE==='fu');
+  (woundRegistry||[]).forEach(w=>{
+    const el=w.priorEl; if(!el) return;
+    const p=showFor?whPriorFor(w.id):null;
+    if(!p){ el.style.display='none'; el.innerHTML=''; return; }
+    const v=_whPrior.visit;
+    // Auto-fill the Prior SA box from history — this is the number Abby types by hand today, and the
+    // existing "changed >50% from prior" check keys off it. Only fill when it's empty, so a value the
+    // provider deliberately typed is never overwritten.
+    try{ const pk=w.keyPrefix+':priorSA';
+      if(p.sa && (STATE[pk]==null || STATE[pk]==='')){ STATE[pk]=p.sa; persist();
+        const box=el.parentElement && el.parentElement.querySelector('.mf-prior');
+        if(box && !box.value){ box.value=p.sa; box.dispatchEvent(new Event('input',{bubbles:true})); } }
+    }catch(e){}
+    const bits=[];
+    if(p.dims) bits.push('<b>'+p.dims+'</b>');
+    if(p.sa && p.sa!=='***') bits.push('SA '+p.sa+' cm²');
+    if(p.vol) bits.push('Vol '+p.vol+' cm³');
+    const rows=[];
+    if(bits.length) rows.push('<div class="pb-row">'+bits.join(' &nbsp;·&nbsp; ')+'</div>');
+    if(p.bed) rows.push('<div class="pb-row"><span class="pb-k">Wound bed</span> '+esc(p.bed)+'</div>');
+    if(p.drainage) rows.push('<div class="pb-row"><span class="pb-k">Drainage</span> '+esc(p.drainage)+'</div>');
+    if(p.status) rows.push('<div class="pb-row"><span class="pb-k">Status</span> '+esc(p.status)+'</div>');
+    if(!rows.length) rows.push('<div class="pb-row pb-none">No measurements recorded last visit.</div>');
+    // The patient name and the visit date are printed INSIDE the block on purpose: if the wrong
+    // patient's history is ever shown, it must be visible at a glance, not silent. (Scott's #1 feared
+    // failure.) The date also makes a stale/skipped week obvious instead of looking like "last week".
+    // Last visit's LOCATION is the human check that this is the same wound. "Wound 106" means nothing
+    // to the eye; "right lower extremity, great toe" does. Abby free-texts it, so it's the natural label.
+    const loc=p.location?'<span class="pb-loc">'+esc(p.location)+'</span>':'';
+    el.innerHTML='<div class="pb-head">↩ LAST VISIT · '+esc(v.date)+' · '+esc(_whPrior.name||'—')+loc
+      +'<span class="pb-tag">reference only — does not print</span></div>'+rows.join('');
+    el.style.display='';
+  });
+  whPaintBanner();
+}
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+/* Loud-fail banner. A follow-up with no prior record must SAY so — silent-empty looks identical to
+   "these are all new wounds", which is exactly the mistake carry-forward exists to prevent. */
+function whPaintBanner(){
+  let b=document.getElementById('whBanner');
+  const host=document.getElementById('form')||document.body;
+  if(!b){ b=document.createElement('div'); b.id='whBanner'; b.className='wh-banner'; host.insertBefore(b, host.firstChild); }
+  const name=getPatient();
+  if(MODE!=='fu'){ b.style.display='none'; return; }
+  if(!name || !name.trim()){ b.className='wh-banner wh-warn'; b.innerHTML='⚠ <b>Enter the patient name</b> to pull last visit\'s wound measurements.'; b.style.display=''; return; }
+  if(!whPriorReady()){ b.className='wh-banner wh-busy'; b.innerHTML='☁ Looking for <b>'+esc(name)+'</b>\'s last visit…'; b.style.display=''; return; }
+  if(!_whPrior.visit){ b.className='wh-banner wh-warn';
+    b.innerHTML='⚠ <b>No prior visit found for '+esc(name)+' at '+esc(whFacility())+'.</b> Nothing to compare against — if this is a follow-up, key last visit\'s numbers in by hand from PCC. (First tracked visit: history starts today.)';
+    b.style.display=''; return; }
+  b.className='wh-banner wh-ok';
+  b.innerHTML='↩ Showing <b>'+esc(_whPrior.name)+'</b>\'s last visit (<b>'+esc(_whPrior.visit.date)+'</b>) above each wound. Reference only — it does not print into the note.';
+  b.style.display='';
+}
+// Follow-up mode needs history BEFORE the section renders (to seed the right wids). Load, then re-render.
+function whApplyPrior(){
+  if(MODE!=='fu'){ whPaintBanner(); return; }
+  if(whPriorReady()){ whPaintPrior(); return; }
+  whPaintBanner();
+  whRefreshPrior().then(()=>{ if(MODE==='fu'){ setMode('fu'); } });
+}
 
 /* ---- patient workspace operations ---- */
 // Point STORE at the active patient's store and rebuild the form. The outgoing patient's edits are
 // already saved (persist runs on every field change), so we never overwrite here.
 function activateForm(){ STORE=activePt().store; STATE=STORE[MODE]; WS.activePid=activePid; saveWS(); syncPatientField(); setMode(MODE); }
 function switchPatient(pid){ if(!WS.patients[pid]||pid===activePid) return; if(typeof refreshActiveSummary==='function') refreshActiveSummary(); activePid=pid; activateForm(); }
-function newPatient(){ if(typeof refreshActiveSummary==='function') refreshActiveSummary(); const pid='p'+(WS.seq++); WS.patients[pid]={ name:'', store:newStore(), updatedAt:Date.now() }; activePid=pid; activateForm(); const el=document.getElementById('patientName'); if(el){ el.focus(); } }
+function newPatient(){ if(typeof refreshActiveSummary==='function') refreshActiveSummary(); const pid='p'+(WS.seq++);
+  // a new patient inherits the facility you're rounding in now (the sticky default) so you don't retype
+  // it per patient — but it's their OWN stamp from here, not a shared label.
+  WS.patients[pid]={ name:'', store:newStore(), updatedAt:Date.now(), facility:String((WS.round&&WS.round.facility)||'').trim() };
+  activePid=pid; activateForm(); const el=document.getElementById('patientName'); if(el){ el.focus(); } }
 function removePatient(pid){ const p=WS.patients[pid]; if(!p) return;
   if(!confirm('Remove '+((p.name&&p.name.trim())||'this patient')+' and their note from the workspace?\n(Does not affect anything already saved to ClinicalVault or pasted into PCC.)')) return;
   delete WS.patients[pid]; const ids=Object.keys(WS.patients);
-  if(!ids.length){ WS.patients.p1={name:'',store:newStore(),updatedAt:Date.now()}; WS.seq=2; activePid='p1'; }
+  if(!ids.length){ WS.patients.p1={name:'',store:newStore(),updatedAt:Date.now(),facility:String((WS.round&&WS.round.facility)||'').trim()}; WS.seq=2; activePid='p1'; }
   else if(pid===activePid){ activePid=ids[0]; }
   activateForm(); }
 function clearAll(){ if(!confirm('Clear the ENTIRE workspace — every patient and both notes — and wipe the in-browser session? This cannot be undone.')) return;
-  WS={ seq:2, activePid:'p1', patients:{ p1:{name:'',store:newStore(),updatedAt:Date.now()} } }; activePid='p1';
+  WS={ seq:2, activePid:'p1', round:{}, patients:{ p1:{name:'',store:newStore(),updatedAt:Date.now(),facility:''} } }; activePid='p1';
   try{ sessionStorage.removeItem(WKEY); sessionStorage.removeItem(SKEY); sessionStorage.removeItem(PKEY); }catch(e){}
   activateForm(); }
 // The patient switcher strip under the header (built in renderPatientBar; called from setMode).
 function renderPatientBar(){
   const bar=document.getElementById('patientBar'); if(!bar) return;
   const ids=Object.keys(WS.patients);
-  let h='<span class="pb-label">Patients</span>';
-  h+=ids.map(pid=>{ const p=WS.patients[pid]; const nm=(p.name&&p.name.trim())||'Unnamed'; const on=pid===activePid;
-    return '<span class="pb-tab'+(on?' on':'')+'" onclick="switchPatient(\''+pid+'\')" title="'+esc(nm)+'">'+
-      '<span class="pb-name">'+esc(nm)+'</span>'+
-      (ids.length>1?'<button class="pb-x" title="Remove from workspace" onclick="event.stopPropagation();removePatient(\''+pid+'\')">✕</button>':'')+
-    '</span>'; }).join('');
+  const ap=activePt()||{};
+  // Facility switcher — reflects the ACTIVE patient's facility. Changing it moves only this patient
+  // (onchange, not oninput, so it doesn't regroup on every keystroke). New patients inherit it.
+  let h='<span class="pb-label">Facility</span>'+
+    '<input id="pbFac" class="pb-fac" placeholder="e.g. Crestmore" value="'+esc(ap.facility||'')+'" '+
+      'title="Facility for the current patient. Changing it moves only this patient — everyone else keeps theirs.">'+
+    '<span class="pb-sep"></span><span class="pb-label">Patients</span>';
+  // Group the tabs by facility so it's obvious who belongs where; show the facility label only when a
+  // day spans more than one facility (single-facility days stay clean).
+  const groups=[]; const gmap={};
+  ids.forEach(pid=>{ const k=facKey(WS.patients[pid].facility); if(!gmap[k]){ gmap[k]={ fac:facLabel(WS.patients[pid].facility), pids:[] }; groups.push(k); } gmap[k].pids.push(pid); });
+  const multi=groups.length>1;
+  groups.forEach((k,gi)=>{ const g=gmap[k];
+    if(multi) h+='<span class="pb-fgroup'+(gi===0?' first':'')+'">'+esc(g.fac)+'</span>';
+    h+=g.pids.map(pid=>{ const p=WS.patients[pid]; const nm=(p.name&&p.name.trim())||'Unnamed'; const on=pid===activePid;
+      return '<span class="pb-tab'+(on?' on':'')+'" onclick="switchPatient(\''+pid+'\')" title="'+esc(nm)+(multi?' · '+esc(g.fac):'')+'">'+
+        '<span class="pb-name">'+esc(nm)+'</span>'+
+        (ids.length>1?'<button class="pb-x" title="Remove from workspace" onclick="event.stopPropagation();removePatient(\''+pid+'\')">✕</button>':'')+
+      '</span>'; }).join('');
+  });
   h+='<button class="pb-new" onclick="newPatient()" title="Start a new patient (keeps the others)">＋ New patient</button>';
   bar.innerHTML=h;
+  const fe=document.getElementById('pbFac'); if(fe) fe.onchange=()=>onBarFacChange(fe.value);
+}
+// Re-stamp ONLY the active patient's facility, and remember it as the sticky default for the next new
+// patient. A follow-up's prior-visit lookup is keyed on facility, so refresh that banner when it changes.
+function onBarFacChange(v){ const p=activePt(); if(!p) return;
+  const nf=(v||'').trim(); if(nf===String(p.facility||'').trim()){ return; }   // no real change -> no work
+  p.facility=nf; WS.round=WS.round||{}; WS.round.facility=nf; persist();
+  renderPatientBar(); updateRosterBadge();
+  if(MODE==='fu'){ _whPrior=null; if(typeof whPaintBanner==='function') whPaintBanner();
+    if(typeof whApplyPrior==='function') whApplyPrior(); }
 }
 
 /* ============ UNDERMINING / TUNNELING CLOCK — writes into the wound's fields ============ */
@@ -658,12 +999,14 @@ function val(id){ const e=document.getElementById(id); return e?e.value:''; }
 function currentHeader(){
   const r=WS.round||{}, p=activePt()||{};
   const fld=(id,fb)=>{ const e=document.getElementById(id); return e ? e.value : fb; };
-  return { patient:fld('ho_patient', getPatient()), facility:fld('ho_facility', r.facility||''),
+  // Facility + Dx are per-patient (fall back to THIS patient's stored values); date + provider are round-level.
+  return { patient:fld('ho_patient', getPatient()), facility:fld('ho_facility', p.facility||''),
     date:fld('ho_date', r.date||''), provider:fld('ho_provider', r.provider||''), dx:fld('ho_dx', p.dx||'') };
 }
 function saveHandoff(){ const h=currentHeader();
-  WS.round={ facility:h.facility, date:h.date, provider:h.provider };   // shared across the round
-  if(activePt()) activePt().dx=h.dx;                                    // Dx stays per-patient
+  WS.round=WS.round||{}; WS.round.date=h.date; WS.round.provider=h.provider;   // date + provider shared across the round
+  WS.round.facility=(h.facility||'').trim();          // kept ONLY as the sticky default for the next new patient
+  const p=activePt(); if(p){ p.dx=h.dx; p.facility=(h.facility||'').trim(); }  // facility + Dx belong to THIS patient
   saveWS(); }
 // --- field extraction from resolved note text (pull, don't duplicate) ---
 function grab(t,re){ const m=t.match(re); return m? m[1].trim().replace(/\s*\.\s*$/,'') : ''; }
@@ -675,6 +1018,12 @@ function hoBlank(v){ return !v || v==='[ ]' || /^\s*\*\*\*/.test(v) || /\[[^\]]*
 function hoVal(v){ return hoBlank(v) ? '—' : v; }
 function dimsOf(t){ const m=t.match(/L:\s*(\S+)\s*cm\s*W:\s*(\S+)\s*cm\s*D:\s*(\S+)\s*cm/);
   if(!m || (m[1]==='***'&&m[2]==='***'&&m[3]==='***')) return ''; return m[1]+' × '+m[2]+' × '+m[3]+' cm'; }
+/* Volume = L × W × D. Surface area = L × W (confirmed with Abby 7/16 — Scott had briefly conflated
+   them). Both are wanted so a wound that deepens while narrowing still trends honestly: "it's good to
+   have both surface area and volume." */
+function volOf(t){ const m=t.match(/L:\s*(\S+)\s*cm\s*W:\s*(\S+)\s*cm\s*D:\s*(\S+)\s*cm/); if(!m) return '';
+  const L=parseFloat(m[1]), W=parseFloat(m[2]), D=parseFloat(m[3]);
+  if(!(L>0&&W>0&&D>0)) return ''; return (L*W*D).toFixed(1); }
 function woundSummary(t, priorSA){
   return {
     location: grab(t,/Location \/ laterality:\s*([^\n]+)/),
@@ -697,7 +1046,10 @@ function extractPatient(){
   const subj=sectionResolvers.find(s=>s.name==='Subjective');
   const noteDate = subj ? grab(subj.resolve(),/date\s+(.+)/) : '';
   const dateVal = (noteDate && noteDate!=='***') ? noteDate : (h.date||'');
-  const wounds = woundRegistry.map((w,i)=>({ n:i+1, s:woundSummary(w.resolve(), STATE[w.keyPrefix+':priorSA']) }));
+  // n = the wound's PERMANENT number, not its position. The nurse acts on this sheet, so it must agree
+  // with the note — two independent positional counters could disagree and put the right order on the
+  // wrong wound.
+  const wounds = woundRegistry.map(w=>({ n:woundNum(w.id), s:woundSummary(w.resolve(), STATE[w.keyPrefix+':priorSA']) }));
   const proc=sectionResolvers.find(s=>s.name==='Procedures'); const pt=proc?proc.resolve():'';
   const procedure={ removed:grab(pt,/Tissue Type Removed:\s*([^\n]+)/), type:grab(pt,/Type of Debridement:\s*([^\n\[]+)/),
     dbt:grab(pt,/Deepest tissue debrided:\s*([^\n]+)/), instrument:grab(pt,/Instrument Used:\s*([^\n]+)/), anesthesia:grab(pt,/Anesthesia:\s*([^\n]+)/) };
@@ -711,16 +1063,42 @@ function extractPatient(){
 // refreshed on demand, and an outgoing patient is refreshed when you switch away (switchPatient/newPatient).
 function refreshActiveSummary(){ try{ const p=activePt(); if(p && typeof sectionResolvers!=='undefined' && sectionResolvers.length) p.summary=extractPatient(); }catch(e){} }
 function rosterGet(){ refreshActiveSummary(); const r=WS.round||{};
-  return Object.keys(WS.patients).map(pid=>{ const s=WS.patients[pid].summary; if(!s) return null;
-    // overlay the shared round header so facility/date/provider are current for EVERY patient
-    return Object.assign({}, s, { facility:r.facility||s.facility, provider:r.provider||s.provider, dateVal:r.date||s.dateVal }); })
+  return Object.keys(WS.patients).map(pid=>{ const p=WS.patients[pid]; const s=p.summary; if(!s) return null;
+    // Facility comes from the patient's OWN stamp (never a shared header — that was the mixing bug).
+    // Date + provider are still round-level, so overlay those to keep every patient current.
+    return Object.assign({}, s, { facility:String(p.facility||s.facility||'').trim(), provider:r.provider||s.provider, dateVal:r.date||s.dateVal }); })
     .filter(s=>s && !hoBlank(s.patient)); }
 function rosterSet(){ /* the list IS the workspace now — no-op kept for call-site safety */ }
-// Saved-state: has the current workspace been captured durably (ClinicalVault / download / print /
-// email) since the last edit? Drives the amber "unsaved" badge + the tab-close warning.
-function rosterSavedGet(){ try{ return sessionStorage.getItem('lavida_handoff_saved')==='1'; }catch(e){ return false; } }
-function rosterSavedSet(v){ try{ v ? sessionStorage.setItem('lavida_handoff_saved','1') : sessionStorage.removeItem('lavida_handoff_saved'); }catch(e){} updateRosterBadge(); }
-function markWorkspaceEdited(){ if(rosterSavedGet()) rosterSavedSet(false); }   // called from persist() on first edit after a save
+
+/* ===== Facility grouping — a handoff is split into one sheet PER facility, never a flat mixed list.
+   facKey normalizes for grouping/matching (case- and whitespace-insensitive; blank -> a reserved
+   "unassigned" key that can't collide with a real name). facLabel is what's shown/printed. */
+function facKey(f){ const s=String(f||'').replace(/\s+/g,' ').trim().toLowerCase(); return s || ' unassigned'; }
+function facLabel(f){ return String(f||'').replace(/\s+/g,' ').trim() || 'Unassigned'; }
+// The named roster, grouped by facility, first-seen order preserved. Each group: {fac, key, patients:[]}.
+function rosterGroups(){
+  const roster=rosterGet(); const order=[]; const map={};
+  roster.forEach(p=>{ const k=facKey(p.facility); if(!map[k]){ map[k]={ fac:facLabel(p.facility), key:k, patients:[] }; order.push(k); } map[k].patients.push(p); });
+  return order.map(k=>map[k]);
+}
+// What the handoff modal iterates over: the real groups, or — when nothing is named yet — a single
+// preview group built from the patient currently being charted (so the preview still works).
+function handoffGroups(){
+  const g=rosterGroups(); if(g.length) return g;
+  const p=extractPatient(); return [{ fac:facLabel(p.facility), key:facKey(p.facility), patients:[p], preview:true }];
+}
+
+// Saved-state: which facility groups have been captured durably (ClinicalVault / download / print /
+// email) since the last edit. PER-FACILITY, because you might save Crestmore and still owe Beecan —
+// the amber badge + tab-close guard must keep warning until EVERY present facility is saved. Any edit
+// un-saves all of them (conservative: re-sending is cheap, losing a sheet isn't).
+function _savedSet(){ try{ return new Set(JSON.parse(sessionStorage.getItem('lavida_handoff_saved')||'[]')); }catch(e){ return new Set(); } }
+function _savedStore(s){ try{ sessionStorage.setItem('lavida_handoff_saved', JSON.stringify(Array.from(s))); }catch(e){} }
+function facSaved(key){ return _savedSet().has(key); }
+function facSavedSet(key,v){ const s=_savedSet(); if(v) s.add(key); else s.delete(key); _savedStore(s); updateRosterBadge(); }
+// Every present facility group captured? (true when there's nothing to save.)
+function rosterSavedGet(){ const groups=rosterGroups(); if(!groups.length) return true; const s=_savedSet(); return groups.every(g=>s.has(g.key)); }
+function markWorkspaceEdited(){ const s=_savedSet(); if(s.size){ _savedStore(new Set()); updateRosterBadge(); } }   // any edit un-saves every facility
 function updateRosterBadge(){
   const el=document.getElementById('rosterCount'); if(!el) return;
   const n=rosterGet().length;
@@ -747,10 +1125,13 @@ function renderPatient(p){
   b+=block('Plan / Orders',[['Dressings',p.orders.dressings],['Offloading',p.orders.offloading],['Re-evaluation',p.orders.reeval]]);
   return b;
 }
-function handoffHTML(){
-  const roster=rosterGet(); const isPreview=roster.length===0;
-  const patients = isPreview ? [extractPatient()] : roster;
-  const fac=(patients.find(p=>p.facility&&!hoBlank(p.facility))||{}).facility;
+// A single facility's handoff. Callers pass ONE facility group's patients (+ its label) so a sheet can
+// never carry more than one facility's residents. With no args it falls back to the current patient —
+// used only for the empty-workspace preview.
+function handoffHTML(patients, facArg){
+  const isPreview = !(patients && patients.length);
+  patients = isPreview ? [extractPatient()] : patients;
+  const fac = (facArg!=null && String(facArg).trim()) ? facArg : (patients.find(p=>p.facility&&!hoBlank(p.facility))||{}).facility;
   const date=(patients.find(p=>p.dateVal&&!hoBlank(p.dateVal))||{}).dateVal;
   // Each patient prints on its own page (Abby: multi-patient handoffs got cut off / mis-formatted when
   // patients flowed together). .patient-break carries the Word/print page-break; .w blocks avoid being
@@ -763,10 +1144,11 @@ function handoffHTML(){
   return '<html><head><meta charset="utf-8"><style>'+style+'</style></head><body>'+b+'</body></html>';
 }
 // Plain-text handoff — for the email body / clipboard (mailto can't carry the formatted .doc).
-function handoffText(){
-  const roster=rosterGet(); const isPreview=roster.length===0;
-  const patients = isPreview ? [extractPatient()] : roster;
-  const fac=(patients.find(p=>p.facility&&!hoBlank(p.facility))||{}).facility;
+// One facility group per call, same as handoffHTML.
+function handoffText(patients, facArg){
+  const isPreview = !(patients && patients.length);
+  patients = isPreview ? [extractPatient()] : patients;
+  const fac = (facArg!=null && String(facArg).trim()) ? facArg : (patients.find(p=>p.facility&&!hoBlank(p.facility))||{}).facility;
   const date=(patients.find(p=>p.dateVal&&!hoBlank(p.dateVal))||{}).dateVal;
   const L=[]; const add=(lbl,v,pad)=>{ if(v!=null) v=String(v).replace(/\*\*\*/g,'').replace(/[ \t]{2,}/g,' ').trim(); if(!hoBlank(v)) L.push((pad||'')+lbl+': '+v); };
   L.push('WOUND CARE HANDOFF'+(fac?' — '+fac:''));
@@ -793,31 +1175,42 @@ function handoffText(){
   L.push('— Care-coordination handoff, for facility use only. Not an official medical record, provider note, or billing document; the signed EHR note is the authoritative record. —');
   return L.join('\n');
 }
-function fileName(){ const roster=rosterGet();
-  if(roster.length){ const fac=((roster.find(p=>p.facility&&!hoBlank(p.facility))||{}).facility||'facility').replace(/[^\w\- ]/g,'').trim();
-    const d=(roster.find(p=>p.dateVal&&!hoBlank(p.dateVal))||{}).dateVal||''; return 'Wound Handoff - '+(fac||'facility')+' - '+d+'.doc'; }
-  const h=currentHeader(); return 'Wound Handoff - '+((h.patient||'patient').replace(/[^\w\- ]/g,'').trim()||'patient')+' - '+(h.date||'')+'.doc'; }
-function downloadHandoff(){
-  const blob=new Blob(['﻿'+handoffHTML()],{type:'application/msword'});
-  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=fileName();
-  document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),1000); toast('Handoff downloaded');
-  if(rosterGet().length) rosterSavedSet(true);   // the whole list is now in a downloaded file
+// Filename for ONE facility group. facArg is the group's label.
+function fileName(patients, facArg){
+  if(patients && patients.length){
+    const fac=String((facArg!=null?facArg:(patients.find(p=>p.facility&&!hoBlank(p.facility))||{}).facility)||'facility').replace(/[^\w\- ]/g,'').trim();
+    const d=(patients.find(p=>p.dateVal&&!hoBlank(p.dateVal))||{}).dateVal||'';
+    return 'Wound Handoff - '+(fac||'facility')+' - '+d+'.doc';
+  }
+  const h=currentHeader(); return 'Wound Handoff - '+((h.patient||'patient').replace(/[^\w\- ]/g,'').trim()||'patient')+' - '+(h.date||'')+'.doc';
 }
-function printHandoff(){
+// Resolve the group a per-facility button was rendered against. Indices are stable while the modal is
+// open (editing happens in the note view, not here), and re-resolving fresh keeps the data current.
+function _groupAt(gi){ const g=handoffGroups(); return g[gi]||null; }
+function downloadHandoff(gi){
+  const g=_groupAt(gi); if(!g) return;
+  const blob=new Blob(['﻿'+handoffHTML(g.patients,g.fac)],{type:'application/msword'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=fileName(g.patients,g.fac);
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),1000); toast(g.fac+' handoff downloaded');
+  if(!g.preview) facSavedSet(g.key,true), markGroupSaved(gi);
+}
+function printHandoff(gi){
+  const g=_groupAt(gi); if(!g) return;
   const f=document.createElement('iframe'); f.style.cssText='position:fixed;right:0;bottom:0;width:0;height:0;border:0';
-  document.body.appendChild(f); const d=f.contentDocument; d.open(); d.write(handoffHTML()); d.close();
+  document.body.appendChild(f); const d=f.contentDocument; d.open(); d.write(handoffHTML(g.patients,g.fac)); d.close();
   f.contentWindow.focus(); setTimeout(()=>{ f.contentWindow.print(); setTimeout(()=>f.remove(),600); },250);
-  if(rosterGet().length) rosterSavedSet(true);
+  if(!g.preview) facSavedSet(g.key,true), markGroupSaved(gi);
 }
-function emailHandoffSelected(){
-  const sel=document.getElementById('ho_contact'); const i=sel&&sel.value;
+function emailHandoffSelected(gi){
+  const g=_groupAt(gi); if(!g) return;
+  const sel=document.getElementById('ho_contact_'+gi); const i=sel&&sel.value;
   if(i===''||i==null||!FACILITY_CONTACTS[i]){ toast('Add facility contacts in the file first'); return; }
-  const c=FACILITY_CONTACTS[i], h=currentHeader(); const roster=rosterGet();
-  const fac=roster.length?((roster.find(p=>p.facility&&!hoBlank(p.facility))||{}).facility||''):h.facility;
-  const date=roster.length?((roster.find(p=>p.dateVal&&!hoBlank(p.dateVal))||{}).dateVal||''):h.date;
-  const n=roster.length||1;
+  const c=FACILITY_CONTACTS[i], h=currentHeader();
+  const fac=g.fac||'';
+  const date=(g.patients.find(p=>p.dateVal&&!hoBlank(p.dateVal))||{}).dateVal||h.date;
+  const n=g.patients.length;
   const subj='Wound care handoff — '+(fac||'')+' — '+(date||'')+' ('+n+' patient'+(n>1?'s':'')+')';
-  const full=handoffText();
+  const full=handoffText(g.patients,g.fac);
   const sig=h.provider?('\n\n'+h.provider):'';
   // Always stage the full handoff on the clipboard — reliable no matter which mail app opens.
   copyRaw(full+sig);
@@ -833,36 +1226,11 @@ function emailHandoffSelected(){
   toast(usedClipboard
     ? 'Draft opened — press Ctrl+V in the body to paste the handoff (it’s on your clipboard). Check the recipient, then send.'
     : 'Draft opened with the handoff filled in (also on your clipboard). Check the recipient, then send.');
-  if(rosterGet().length) rosterSavedSet(true);
+  if(!g.preview) facSavedSet(g.key,true), markGroupSaved(gi);
 }
-function refreshHandoffPreview(){ const f=document.getElementById('ho_preview'); if(f) f.srcdoc=handoffHTML(); }
-/* ---- Facility guard -------------------------------------------------------------------------
-   Facility is round-level and rosterGet() deliberately overlays it onto EVERY patient, so editing
-   it after patients are in the workspace silently re-labels all of them: Facility A's resident
-   prints under Facility B's header and gets handed to B's nurse. That's a disclosure to the wrong
-   facility, not a cosmetic mislabel — so the re-label has to be a deliberate act, not a side effect
-   of typing.
-   Unlike the Round Card (which offers to clear the card), this must NEVER clear the workspace —
-   it holds the actual notes. Correcting a typo'd facility is legitimate and common; the guard just
-   makes sure it's intended, and Cancel puts the old value back.
-   `onchange` (not `oninput`) so it fires once on commit, not on every keystroke. */
-function wireFacilityGuard(){
-  const fe=document.getElementById('ho_facility'); if(!fe) return;
-  fe.onfocus=()=>{ fe.dataset.prev = ((WS.round&&WS.round.facility)||'').trim(); };
-  fe.onchange=()=>{
-    const prev=(fe.dataset.prev||'').trim(), next=(fe.value||'').trim();
-    if(prev===next || !prev){ fe.dataset.prev=next; return; }
-    const n=rosterGet().length;
-    if(!n){ fe.dataset.prev=next; return; }          // nobody to mis-label yet
-    const ok=confirm('This re-labels all '+n+' patient'+(n===1?'':'s')+' in today’s handoff from "'
-      + prev + '" to "' + (next||'(blank)') + '".\n\n'
-      + 'A handoff must only ever carry one facility’s residents. If these patients are really from '
-      + prev + ', send their handoff first.\n\n'
-      + 'OK = re-label them\nCancel = keep ' + prev);
-    if(!ok){ fe.value=prev; saveHandoff(); refreshHandoffPreview(); }
-    fe.dataset.prev=(fe.value||'').trim();
-  };
-}
+// Refresh every facility group's live preview iframe.
+function refreshHandoffPreview(){ if(!document.getElementById('handoffGroups')) return;   // no-op when the modal is closed
+  handoffGroups().forEach((g,gi)=>{ const f=document.getElementById('ho_preview_'+gi); if(f) f.srcdoc=handoffHTML(g.patients,g.fac); }); }
 
 /* ===== Save to ClinicalVault — Microsoft Graph upload (folds in the old Handoff Builder) =====
    Egress is Microsoft-ONLY: login.microsoftonline.com (sign-in) + graph.microsoft.com (upload to
@@ -930,49 +1298,51 @@ async function _vaultUpload(token,driveId,segs,filename,blob){
   if(!r.ok) throw new Error('Upload failed (HTTP '+r.status+').');
   return await r.json();
 }
-function _vaultStatus(t){ const b=document.getElementById('saveVaultBtn'); if(b) b.textContent=t; }
-function _vaultResult(ok,msg,url){
-  const el=document.getElementById('vaultResult'); if(!el) return;
+function _vaultStatus(t,gi){ const b=document.getElementById('saveVaultBtn_'+gi); if(b) b.textContent=t; }
+function _vaultResult(ok,msg,url,gi){
+  const el=document.getElementById('vaultResult_'+gi); if(!el) return;
   el.className='vault-result '+(ok?'vault-ok':'vault-err');
   el.innerHTML=(ok?'✓ ':'⚠ ')+esc(msg)+(ok&&url?(' · <a href="'+esc(url)+'" target="_blank" rel="noopener">open in SharePoint</a>'):'');
   el.style.display='';
 }
-// Folder path = Daily Handoffs / <facility> / <YYYY-MM-DD>, from the roster (or the current header).
-function _vaultFacDate(){
-  const roster=rosterGet(), h=currentHeader();
-  let fac = roster.length ? ((roster.find(p=>p.facility&&!hoBlank(p.facility))||{}).facility||'') : h.facility;
-  let date = roster.length ? ((roster.find(p=>p.dateVal&&!hoBlank(p.dateVal))||{}).dateVal||'') : h.date;
+// Folder path = Daily Handoffs / <facility> / <YYYY-MM-DD> for ONE facility group. Each facility lands
+// in its own folder, so a group can never be filed under another facility's name.
+function _vaultFacDate(g){
+  const patients=(g&&g.patients)||[];
+  let fac = (g&&g.fac) || (patients.find(p=>p.facility&&!hoBlank(p.facility))||{}).facility || '';
+  let date = (patients.find(p=>p.dateVal&&!hoBlank(p.dateVal))||{}).dateVal || (currentHeader().date||'');
   fac = String(fac||'').replace(/[\\/:*?"<>|#%]/g,'').replace(/\s+/g,' ').trim();
   if(/^\.+$/.test(fac)) fac='';          // neutralize a pure-dots segment (., .., …) — no traversal
   fac = fac || 'Unfiled';
   date = /^\d{4}-\d{2}-\d{2}/.test(String(date||'')) ? date.slice(0,10) : 'undated';
   return { segs:['Daily Handoffs', fac, date] };
 }
-async function saveToVault(){
+async function saveToVault(gi){
+  const g=_groupAt(gi); if(!g) return;
   // require something to save so we don't create empty Unfiled/undated uploads
-  if(!rosterGet().length && hoBlank(currentHeader().patient)){ toast('Enter the patient name (or add to today’s handoff) first'); return; }
-  const btn=document.getElementById('saveVaultBtn'); if(btn) btn.disabled=true;
-  const rel=document.getElementById('vaultResult'); if(rel) rel.style.display='none';
+  if(g.preview && hoBlank(currentHeader().patient)){ toast('Enter the patient name first'); return; }
+  const btn=document.getElementById('saveVaultBtn_'+gi); if(btn) btn.disabled=true;
+  const rel=document.getElementById('vaultResult_'+gi); if(rel) rel.style.display='none';
   try{
-    _vaultStatus('Signing in…');
+    _vaultStatus('Signing in…',gi);
     const token=await _vaultToken();
-    const { segs }=_vaultFacDate();
-    _vaultStatus('Preparing folder…');
+    const { segs }=_vaultFacDate(g);
+    _vaultStatus('Preparing folder…',gi);
     const siteId=await _vaultSiteId(token);
     const driveId=await _vaultDriveId(token,siteId);
     await _vaultEnsureFolders(token,driveId,segs);
-    _vaultStatus('Uploading…');
-    const blob=new Blob(['﻿'+handoffHTML()],{type:'application/msword'});
-    const item=await _vaultUpload(token,driveId,segs,fileName(),blob);
-    _vaultStatus('✓ Saved');
-    _vaultResult(true,'Saved to '+segs.join(' / ')+' — '+fileName(),(item&&item.webUrl)||'');
-    if(rosterGet().length) rosterSavedSet(true);   // the whole list is now durably in ClinicalVault
+    _vaultStatus('Uploading…',gi);
+    const blob=new Blob(['﻿'+handoffHTML(g.patients,g.fac)],{type:'application/msword'});
+    const item=await _vaultUpload(token,driveId,segs,fileName(g.patients,g.fac),blob);
+    _vaultStatus('✓ Saved',gi);
+    _vaultResult(true,'Saved to '+segs.join(' / ')+' — '+fileName(g.patients,g.fac),(item&&item.webUrl)||'',gi);
+    if(!g.preview){ facSavedSet(g.key,true); markGroupSaved(gi); }
   }catch(e){
-    _vaultStatus('Save failed');
-    _vaultResult(false,(e&&e.message)||String(e),'');
+    _vaultStatus('Save failed',gi);
+    _vaultResult(false,(e&&e.message)||String(e),'',gi);
   }finally{
     if(btn) btn.disabled=false;
-    setTimeout(()=>_vaultStatus('☁ Save to ClinicalVault'),4000);
+    setTimeout(()=>_vaultStatus('☁ Save to ClinicalVault',gi),4000);
   }
 }
 
@@ -1057,6 +1427,7 @@ function applyDraft(obj){
   if(!ws.round) ws.round={};
   Object.keys(ws.patients).forEach(pid=>{ const p=ws.patients[pid]||{}; if(!p.store) p.store=newStore();
     if(!p.store.new) p.store.new={}; if(!p.store.fu) p.store.fu={}; ws.patients[pid]=p; });
+  migrateFacility(ws);   // a draft saved before per-patient facility carried facility only on round
   if(!ws.patients[ws.activePid]) ws.activePid=Object.keys(ws.patients)[0];
   WS=ws; activePid=WS.activePid; saveWS(); activateForm(); renderPatientBar();
   return true;
@@ -1111,51 +1482,83 @@ async function resumeDraft(name){
 function openResume(){ if(!DRAFTS_ENABLED()){ toast('Sign in to see saved work'); return; } _draftStatus('☁ checking…','busy'); listDrafts().then(showResumeBanner).catch(()=>{}); }
 
 function closeHandoff(){ document.getElementById('handoffModal').style.display='none';
-  document.getElementById('handoffCard').innerHTML=''; }   // clear the ho_ fields so they can't be misread once the modal is closed
-function openHandoff(){
-  const card=document.getElementById('handoffCard'); const rnd=WS.round||{}; const ap=activePt()||{}; const roster=rosterGet();
-  const claims=JSON.parse(sessionStorage.getItem('id_claims')||'{}'); const today=todayISO();
-  const contactOpts=FACILITY_CONTACTS.length
+  document.getElementById('handoffCard').innerHTML='';   // clear the ho_ fields so they can't be misread once the modal is closed
+  renderPatientBar(); updateRosterBadge(); }             // reflect any facility/name edits made in the modal
+// Contact <select> options (shared by every facility group's email control).
+function _contactOpts(){ return FACILITY_CONTACTS.length
     ? '<option value="">— choose facility contact —</option>'+FACILITY_CONTACTS.map((c,i)=>'<option value="'+i+'">'+esc(c.name)+'</option>').join('')
-    : '<option value="">— no facility contacts configured —</option>';
+    : '<option value="">— no facility contacts configured —</option>'; }
+// One send-card per facility group. A card only ever contains its own facility's patients and its own
+// contact picker, so a sheet can't be sent to the wrong facility. Rebuilt on open, on facility edits,
+// and after a save (to refresh the ✓ Saved chip).
+function renderHandoffGroups(){
+  const host=document.getElementById('handoffGroups'); if(!host) return;
+  const groups=handoffGroups(); const opts=_contactOpts();
+  const multi=groups.length>1 && !groups[0].preview;
+  let h='';
+  if(multi) h+='<div class="ho-note" style="margin:2px 0 4px"><b style="color:var(--accent)">'+groups.length+' facilities in today’s round.</b> Each gets its OWN sheet, folder and email below — a facility never receives another facility’s residents.</div>';
+  groups.forEach((g,gi)=>{
+    const n=g.patients.length; const saved=!g.preview && facSaved(g.key);
+    const savedChip = g.preview ? '' : '<span id="grpSaved_'+gi+'" class="ho-gsaved '+(saved?'is-saved':'')+'">'+(saved?'✓ Saved to ClinicalVault':'Not saved yet')+'</span>';
+    const chips=g.patients.map((p,i)=>'<span class="ho-rchip">'+(i+1)+'. '+esc(p.patient||'—')+'</span>').join('');
+    h+='<div class="ho-group">'+
+       '<div class="ho-ghead"><span class="ho-gname">'+esc(g.fac)+'</span>'+
+         '<span class="ho-gcount">'+n+' patient'+(n===1?'':'s')+'</span>'+savedChip+'</div>'+
+       (g.preview
+         ? '<div class="ho-note">Give each patient a name in the bar above the note and they’ll appear here, grouped by facility.</div>'
+         : '<div class="ho-rlist">'+chips+'</div>')+
+       '<div class="ho-actions">'+
+         '<button class="primary" onclick="downloadHandoff('+gi+')">Download (.doc)</button>'+
+         '<button class="ghost" onclick="printHandoff('+gi+')">Print / Save PDF</button>'+
+         (g.preview?'':'<button class="primary" id="saveVaultBtn_'+gi+'" onclick="saveToVault('+gi+')">☁ Save to ClinicalVault</button>'+
+           '<span id="vaultResult_'+gi+'" class="vault-result" style="display:none"></span>')+
+       '</div>'+
+       (g.preview?'':'<div class="ho-send"><label style="margin:0">Email to '+esc(g.fac)+'</label>'+
+         '<select id="ho_contact_'+gi+'" style="max-width:260px">'+opts+'</select>'+
+         '<button class="ghost" onclick="emailHandoffSelected('+gi+')">Open email draft</button></div>')+
+       '<iframe class="ho-preview" id="ho_preview_'+gi+'"></iframe>'+
+     '</div>';
+  });
+  host.innerHTML=h;
+  refreshHandoffPreview();
+}
+// After a save, flip just this group's chip without a full re-render (so the vault result link survives).
+function markGroupSaved(gi){ const el=document.getElementById('grpSaved_'+gi); if(el){ el.textContent='✓ Saved to ClinicalVault'; el.classList.add('is-saved'); } }
+function openHandoff(){
+  const card=document.getElementById('handoffCard'); const rnd=WS.round||{}; const ap=activePt()||{};
+  const claims=JSON.parse(sessionStorage.getItem('id_claims')||'{}'); const today=todayISO();
   card.innerHTML=
    '<div class="ho-head"><b>Facility Handoff</b><button class="ho-x" onclick="closeHandoff()">✕</button></div>'+
    '<div class="ho-body">'+
      '<div class="ho-grid">'+
        '<div><label>Patient (name or ID) <span style="color:var(--muted);font-weight:400">— this patient</span></label><input id="ho_patient" value="'+esc(getPatient())+'"></div>'+
-       '<div><label>Facility <span style="color:var(--accent);font-weight:400">— whole round</span></label><input id="ho_facility" value="'+esc(rnd.facility||'')+'"></div>'+
+       '<div><label>Facility <span style="color:var(--accent);font-weight:400">— this patient</span></label><input id="ho_facility" value="'+esc(ap.facility||'')+'"></div>'+
        '<div><label>Date of service <span style="color:var(--accent);font-weight:400">— whole round</span></label><input id="ho_date" type="date" value="'+esc(rnd.date||today)+'"></div>'+
        '<div><label>Provider <span style="color:var(--accent);font-weight:400">— whole round</span></label><input id="ho_provider" value="'+esc(rnd.provider||claims.name||'')+'"></div>'+
        '<div><label>Dx / ICD-10 <span style="color:var(--muted);font-weight:400">— this patient, copy from EMR</span></label><input id="ho_dx" placeholder="copy from EMR (e.g. L89.153, E11.621)" value="'+esc(ap.dx||'')+'"></div>'+
      '</div>'+
-     '<div class="ho-note"><b style="color:var(--accent)">Facility · Date · Provider apply to every patient in today’s handoff</b> (enter once). Patient name &amp; Dx are per-patient. Wound findings, procedure &amp; orders pull automatically from each note.</div>'+
-     '<div class="ho-roster"><span class="ho-note" style="flex:1 1 auto"><b>Today’s handoff: '+roster.length+' patient'+(roster.length===1?'':'s')+'</b> — every named patient in your bar is included automatically. '+
-         (roster.length
-           ? (rosterSavedGet() ? '<b style="color:var(--good)">✓ Saved to ClinicalVault.</b>' : '<b style="color:var(--warn)">Not saved yet.</b>')
-             + ' The buttons below produce the whole list. <b>Closing this window keeps everything</b> — the workspace clears only when you close the browser tab, so Save to ClinicalVault to keep it.'
-           : 'Give each patient a name in the bar above the note and they’ll appear here. Remove a patient from the bar’s ✕.')+'</span></div>'+
-     (roster.length ? '<div class="ho-rlist">'+roster.map((p,i)=>'<span class="ho-rchip">'+(i+1)+'. '+esc(p.patient||'—')+((p.facility&&!hoBlank(p.facility))?' · '+esc(p.facility):'')+'</span>').join('')+'</div>' : '')+
-     '<div class="ho-actions"><button class="primary" onclick="downloadHandoff()">Download (.doc)</button>'+
-       '<button class="ghost" onclick="printHandoff()">Print / Save PDF</button>'+
-       '<span class="ho-note">Download/Print leave a copy of this PHI <b>on this computer</b> — on a shared or unencrypted device, prefer <b>☁ Save to ClinicalVault</b> below, which stores nothing locally.</span></div>'+
-     '<div class="ho-vault"><button class="primary" id="saveVaultBtn" onclick="saveToVault()">☁ Save to ClinicalVault</button>'+
-       '<span id="vaultResult" class="vault-result" style="display:none"></span>'+
-       '<span class="ho-note">Signs in to your LaVida Microsoft account and uploads this handoff to <b>SharePoint → ClinicalVault → Daily Handoffs / facility / date</b>. Microsoft-only (login.microsoftonline.com + graph.microsoft.com) — the file goes straight into your own tenant, no third parties.</span></div>'+
-     '<div class="ho-send"><label style="margin:0">Email to facility</label>'+
-       '<select id="ho_contact" style="max-width:260px">'+contactOpts+'</select>'+
-       '<button class="ghost" onclick="emailHandoffSelected()">Open email draft</button>'+
-       '<span class="ho-note">Opens a draft in your default mail app with the handoff filled in — and copies it to your clipboard as a backup (paste with <b>Ctrl+V</b> if the draft looks empty). Recipient is limited to the approved contact above; <b>check it and hit send yourself</b>. Prefer a formatted file? Use Download / Print instead.</span></div>'+
-     '<iframe class="ho-preview" id="ho_preview"></iframe>'+
+     '<div class="ho-note"><b style="color:var(--accent)">Facility &amp; Dx belong to THIS patient; Date &amp; Provider apply to the whole round.</b> Changing this patient’s facility moves only them. Wound findings, procedure &amp; orders pull automatically from each note. <b>Closing this window keeps everything</b> — the workspace clears only when you close the browser tab, so save each facility below to keep it.</div>'+
+     '<div class="ho-note" style="margin-top:-2px">Download / Print leave a copy of this PHI <b>on this computer</b> — on a shared or unencrypted device prefer <b>☁ Save to ClinicalVault</b>, which stores nothing locally. Email opens a draft in your mail app (also copied to your clipboard — paste with <b>Ctrl+V</b> if it looks empty); the recipient is limited to the approved contact — <b>check it and send yourself</b>.</div>'+
+     '<div id="handoffGroups"></div>'+
    '</div>';
-  ['patient','facility','date','provider','dx'].forEach(k=>{ document.getElementById('ho_'+k).oninput=()=>{ if(k==='patient'){ setPatient(document.getElementById('ho_patient').value); syncPatientField(); updateRosterBadge(); } saveHandoff(); refreshHandoffPreview(); }; });
-  wireFacilityGuard();
-  document.getElementById('handoffModal').style.display='flex'; refreshHandoffPreview();
+  // date + provider are round-level; patient name + Dx are per-patient — all fine to save on each keystroke.
+  ['patient','date','provider','dx'].forEach(k=>{ document.getElementById('ho_'+k).oninput=()=>{ if(k==='patient'){ setPatient(document.getElementById('ho_patient').value); syncPatientField(); updateRosterBadge(); } saveHandoff(); renderHandoffGroups(); }; });
+  // Facility is per-patient: on CHANGE (not each keystroke) re-stamp the active patient, keep it as the
+  // sticky default, and regroup. No scary "re-label everyone" prompt — it only ever moves this patient.
+  const fe=document.getElementById('ho_facility');
+  if(fe) fe.onchange=()=>{ const p=activePt(); const nf=(fe.value||'').trim(); if(p && nf===String(p.facility||'').trim()) return;   // no real change
+    if(p) p.facility=nf; WS.round=WS.round||{}; WS.round.facility=nf; saveWS();
+    markWorkspaceEdited();   // moving a patient between facilities changes which sheets exist -> re-arm "unsaved"
+    if(MODE==='fu'){ _whPrior=null; if(typeof whApplyPrior==='function') whApplyPrior(); }
+    renderHandoffGroups(); };
+  document.getElementById('handoffModal').style.display='flex'; renderHandoffGroups();
 }
 
 /* ============ PARSER: build inline fillable controls, keep exact text ============ */
 let sectionResolvers = [];   // one resolve() per section
 let copiedState = {};        // section name -> the exact text that was copied (drives the ✓ Copied badge; reset per patient/mode)
 let woundRegistry = [];      // per-wound {resolve, keyPrefix} for the current mode (handoff reads these)
+let woundSectionName = null; // name of the section that owns the wound cards — copying IT commits history
 let dressingsSync = null;    // re-renders the per-wound dressings rows when wounds change
 function isFillOpt(o){ o=String(o).trim(); return /\*\*\*/.test(o) || /^other\b/i.test(o); }  // "***", "other: ***", or "other"
 // Exam fields documented per-leg (Right/Left) — extremities + vascular. See renderBilateral.
@@ -1190,7 +1593,7 @@ function tokenize(text){
 // ahead once it's evening in the US, and a service date must be the provider's local day.
 function todayISO(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
 function renderLines(text, container, keyPrefix){
-  let seq=0, saField=null, Lfield=null, Wfield=null, Dfield=null, measFlags=null, priorInput=null, underFrom=null, underTo=null, tunFrom=null, tunTo=null;
+  let seq=0, saField=null, volField=null, Lfield=null, Wfield=null, Dfield=null, measFlags=null, priorInput=null, underFrom=null, underTo=null, tunFrom=null, tunTo=null;
   const nextKey=()=> keyPrefix+':'+(seq++);
   const fp=v=>{ const n=parseFloat(v); return (Number.isFinite(n)&&n>0)?n:NaN; };  // finite positive number, else NaN
   function recalcSA(){
@@ -1198,16 +1601,26 @@ function renderLines(text, container, keyPrefix){
       const L=fp(Lfield.value), W=fp(Wfield.value);
       saField.value=(L>0&&W>0)?(L*W).toFixed(1):'';
     }
+    // Volume = L × W × D. Abby wants BOTH numbers in the note: surface area alone can't show a wound
+    // that's deepening, and volume alone can't show one that's spreading. "It's good to have both."
+    if(volField && Lfield && Wfield && Dfield){
+      const L=fp(Lfield.value), W=fp(Wfield.value), D=fp(Dfield.value);
+      volField.value=(L>0&&W>0&&D>0)?(L*W*D).toFixed(1):'';
+    }
     if(measFlags) updateFlags();
   }
   function updateFlags(){
     const L=fp(Lfield&&Lfield.value), W=fp(Wfield&&Wfield.value), D=fp(Dfield&&Dfield.value);
     const sa=(L>0&&W>0)?L*W:NaN, warns=[];
-    measFlags._calc.textContent = (L>0&&W>0&&D>0) ? 'Volume ≈ '+(L*W*D).toFixed(1)+' cm³'
-      : (L>0&&W>0) ? 'Surface area '+sa.toFixed(1)+' cm²' : 'Enter L × W for auto surface area.';
+    // Show surface area AND volume together — the old ternary showed volume INSTEAD of surface area
+    // once a depth was entered, which is why Abby couldn't find the surface area on screen.
+    measFlags._calc.textContent = (L>0&&W>0&&D>0) ? 'Surface area '+sa.toFixed(1)+' cm²  ·  Volume '+(L*W*D).toFixed(1)+' cm³'
+      : (L>0&&W>0) ? 'Surface area '+sa.toFixed(1)+' cm²  ·  add D for volume' : 'Enter L × W for auto surface area.';
     if(L>30||W>30) warns.push('L/W over 30 cm is unusual — check for a missed decimal or mm↔cm.');
     if(D>10) warns.push('Depth over 10 cm is unusual — verify.');
-    if(D>0&&L>0&&W>0&&D>L&&D>W) warns.push('Depth exceeds length and width — verify.');
+    // Deliberately worded as a sanity-check, not an error: this fired on a real 1×1×3 tunneling wound
+    // and made Abby doubt a correct measurement. A deep narrow wound is unusual but entirely valid.
+    if(D>0&&L>0&&W>0&&D>L&&D>W) warns.push('Deeper than it is wide — unusual but valid for a tunneling wound. Just confirming it\'s not an L/W/D mix-up.');
     const prior=fp(priorInput&&priorInput.value); const tr=measFlags._trend; tr.className='mf-trend';
     if(prior>0&&sa>0){
       const pct=((sa-prior)/prior)*100, dir=pct<=-5?'improving':pct>=5?'worsening':'stable';
@@ -1311,8 +1724,10 @@ function renderLines(text, container, keyPrefix){
         return d;
       }
       const isSA=/surface area\s*\(auto\)\s*:?\s*$/i.test(lastLit)||/Total Surface Area debrided[^\n]*$/i.test(lastLit);
+      const isVol=/volume\s*\(auto\)\s*:?\s*$/i.test(lastLit);
       const inp=document.createElement('input'); inp.type='text';
       if(isSA){ inp.className='sa'; inp.readOnly=true; inp.placeholder='auto'; saField=inp; sink.push(()=> inp.value|| (tk.raw||'***')); return inp; }
+      if(isVol){ inp.className='sa'; inp.readOnly=true; inp.placeholder='auto'; volField=inp; sink.push(()=> inp.value|| (tk.raw||'***')); return inp; }
       if(/Estimated Blood Loss[^\n]*:\s*$/i.test(lastLit)){   // free text + over-50 flag
         const k=nextKey(); inp.className='txt'; inp.style.width='70px'; inp.placeholder='mL';
         if(STATE[k]!=null) inp.value=STATE[k];
@@ -1338,29 +1753,45 @@ function renderLines(text, container, keyPrefix){
   function makeDressings(tk, sink){
     const OPTS = tk.opts.filter(o=>!/\*\*\*/.test(o)).map(o=>o.replace(/^drop down\s+/i,'').trim());
     const wrap=document.createElement('div'); wrap.style.cssText='display:flex;flex-direction:column;gap:8px;width:100%';
-    const wk=i=>keyPrefix+':dress:'+i;
-    const read=i=>{ const v=STATE[wk(i)]; return (v&&typeof v==='object')?{sel:v.sel||[],other:v.other||''}:{sel:[],other:''}; };
-    const write=(i,v)=>{ STATE[wk(i)]=v; persist(); };
+    /* Dressings were keyed by the wound's POSITION (:dress:0, :dress:1…) while the wound's own answers
+       are keyed by its id. Removing a wound slid every later wound's dressings up one slot — wound 2
+       silently inherited wound 1's orders. Now keyed by the permanent wid, so a dressing follows its
+       wound. Old positional keys are migrated ONCE per patient+mode, while the saved order still
+       matches; the flag lives on the PATIENT, never in STORE (a flag in STORE would make a fresh store
+       read as "has content" to _wsHasContent and silently kill draft auto-restore). */
+    const wlist=()=> woundRegistry.length ? woundRegistry : [{id:'_'}];
+    const wk=w=>keyPrefix+':dress:w'+w.id;
+    const read=w=>{ const v=STATE[wk(w)]; return (v&&typeof v==='object')?{sel:v.sel||[],other:v.other||''}:{sel:[],other:''}; };
+    const write=(w,v)=>{ STATE[wk(w)]=v; persist(); };
+    function migrateDressKeys(){
+      try{ const R=wreg(); if(!R.dressMig) R.dressMig={};
+        const tag=MODE+':'+keyPrefix; if(R.dressMig[tag]) return;
+        wlist().forEach((w,i)=>{ const nk=wk(w), ok=keyPrefix+':dress:'+i;
+          if(STATE[nk]===undefined && STATE[ok]!==undefined) STATE[nk]=STATE[ok]; });   // old keys left in place: rollback-safe
+        R.dressMig[tag]=1; persist();
+      }catch(e){}
+    }
     function build(){
-      wrap.innerHTML=''; const n=Math.max(1, woundRegistry.length);
-      for(let i=0;i<n;i++){ const st=read(i);
+      migrateDressKeys();
+      wrap.innerHTML=''; const ws=wlist(), n=ws.length;
+      ws.forEach(w=>{ const st=read(w);
         const row=document.createElement('div'); row.style.cssText='display:flex;flex-wrap:wrap;gap:6px;align-items:center';
-        if(n>1){ const lbl=document.createElement('span'); lbl.textContent='Wound '+(i+1)+':'; lbl.style.cssText='font-size:11.5px;color:var(--muted);min-width:62px'; row.appendChild(lbl); }
+        if(n>1){ const lbl=document.createElement('span'); lbl.textContent='Wound '+woundNum(w.id)+':'; lbl.style.cssText='font-size:11.5px;color:var(--muted);min-width:62px'; row.appendChild(lbl); }
         OPTS.forEach(o=>{ const lbl=document.createElement('label'); lbl.style.cssText='display:inline-flex;align-items:center;gap:5px;font-size:13px;color:var(--ink)';
           const cb=document.createElement('input'); cb.type='checkbox'; cb.style.width='auto'; cb.checked=st.sel.includes(o);
-          cb.onchange=()=>{ const s=read(i); const x=s.sel.indexOf(o); if(cb.checked){ if(x<0)s.sel.push(o);} else if(x>=0)s.sel.splice(x,1); write(i,s); resolveAll(); };
+          cb.onchange=()=>{ const s=read(w); const x=s.sel.indexOf(o); if(cb.checked){ if(x<0)s.sel.push(o);} else if(x>=0)s.sel.splice(x,1); write(w,s); resolveAll(); };
           lbl.appendChild(cb); lbl.appendChild(document.createTextNode(' '+o)); row.appendChild(lbl); });
         const other=document.createElement('input'); other.className='txt'; other.placeholder='other…'; other.style.width='120px'; other.value=st.other;
-        other.oninput=()=>{ const s=read(i); s.other=other.value; write(i,s); resolveAll(); };
+        other.oninput=()=>{ const s=read(w); s.other=other.value; write(w,s); resolveAll(); };
         row.appendChild(other); wrap.appendChild(row);
-      }
+      });
     }
     build(); dressingsSync=build;
-    sink.push(()=>{ const n=Math.max(1, woundRegistry.length); const parts=[];
-      for(let i=0;i<n;i++){ const s=read(i); const list=[...s.sel]; if(s.other) list.push(s.other); parts.push(list.join(', ')); }
+    sink.push(()=>{ const ws=wlist(), n=ws.length; const parts=[];
+      ws.forEach(w=>{ const s=read(w); const list=[...s.sel]; if(s.other) list.push(s.other); parts.push(list.join(', ')); });
       if(!parts.some(p=>p)) return tk.raw;
       if(n===1) return parts[0];
-      return parts.map((p,i)=>'\nWound '+(i+1)+': '+(p||'—')).join('');
+      return parts.map((p,i)=>'\nWound '+woundNum(ws[i].id)+': '+(p||'—')).join('');
     });
     return wrap;
   }
@@ -1574,7 +2005,13 @@ function renderLines(text, container, keyPrefix){
       const cm=document.createElement('span'); cm.className='mf-cm'; cm.textContent='cm²';
       const pk=keyPrefix+':priorSA'; if(STATE[pk]!=null) priorInput.value=STATE[pk];
       priorInput.oninput=()=>{STATE[pk]=priorInput.value; persist(); updateFlags();};
-      calcLine.appendChild(calc); calcLine.appendChild(pl2); calcLine.appendChild(priorInput); calcLine.appendChild(cm); calcLine.appendChild(trend);
+      calcLine.appendChild(calc);
+      // Prior SA is meaningless on an INITIAL note — there is no previous visit to compare against
+      // (Abby, 7/16: "we shouldn't have prior surface area on the initial note though, right?").
+      // On a follow-up, carry-forward auto-fills it from the last committed visit; it stays editable
+      // so a first tracked visit can still be keyed in by hand.
+      if(MODE!=='new'){ calcLine.appendChild(pl2); calcLine.appendChild(priorInput); calcLine.appendChild(cm); }
+      calcLine.appendChild(trend);
       const warn=document.createElement('div'); warn.className='mf-warn';
       measFlags.appendChild(calcLine); measFlags.appendChild(warn);
       measFlags._calc=calc; measFlags._trend=trend; measFlags._warn=warn;
@@ -1677,7 +2114,7 @@ function dropDeadSentences(t){
 }
 // Sections a provider may skip entirely (e.g. no procedure performed). X-ing one greys the whole
 // section and drops it from the composed note AND the handoff (its resolver returns '').
-const REMOVABLE_SECTIONS = new Set(['Procedures','Medical Decision-Making Summary']);
+const REMOVABLE_SECTIONS = new Set(['Procedures']);   // MDM section deleted entirely (Abby, 7/16) — PCC's dot-phrase owns it now
 function sectionRemoved(name){ return STATE['__secoff:'+name]===true; }
 function setupSectionToggle(wrap,h,name){
   const btn=document.createElement('button'); btn.className='sec-toggle'; btn.type='button';
@@ -1706,14 +2143,17 @@ function buildSection(name,idx,text){
     const woundsWrap=document.createElement('div'); body.appendChild(woundsWrap);
     const addBtn=document.createElement('button'); addBtn.className='add-wound'; addBtn.textContent='+ Add another wound'; body.appendChild(addBtn);
 
-    const wounds=[]; let woundSeq=0; woundRegistry=wounds;
-    function renumber(){
-      wounds.forEach((w,i)=> w.title.textContent='Wound '+(i+1));
+    const wounds=[]; woundRegistry=wounds; woundSectionName=name;
+    // Paints the wound headers. NOT a renumber — the number comes from the patient's permanent
+    // registry, so removing a wound leaves the others' numbers untouched (that is the whole point).
+    function paintWoundHeads(){
+      wounds.forEach(w=> w.title.textContent='Wound '+woundNum(w.id));
       woundsWrap.querySelectorAll('.wound-rm').forEach(b=> b.style.display = wounds.length>1?'inline-block':'none');
     }
     function saveWounds(){ STATE['__wc_'+idx]=wounds.map(w=>w.id); persist(); }
     function addWound(wid){
-      const id=(wid!=null)?wid:woundSeq; woundSeq=Math.max(woundSeq,id+1);
+      const id=(wid!=null)?wid:mintWid();
+      woundNum(id);   // assign the permanent number now, so it exists before anything paints or resolves
       const card=document.createElement('div'); card.className='wound-card';
       const head=document.createElement('div'); head.className='wound-head';
       const title=document.createElement('span'); title.className='wound-title'; title.textContent='Wound';
@@ -1721,19 +2161,48 @@ function buildSection(name,idx,text){
       head.appendChild(title); head.appendChild(rm);
       const inner=document.createElement('div'); inner.className='wound-body';
       card.appendChild(head); card.appendChild(inner);
+      // PRIOR BLOCK (carry-forward). Injected into the card's DOM and deliberately NOT passed through
+      // renderLines / never pushed into a resolver sink — so last visit's numbers are structurally
+      // incapable of reaching resolve(), resolveRaw(), the clipboard, or the handoff. Scott: prior data
+      // is reference for the provider, it does not print. This is a structural guarantee, not a filter.
+      const prior=document.createElement('div'); prior.className='prior-block'; prior.style.display='none';
+      prior.setAttribute('data-noprint','1');
+      inner.appendChild(prior);
       const block=renderLines(woundTmpl, inner, idx+':w'+id);
-      const w={id, resolve:block.resolve, title, keyPrefix:idx+':w'+id, underFrom:block.underFrom, underTo:block.underTo, tunFrom:block.tunFrom, tunTo:block.tunTo};
-      rm.onclick=()=>{ if(wounds.length<=1) return; const i=wounds.indexOf(w); if(i>=0){ wounds.splice(i,1); card.remove(); saveWounds(); renumber(); if(dressingsSync) dressingsSync(); resolveAll(); } };
-      wounds.push(w); woundsWrap.appendChild(card); renumber(); if(dressingsSync) dressingsSync();
+      const w={id, resolve:block.resolve, title, keyPrefix:idx+':w'+id, priorEl:prior, underFrom:block.underFrom, underTo:block.underTo, tunFrom:block.tunFrom, tunTo:block.tunTo};
+      rm.onclick=()=>{ if(wounds.length<=1) return; const i=wounds.indexOf(w); if(i>=0){ wounds.splice(i,1); card.remove(); saveWounds(); paintWoundHeads(); if(dressingsSync) dressingsSync(); resolveAll(); } };
+      wounds.push(w); woundsWrap.appendChild(card); paintWoundHeads(); if(dressingsSync) dressingsSync();
     }
     addBtn.onclick=()=>{ addWound(); saveWounds(); resolveAll(); };
 
     const saved=STATE['__wc_'+idx];
-    if(Array.isArray(saved) && saved.length) saved.forEach(id=>addWound(id)); else addWound();
+    // The implicit first wound MUST be persisted. wids now come from a per-patient counter that never
+    // reuses a number, so a re-render with an unsaved list would mint a BRAND NEW wid every time and
+    // burn a wound number on each render (observed: a plain reload produced "Wound 2"). Saving makes
+    // the first render idempotent — every later render reads the same wid back.
+    if(Array.isArray(saved) && saved.length) saved.forEach(id=>addWound(id));
+    else if(MODE==='fu' && typeof whPriorReady==='function' && !whPriorReady()){
+      // FOLLOW-UP, nothing saved, history still loading. Do NOT mint a placeholder wound here: it
+      // would persist a brand-new wid, and the informed re-render would then treat that as "already
+      // saved" and never seed from the prior visit — the follow-up would silently open with one new
+      // wound instead of last week's. whApplyPrior() re-enters setMode once the prior is cached.
+    }
+    else {
+      // A fresh FOLLOW-UP opens with the same wounds (same wids -> same permanent numbers) that the
+      // previous committed visit left open. Healed wounds are not carried forward.
+      const seed=(MODE==='fu' && typeof whSeedIds==='function') ? whSeedIds() : null;
+      if(seed && seed.length){ seed.forEach(id=>{ const n=parseInt(id,10); addWound(isNaN(n)?id:n); }); }
+      else addWound();
+      saveWounds();
+    }
+    if(typeof whPaintPrior==='function') whPaintPrior();
 
     const rawOf=()=>{
       const wt=wounds.map(w=>w.resolve());
-      const tail = wt.length<=1 ? ' '+(wt[0]||'') : '\n\n'+wt.map((t,i)=>'Wound '+(i+1)+':\n'+t).join('\n\n');
+      // Wound numbers come from the patient's permanent registry — NEVER the array index. This is the
+      // text that lands in the chart, so a positional number here would mislabel findings after any
+      // wound is removed, and would break next week's carry-forward match.
+      const tail = wt.length<=1 ? ' '+(wt[0]||'') : '\n\n'+wt.map((t,i)=>'Wound '+woundNum(wounds[i].id)+':\n'+t).join('\n\n');
       return pre.resolve()+tail;
     };
     // resolve() = what COPIES (stars stripped) — unchanged. resolveRaw() = display only: keeps the
@@ -1755,6 +2224,38 @@ function buildSection(name,idx,text){
   wrap.appendChild(body); return wrap;
 }
 
+/* ============ ONE-CLICK → PCC (the "copy the whole note in one shot" ask) ============
+   Abby, 7/16: "is it possible to copy the entire note in one shot and it just auto-fills into PCC?"
+
+   The composer's half of that is deliberately tiny: publish the composed sections into a hidden JSON
+   element. The browser extension ("LaVida — Send Note to PCC") reads this element and drives the PCC
+   tab. Why a DOM element and not a JS global: a content script runs in an isolated world and cannot
+   see page variables, so the DOM is the only honest handoff — and this way the composer never needs to
+   know the extension's ID, and the extension never needs to understand the composer's internals.
+
+   The text published here is EXACTLY cleanForCopy(resolve()) — byte-identical to what the Copy button
+   puts on the clipboard. One-click and hand-copy therefore can never disagree about what reaches the
+   chart. If the extension isn't installed, this element is inert: nothing reads it, nothing changes.
+
+   `removed:true` carries an X-ed-out section so the extension CLEARS that PCC box — otherwise the
+   macro's template text survives and the chart claims something that was never done. (That hole exists
+   in today's manual flow too: Abby has to hand-clear those boxes.)
+
+   NOT a merged blob. Sections stay separate, each addressed to its own PCC field — the "Copy entire
+   note" button remains review/print only. See [[wound-composer-per-section-copy]]. */
+function publishPccPayload(){
+  try{
+    let el=document.getElementById('lavida-pcc-payload');
+    if(!el){ el=document.createElement('script'); el.type='application/json'; el.id='lavida-pcc-payload'; document.body.appendChild(el); }
+    const sections=sectionResolvers.map(s=>({
+      name:s.name,
+      removed:sectionRemoved(s.name),
+      text:sectionRemoved(s.name)?'':cleanForCopy(s.resolve())
+    }));
+    el.textContent=JSON.stringify({v:1, tool:'wound-composer', noteType:(TEMPLATES[MODE]||{}).noteType||'', sections});
+  }catch(e){}
+}
+
 /* ============ OUTPUT ============ */
 function resolveAll(){
   const out=document.getElementById('output'); out.innerHTML='';
@@ -1770,7 +2271,15 @@ function resolveAll(){
     if(copiedState[s.name]!=null && copiedState[s.name]!==txt) delete copiedState[s.name];
     const mark=document.createElement('span'); mark.className='copied-mark'; mark.textContent='✓ Copied';
     if(copiedState[s.name]===txt){ box.classList.add('copied'); } else { mark.style.display='none'; }
-    btn.onclick=()=>{ copyRich(txt,'Copied "'+s.name+'"'); copiedState[s.name]=txt; box.classList.add('copied'); mark.style.display=''; };
+    btn.onclick=()=>{ copyRich(txt,'Copied "'+s.name+'"'); copiedState[s.name]=txt; box.classList.add('copied'); mark.style.display='';
+      // COMMIT POINT. Copying the wound section is the signal that these numbers are real and are
+      // going into the chart — so that snapshot becomes next visit's "last visit". Same-day recopy
+      // overwrites (last copy wins), so "fix it and copy again" is the correction path. A note that is
+      // never copied never enters history. Fire-and-forget: a history write must never block the copy.
+      if(typeof whCommit==='function' && woundRegistry && woundRegistry.length && s.name===woundSectionName){
+        whCommit().then(ok=>{ if(!ok && !WH_LOCAL()) toast('Copied — but last visit\'s history did not save'); });
+      }
+    };
     cap.appendChild(btn); cap.appendChild(mark);
     // DISPLAY uses resolveRaw (keeps *** so they ghost like unfilled [options]); the Copy button above
     // still uses txt=s.resolve() — the clipboard is untouched by this.
@@ -1778,6 +2287,7 @@ function resolveAll(){
     const disp=document.createElement('div'); disp.className='disp'; disp.innerHTML=richDisplayBlocks(dispTxt);
     box.appendChild(cap); box.appendChild(disp); out.appendChild(box);
   });
+  publishPccPayload();
   paintCompleteness();
 }
 // A field "counts" as fillable unless it's read-only/auto (surface area), a removed side/line,
@@ -1884,7 +2394,11 @@ function cleanForCopy(text){
     if(/^Wound\s+\d+:$/.test(t)) return l;
     const noTail=t.replace(/[.\s]+$/,'');
     if(/:$/.test(noTail)) return '';                                                  // empty "Label:" (with or without a trailing period)
-    if(/(cm²?|%|mL|mm|minutes|o'clock)\s*\.?$/.test(t) && !/\d/.test(t)) return '';    // empty measurement/units line
+    // Empty measurement/units line. cm³ added for the new "Volume (auto)" field — `cm²?` matched "cm"
+    // and "cm²" but not "cm³", so an unmeasured wound leaked a dangling "Volume (auto): cm³" into the
+    // chart while the identical empty Surface-area line was correctly dropped. Verified by driving an
+    // empty wound card. (2026-07-16)
+    if(/(cm[²³]?|%|mL|mm|minutes|o'clock)\s*\.?$/.test(t) && !/\d/.test(t)) return '';
     return l;
   });
   // pass 2: drop orphan group headers (none of their OWN fields survived). A group header owns only
@@ -1899,6 +2413,12 @@ function cleanForCopy(text){
       if(!hasContent) lines[i]='';
     }
   }
+  // The marker is SCAFFOLDING — it tells this function where the per-wound zone starts, and it has
+  // done that job by now (pass 2 used perWoundStart above). It is not clinical content, and it was
+  // pasting the sentence "Per-wound findings below." into every chart. Same family as the "drop down"
+  // and "Please copy from my previous on the EMR" text. Blanked here, AFTER the boundary work, so the
+  // index stays valid; the filter below removes it. (2026-07-16)
+  if(perWoundStart>=0) lines[perWoundStart]='';
   return lines.filter(l=>l.trim()!=='').join('\n');
 }
 async function copyRich(plainText, msg){
@@ -1938,6 +2458,9 @@ function setMode(mode){
   resolveAll();
   updateRosterBadge();   // keep the header "Add to today’s list (N)" count in sync after any (re)build
   renderPatientBar();    // keep the patient switcher strip in sync
+  // Follow-up mode pulls the previous committed visit. The load is async, so this may re-enter setMode
+  // once the history is cached — whPriorReady() is the guard that stops it looping.
+  if(typeof whApplyPrior==='function') whApplyPrior();
 }
 /* ============ SIGN-IN GATE — Microsoft Entra (LaVida M365 tenant) ============
    Users are @lavidaheal.com, so identity = the LaVida M365 tenant (same one that guards
