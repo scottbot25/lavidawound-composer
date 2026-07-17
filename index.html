@@ -223,6 +223,8 @@
   .ho-gname{font-size:14.5px;font-weight:700;color:var(--accent)}
   .ho-gcount{font-size:12px;color:var(--muted);font-weight:600}
   .ho-gsaved{margin-left:auto;font-size:12px;font-weight:700;color:var(--warn);background:#fff5e0;border:1px solid #f0d79a;border-radius:999px;padding:2px 11px}
+  .ho-saveall{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 10px;padding:11px 13px;border:1px solid var(--accent);background:#eafaf6;border-radius:10px}
+  .ho-saveall button.primary{font-weight:700}
   .ho-gsaved.is-saved{color:var(--good);background:#eaf6ef;border-color:#bfe3cd}
   .ho-roster{display:flex;align-items:center;gap:10px;flex-wrap:wrap;border-top:1px solid var(--line);padding-top:12px}
   .ho-rlist{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
@@ -1454,6 +1456,41 @@ async function saveToVault(gi){
     setTimeout(()=>_vaultStatus('☁ Save to ClinicalVault',gi),4000);
   }
 }
+// Save EVERY facility's sheet to ClinicalVault in one click — signs in once, then uploads each facility
+// to its OWN Daily Handoffs/<facility>/<date> folder. One facility failing doesn't stop the others.
+async function saveAllToVault(){
+  const groups=handoffGroups().filter(g=>!g.preview);
+  if(!groups.length){ toast('Add a named patient first'); return; }
+  const btn=document.getElementById('saveAllBtn'); const res=document.getElementById('saveAllResult');
+  const setStat=t=>{ if(btn) btn.textContent=t; };
+  if(btn) btn.disabled=true; if(res) res.style.display='none';
+  const done=[], fail=[];
+  try{
+    setStat('Signing in…');
+    const token=await _vaultToken();
+    const siteId=await _vaultSiteId(token); const driveId=await _vaultDriveId(token,siteId);
+    for(const g of groups){
+      try{
+        setStat('Saving '+g.fac+'…');
+        const { segs }=_vaultFacDate(g);
+        await _vaultEnsureFolders(token,driveId,segs);
+        const blob=new Blob(['﻿'+handoffHTML(g.patients,g.fac)],{type:'application/msword'});
+        await _vaultUpload(token,driveId,segs,fileName(g.patients,g.fac),blob);
+        facSavedSet(g.key,true); done.push(g.fac);
+      }catch(e){ fail.push(g.fac); }
+    }
+    setStat('✓ Done');
+    if(res){ res.className='vault-result '+(fail.length?'vault-err':'vault-ok');
+      res.innerHTML=(fail.length?'⚠ ':'✓ ')+'Saved '+done.length+' of '+groups.length+' facilit'+(groups.length===1?'y':'ies')+' to ClinicalVault'+(fail.length?(' — failed: '+esc(fail.join(', '))+'. Try those individually.'):'.');
+      res.style.display=''; }
+    handoffGroups().forEach((g,gi)=>{ if(!g.preview && facSaved(g.key)) markGroupSaved(gi); });   // refresh each ✓ chip without a full re-render
+  }catch(e){
+    setStat('Save failed');
+    if(res){ res.className='vault-result vault-err'; res.innerHTML='⚠ '+esc((e&&e.message)||String(e)); res.style.display=''; }
+  }finally{
+    if(btn) btn.disabled=false; setTimeout(()=>setStat('☁ Save ALL facilities to ClinicalVault'),4500);
+  }
+}
 
 /* ===== ClinicalVault DRAFTS — autosave + resume the day's workspace ==========================
    Solves "I'll lose my work if I close the window." The ENTIRE multi-patient workspace (WS) is
@@ -1628,7 +1665,10 @@ function renderHandoffGroups(){
   const groups=handoffGroups(); const opts=_contactOpts();
   const multi=groups.length>1 && !groups[0].preview;
   let h='';
-  if(multi) h+='<div class="ho-note" style="margin:2px 0 4px"><b style="color:var(--accent)">'+groups.length+' facilities in today’s round.</b> Each gets its OWN sheet, folder and email below — a facility never receives another facility’s residents.</div>';
+  if(multi) h+='<div class="ho-note" style="margin:2px 0 4px"><b style="color:var(--accent)">'+groups.length+' facilities in today’s round.</b> Each gets its OWN sheet, folder and email below — a facility never receives another facility’s residents.</div>'+
+    '<div class="ho-saveall"><button class="primary" id="saveAllBtn" onclick="saveAllToVault()">☁ Save ALL facilities to ClinicalVault</button>'+
+    '<span id="saveAllResult" class="vault-result" style="display:none"></span>'+
+    '<span class="ho-note" style="flex:1 1 100%">Uploads every building above to its own folder in one go. You can still Save / Print / email each one individually below.</span></div>';
   groups.forEach((g,gi)=>{
     const n=g.patients.length; const saved=!g.preview && facSaved(g.key);
     const savedChip = g.preview ? '' : '<span id="grpSaved_'+gi+'" class="ho-gsaved '+(saved?'is-saved':'')+'">'+(saved?'✓ Saved to ClinicalVault':'Not saved yet')+'</span>';
