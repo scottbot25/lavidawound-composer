@@ -57,6 +57,17 @@
   .pb-sep{flex:0 0 auto;align-self:stretch;width:1px;background:var(--line);margin:2px 4px}
   .pb-fgroup{flex:0 0 auto;font-size:10.5px;font-weight:700;letter-spacing:.2px;color:var(--accent);padding:0 4px 0 8px;white-space:nowrap}
   .pb-fgroup.first{padding-left:2px}
+  /* one box per facility: name + patient dropdown + add/remove — compact no matter how many patients */
+  .pb-fbox{display:inline-flex;align-items:center;gap:6px;flex:0 0 auto;background:var(--fill);border:1px solid var(--line);border-radius:10px;padding:5px 7px 5px 11px}
+  .pb-fbox.on{border-color:var(--accent);background:#d6efe9}
+  .pb-fbox-name{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:700;color:var(--accent);white-space:nowrap}
+  .pb-fbox-n{background:var(--accent);color:#fff;border-radius:999px;font-size:10px;font-weight:700;padding:0 6px;min-width:18px;text-align:center}
+  .pb-ptsel{background:#fff;border:1px solid var(--line);border-radius:7px;padding:4px 8px;font:inherit;font-size:13px;color:var(--ink);max-width:180px}
+  .pb-ptsel:focus{border-color:var(--accent);outline:none}
+  .pb-fbox-add,.pb-fbox-rm{background:none;border:none;cursor:pointer;font-size:13px;line-height:1;padding:3px 5px;border-radius:5px;color:var(--muted)}
+  .pb-fbox-add:hover{color:var(--accent);background:rgba(15,138,124,.12)}
+  .pb-fbox-rm:hover{color:var(--bad);background:var(--panel2)}
+  .pb-newfac{display:inline-flex;align-items:center;gap:6px;flex:0 0 auto}
   .wrap{display:grid;grid-template-columns:1fr 500px;gap:0;min-height:calc(100vh - var(--header-h))}
   @media (max-width:1050px){.wrap{grid-template-columns:1fr}}
   .form{padding:18px 22px;min-width:0}
@@ -823,32 +834,70 @@ function clearAll(){ if(!confirm('Clear the ENTIRE workspace — every patient a
 function renderPatientBar(){
   const bar=document.getElementById('patientBar'); if(!bar) return;
   const ids=Object.keys(WS.patients);
-  const ap=activePt()||{};
-  // Facility switcher — reflects the ACTIVE patient's facility. Changing it moves only this patient
-  // (onchange, not oninput, so it doesn't regroup on every keystroke). New patients inherit it.
-  let h='<span class="pb-label">Facility</span>'+
-    facilitySelectHTML('pbFac','pb-fac', ap.facility||'',
-      'Facility for the current patient. Changing it moves only this patient — everyone else keeps theirs.')+
-    '<span class="pb-sep"></span><span class="pb-label">Patients</span>';
-  // Group the tabs by facility so it's obvious who belongs where; show the facility label only when a
-  // day spans more than one facility (single-facility days stay clean).
-  const groups=[]; const gmap={};
-  ids.forEach(pid=>{ const k=facKey(WS.patients[pid].facility); if(!gmap[k]){ gmap[k]={ fac:facLabel(WS.patients[pid].facility), pids:[] }; groups.push(k); } gmap[k].pids.push(pid); });
-  const multi=groups.length>1;
-  groups.forEach((k,gi)=>{ const g=gmap[k];
-    if(multi) h+='<span class="pb-fgroup'+(gi===0?' first':'')+'">'+esc(g.fac)+'</span>';
-    h+=g.pids.map(pid=>{ const p=WS.patients[pid]; const nm=(p.name&&p.name.trim())||'Unnamed'; const on=pid===activePid;
-      return '<span class="pb-tab'+(on?' on':'')+'" onclick="switchPatient(\''+pid+'\')" title="'+esc(nm)+(multi?' · '+esc(g.fac):'')+'">'+
-        '<span class="pb-name">'+esc(nm)+'</span>'+
-        (ids.length>1?'<button class="pb-x" title="Remove from workspace" onclick="event.stopPropagation();removePatient(\''+pid+'\')">✕</button>':'')+
-      '</span>'; }).join('');
+  // Fresh start — a single empty, unnamed, unassigned patient: just show the "pick a facility to start"
+  // picker (no stray "Unassigned" box).
+  const fresh = ids.length===1 && !(WS.patients[ids[0]].name||'').trim() && !String(WS.patients[ids[0]].facility||'').trim();
+  if(fresh){
+    bar.innerHTML='<span class="pb-label">Start here →</span>'+
+      facilitySelectHTML('pbNewFac','pb-fac','','Pick the facility you’re rounding in to start');
+    _wirePbNewFac(); return;
+  }
+  // ONE BOX PER FACILITY (first-seen order). Each box = building name + a dropdown of that building's
+  // patients + add/remove. Keeps the bar compact no matter how many patients are in a building — the row
+  // grows with the number of FACILITIES (usually 2–3/day), not the number of patients.
+  const order=[]; const gmap={};
+  ids.forEach(pid=>{ const k=facKey(WS.patients[pid].facility); if(!gmap[k]){ gmap[k]={ fac:facLabel(WS.patients[pid].facility), key:k, pids:[] }; order.push(k); } gmap[k].pids.push(pid); });
+  const activeFacKey=facKey((activePt()||{}).facility);
+  let h='';
+  order.forEach(k=>{ const g=gmap[k]; const isOn=(k===activeFacKey);
+    // the box shows the active patient if they're in it, otherwise the box's first patient
+    const shownPid=(isOn && g.pids.indexOf(activePid)>=0) ? activePid : g.pids[0];
+    const opts=g.pids.map(pid=>{ const nm=(WS.patients[pid].name&&WS.patients[pid].name.trim())||'Unnamed';
+      return '<option value="'+pid+'"'+(pid===shownPid?' selected':'')+'>'+esc(nm)+'</option>'; }).join('');
+    h+='<div class="pb-fbox'+(isOn?' on':'')+'">'+
+       '<span class="pb-fbox-name">'+esc(g.fac)+'<span class="pb-fbox-n">'+g.pids.length+'</span></span>'+
+       '<select class="pb-ptsel" title="Pick a patient at '+esc(g.fac)+'">'+opts+'</select>'+
+       '<button class="pb-fbox-add" data-fac="'+esc(g.fac)+'" title="Add a patient at '+esc(g.fac)+'">＋</button>'+
+       '<button class="pb-fbox-rm" data-pid="'+esc(shownPid)+'" title="Remove the patient shown here">✕</button>'+
+       '</div>';
   });
-  h+='<button class="pb-new" onclick="newPatient()" title="Start a new patient (keeps the others)">＋ New patient</button>';
+  h+='<div class="pb-newfac"><span class="pb-label">＋ Facility</span>'+
+     facilitySelectHTML('pbNewFac','pb-fac','','Start a new building — adds its first patient')+'</div>';
   bar.innerHTML=h;
-  const fe=document.getElementById('pbFac'); if(fe) fe.onchange=()=>{
-    if(fe.value==='__add__'){ const nf=facilityAddPrompt(); if(nf){ onBarFacChange(nf); } else { fe.value=String((activePt()||{}).facility||''); } return; }
-    onBarFacChange(fe.value);
+  // Wire controls via JS (not inline onclick) so facility names with spaces/quotes are safe.
+  bar.querySelectorAll('.pb-ptsel').forEach(sel=>{ sel.onchange=()=>{ if(sel.value) switchPatient(sel.value); }; });
+  bar.querySelectorAll('.pb-fbox-add').forEach(btn=>{ btn.onclick=()=>addPatientToFacility(btn.dataset.fac); });
+  bar.querySelectorAll('.pb-fbox-rm').forEach(btn=>{ btn.onclick=()=>{ if(btn.dataset.pid) removePatient(btn.dataset.pid); }; });
+  _wirePbNewFac();
+}
+// The "＋ Facility" / "Start here" picker: choose a building (or add one) to open a fresh patient there.
+function _wirePbNewFac(){
+  const nf=document.getElementById('pbNewFac'); if(!nf) return;
+  nf.onchange=()=>{ let v=(nf.value||'').trim();
+    if(v==='__add__'){ const a=facilityAddPrompt(); if(!a){ nf.value=''; return; } v=a; }
+    if(v) startFacility(v); else nf.value='';
   };
+}
+// Add a new empty patient stamped with a specific building, and make that building the sticky default.
+function addPatientToFacility(fac){
+  if(typeof refreshActiveSummary==='function') refreshActiveSummary();
+  fac=String(fac||'').trim();
+  const pid='p'+(WS.seq++);
+  WS.patients[pid]={ name:'', store:newStore(), updatedAt:Date.now(), facility:fac };
+  WS.round=WS.round||{}; WS.round.facility=fac;
+  activePid=pid; activateForm();
+  const el=document.getElementById('patientName'); if(el) el.focus();
+}
+// Start a new building. On a fresh workspace (one empty unassigned patient) stamp THAT patient rather
+// than leaving an empty one behind; otherwise add a new patient there.
+function startFacility(fac){
+  fac=String(fac||'').trim(); if(!fac) return;
+  const ids=Object.keys(WS.patients);
+  if(ids.length===1){ const p=WS.patients[ids[0]];
+    if(!(p.name&&p.name.trim()) && !String(p.facility||'').trim()){
+      p.facility=fac; WS.round=WS.round||{}; WS.round.facility=fac; activePid=ids[0]; activateForm();
+      const el=document.getElementById('patientName'); if(el) el.focus(); return; } }
+  addPatientToFacility(fac);
 }
 // Re-stamp ONLY the active patient's facility, and remember it as the sticky default for the next new
 // patient. A follow-up's prior-visit lookup is keyed on facility, so refresh that banner when it changes.
