@@ -1470,6 +1470,24 @@ function _draftFile(dateKey){ return (dateKey||_todayKey())+'.json'; }
 function _draftPayload(){ return JSON.stringify({ v:1, tool:'wound-composer', savedAt:Date.now(), ws:WS }); }
 function _draftStatus(txt,kind){ const el=document.getElementById('draftStatus'); if(!el) return; el.textContent=txt||''; el.className='draft-status'+(kind?(' ds-'+kind):''); }
 
+/* Draft retention — PHI minimization. Daily drafts are ephemeral autosave snapshots of the WHOLE
+   workspace (patient names + note text). Keep this week visible for resume; auto-delete older ones from
+   ClinicalVault so PHI doesn't linger indefinitely (decided in the vault: ~7-day resume window, ~14-day
+   purge). This is what the WoundHistory comment assumed already existed. Delete goes to SharePoint's
+   recycle bin, so it is not a hard delete. Only ever touches Drafts/<user>/ — never handoffs or history. */
+const DRAFT_RESUME_DAYS = 7;
+const DRAFT_KEEP_DAYS = 14;
+function _draftAgeDays(name){ const m=String(name||'').match(/(\d{4})-(\d{2})-(\d{2})/); if(!m) return 0;
+  const then=new Date(+m[1], +m[2]-1, +m[3]); const days=Math.floor((new Date() - then)/86400000); return isNaN(days)?0:days; }
+async function _draftDelete(name){
+  try{ const ctx=await _draftContext(); if(!ctx) return false;
+    const url='https://graph.microsoft.com/v1.0/drives/'+ctx.driveId+'/root:/'+_encPath(_draftSegs().join('/')+'/'+name);
+    const r=await _gfetch(url, ctx.token, {method:'DELETE'}); return r.ok || r.status===204 || r.status===404;
+  }catch(e){ return false; }
+}
+// Best-effort purge of drafts older than the keep window. Silent; never blocks the session.
+async function purgeOldDrafts(drafts){ try{ for(const d of (drafts||[])){ if(_draftAgeDays(d.name) > DRAFT_KEEP_DAYS) await _draftDelete(d.name); } }catch(e){} }
+
 async function _draftTokenSilent(){
   try{ const pca=await _getPca(); const a=pca.getAllAccounts()[0]; if(!a) return null;
     return (await pca.acquireTokenSilent({scopes:VAULT_CFG.scopes, account:a})).accessToken; }catch(e){ return null; }
@@ -1551,6 +1569,7 @@ async function maybeRestoreDraft(){
   let safeToSave=false;
   try{
     const drafts=await listDrafts();
+    purgeOldDrafts(drafts);   // fire-and-forget: delete drafts older than the keep window (PHI minimization)
     const today=_draftFile();
     const todays=drafts.find(d=>d.name===today);
     const empty=!_wsHasContent();
@@ -1568,8 +1587,12 @@ async function maybeRestoreDraft(){
   finally{ _draftRestoreDone=safeToSave; }
 }
 function showResumeBanner(drafts){
-  const el=document.getElementById('draftBanner'); if(!el||!drafts||!drafts.length) return;
-  const items=drafts.slice(0,8).map(d=>{ const day=d.name.replace(/\.json$/i,'');
+  const el=document.getElementById('draftBanner'); if(!el) return;
+  // Only this week's drafts are offered for resume — older work is done (handoffs saved separately) and
+  // its draft is on its way to being purged. Keeps the list to what a provider actually needs.
+  const recent=(drafts||[]).filter(d=>_draftAgeDays(d.name) <= DRAFT_RESUME_DAYS);
+  if(!recent.length){ el.style.display='none'; el.innerHTML=''; return; }
+  const items=recent.slice(0,8).map(d=>{ const day=d.name.replace(/\.json$/i,'');
     return '<button class="rb-item" onclick="resumeDraft(\''+esc(d.name)+'\')">'+esc(day)+'</button>'; }).join('');
   el.innerHTML='<div class="rb"><span class="rb-t">☁ Resume earlier work:</span>'+items+
     '<button class="rb-x" onclick="dismissResume()" title="Dismiss">✕</button></div>';
@@ -2509,6 +2532,10 @@ function cleanForCopy(text){
     // chart while the identical empty Surface-area line was correctly dropped. Verified by driving an
     // empty wound card. (2026-07-16)
     if(/(cm[²³]?|%|mL|mm|minutes|o'clock)\s*\.?$/.test(t) && !/\d/.test(t)) return '';
+    // A "Total time:" line with no number is an unfilled billing time — drop the whole line rather than
+    // paste "Total time: minutes, excluding …" (its trailing billing clause keeps it past the units check
+    // above). Kept in full once a number is entered. (2026-07-17)
+    if(/^total time:/i.test(t) && !/\d/.test(t)) return '';
     return l;
   });
   // pass 2: drop orphan group headers (none of their OWN fields survived). A group header owns only
@@ -2691,19 +2718,26 @@ document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState=
   const form = document.getElementById('form');
   if (!form) return;
   const isDesktop = () => !window.matchMedia('(max-width:1050px)').matches;
-  let hiT;
-  function syncTo(i, smooth) {
+  let hiT, lastIdx = -1;
+  // Glide the right panel so section i's box sits near the top. Skips tiny deltas (no micro-jitter) and
+  // uses smooth behaviour so it never lurches. `quiet` (page-scroll) skips the highlight flash.
+  function syncTo(i, quiet) {
     if (!isDesktop() || i < 0) return;
     const sc = document.querySelector('.out-scroll'); if (!sc) return;
     const box = sc.querySelectorAll('.out-sec')[i]; if (!box) return;
     const scR = sc.getBoundingClientRect(), bR = box.getBoundingClientRect();
-    sc.scrollTo({ top: sc.scrollTop + (bR.top - scR.top) - 8 });   // CSS scroll-behavior handles smoothness
+    const delta = (bR.top - scR.top) - 8;
+    if (Math.abs(delta) > 8) sc.scrollTo({ top: sc.scrollTop + delta, behavior: 'smooth' });   // smooth, no micro-jumps
+    lastIdx = i;
+    if (quiet) return;
     document.querySelectorAll('.out-sec.sync-hi').forEach(b => b.classList.remove('sync-hi'));
     box.classList.add('sync-hi'); clearTimeout(hiT); hiT = setTimeout(() => box.classList.remove('sync-hi'), 1100);
   }
   const idxOf = el => { const s = el && el.closest('.section'); return s ? [...document.querySelectorAll('#form .section')].indexOf(s) : -1; };
-  form.addEventListener('focusin', e => syncTo(idxOf(e.target), true));
-  form.addEventListener('click', e => syncTo(idxOf(e.target), true));
+  form.addEventListener('focusin', e => syncTo(idxOf(e.target)));
+  form.addEventListener('click', e => syncTo(idxOf(e.target)));
+  // Follow the page-scroll, but ONLY re-align when the active section actually CHANGES — the old code
+  // re-scrolled the panel every 90ms during any scroll, which was the clonky lurch. Quiet + longer debounce.
   let scrollT;
   window.addEventListener('scroll', () => {
     if (!isDesktop()) return;
@@ -2713,8 +2747,8 @@ document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState=
       const secs = [...document.querySelectorAll('#form .section')];
       let best = -1, bestD = Infinity;
       secs.forEach((s, i) => { const r = s.getBoundingClientRect(); if (r.bottom > hh + 4) { const d = Math.abs(r.top - (hh + 8)); if (d < bestD) { bestD = d; best = i; } } });
-      if (best >= 0) syncTo(best);
-    }, 90);
+      if (best >= 0 && best !== lastIdx) syncTo(best, true);
+    }, 130);
   }, { passive: true });
 })();
 </script>
