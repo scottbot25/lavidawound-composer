@@ -307,15 +307,9 @@ Medication non-compliance: [yes/no].
 Immobility: [bed bound / other: ***].
 History of blood clots, clotting disorders, or bleeding disorders: [yes / no].
 On blood thinners or other anticoagulant therapy: [yes / no].
-Their baseline mobility is: [wheelchair/ bed bound/ independent / other: ***].
-Their offloading ability is: [independent / requires staff / completely dependent]
-Their nutritional plans include: [regular / supplements / tube feeds / other: ***]
+Enteral feeding: [yes / no].
 Their continence status is [continent / incontinent]
-Interval health changes: [none / yes: ***].
-Sick contacts: [none / yes].
 Review of systems: [negative except as noted in HPI / additional findings: ***].`],
-      ["Family History",
-`[Unknown / Known: ***] family history of bleeding or clotting disorders.`],
       ["Physical Exam",
 `General: [alert, no acute distress / ill-appearing / lethargic / altered mental status / febrile-appearing / other: ***].
 Cardiovascular: [regular rate per pulse / tachycardic / irregular / other: ***].
@@ -1655,7 +1649,7 @@ function dropDeadSentences(t){
 }
 // Sections a provider may skip entirely (e.g. no procedure performed). X-ing one greys the whole
 // section and drops it from the composed note AND the handoff (its resolver returns '').
-const REMOVABLE_SECTIONS = new Set(['Procedures','Family History','Medical Decision-Making Summary']);
+const REMOVABLE_SECTIONS = new Set(['Procedures','Medical Decision-Making Summary']);
 function sectionRemoved(name){ return STATE['__secoff:'+name]===true; }
 function setupSectionToggle(wrap,h,name){
   const btn=document.createElement('button'); btn.className='sec-toggle'; btn.type='button';
