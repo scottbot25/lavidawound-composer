@@ -409,7 +409,8 @@ Plans:
 -ABI/TBI/arterial duplex ***, vascular surgery referral as indicated pending results review
 -Encourage protein supplementation and dietitian evaluation as needed
 -Re-evaluation in [1 week / 2 weeks / PRN]. Notify LaVida MD or APP sooner for any concerns- conveyed to facility wound care RN and DON.`],
-      ["Procedures", PROC()]
+      ["Procedures", PROC()],
+      ["Total Time", TIME()]
       /* Medical Decision-Making Summary DELETED — Abby, on the record (7/16 Zoom): "Claude record
          that: MDM deleted." It was byte-identical boilerplate she hand-copied into PCC's separate MDM
          box every single note ("I was cursing every time"), and Shevie already had a PCC dot-phrase
@@ -478,7 +479,8 @@ Periwound: [normal/macerated/erythematous/indurated/ecchymotic/callused/fluctuan
 -ABI/TBI/arterial duplex ***, vascular surgery referral as indicated pending results review
 -Encourage protein supplementation and dietitian evaluation as needed
 -Re-evaluation in [1 week / 2 weeks / PRN]. Notify LaVida MD or APP sooner for any concerns- conveyed to facility wound care RN and DON.`],
-      ["Procedures", PROC()]
+      ["Procedures", PROC()],
+      ["Total Time", TIME()]
       /* Medical Decision-Making Summary DELETED — Abby, on the record (7/16 Zoom): "Claude record
          that: MDM deleted." It was byte-identical boilerplate she hand-copied into PCC's separate MDM
          box every single note ("I was cursing every time"), and Shevie already had a PCC dot-phrase
@@ -508,6 +510,9 @@ Procedure note: The wound was cleansed with wound cleaner. Topical anesthetic wa
 Tolerance of Procedure: [tolerated well / tolerated with discomfort / procedure aborted]`;}
 function MDM(){return `I evaluated the patient, reviewed relevant facility records, medications, wound history, nursing documentation, and available labs/imaging. I assessed wound etiology, infection risk, perfusion, pressure/offloading, edema, nutrition, and barriers to healing. Orders and return precautions were communicated to facility staff.
 Total time: [***] minutes, excluding separately billable procedures.`;}
+/* Total-time line restored as its own bottom section (Scott, 2026-07-17) — the MDM boilerplate above
+   stays deleted (PCC .sktime fills it), but time-based billing still needs the minutes documented. */
+function TIME(){return `Total time: [***] minutes, excluding separately billable procedures.`;}
 
 /* ============ WORKSPACE STATE — MANY patients, each with their own full note.
    Held in sessionStorage (wiped when the browser TAB closes). The ClinicalVault drafts layer
