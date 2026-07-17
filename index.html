@@ -836,6 +836,33 @@ function emailHandoffSelected(){
   if(rosterGet().length) rosterSavedSet(true);
 }
 function refreshHandoffPreview(){ const f=document.getElementById('ho_preview'); if(f) f.srcdoc=handoffHTML(); }
+/* ---- Facility guard -------------------------------------------------------------------------
+   Facility is round-level and rosterGet() deliberately overlays it onto EVERY patient, so editing
+   it after patients are in the workspace silently re-labels all of them: Facility A's resident
+   prints under Facility B's header and gets handed to B's nurse. That's a disclosure to the wrong
+   facility, not a cosmetic mislabel — so the re-label has to be a deliberate act, not a side effect
+   of typing.
+   Unlike the Round Card (which offers to clear the card), this must NEVER clear the workspace —
+   it holds the actual notes. Correcting a typo'd facility is legitimate and common; the guard just
+   makes sure it's intended, and Cancel puts the old value back.
+   `onchange` (not `oninput`) so it fires once on commit, not on every keystroke. */
+function wireFacilityGuard(){
+  const fe=document.getElementById('ho_facility'); if(!fe) return;
+  fe.onfocus=()=>{ fe.dataset.prev = ((WS.round&&WS.round.facility)||'').trim(); };
+  fe.onchange=()=>{
+    const prev=(fe.dataset.prev||'').trim(), next=(fe.value||'').trim();
+    if(prev===next || !prev){ fe.dataset.prev=next; return; }
+    const n=rosterGet().length;
+    if(!n){ fe.dataset.prev=next; return; }          // nobody to mis-label yet
+    const ok=confirm('This re-labels all '+n+' patient'+(n===1?'':'s')+' in today’s handoff from "'
+      + prev + '" to "' + (next||'(blank)') + '".\n\n'
+      + 'A handoff must only ever carry one facility’s residents. If these patients are really from '
+      + prev + ', send their handoff first.\n\n'
+      + 'OK = re-label them\nCancel = keep ' + prev);
+    if(!ok){ fe.value=prev; saveHandoff(); refreshHandoffPreview(); }
+    fe.dataset.prev=(fe.value||'').trim();
+  };
+}
 
 /* ===== Save to ClinicalVault — Microsoft Graph upload (folds in the old Handoff Builder) =====
    Egress is Microsoft-ONLY: login.microsoftonline.com (sign-in) + graph.microsoft.com (upload to
@@ -1121,6 +1148,7 @@ function openHandoff(){
      '<iframe class="ho-preview" id="ho_preview"></iframe>'+
    '</div>';
   ['patient','facility','date','provider','dx'].forEach(k=>{ document.getElementById('ho_'+k).oninput=()=>{ if(k==='patient'){ setPatient(document.getElementById('ho_patient').value); syncPatientField(); updateRosterBadge(); } saveHandoff(); refreshHandoffPreview(); }; });
+  wireFacilityGuard();
   document.getElementById('handoffModal').style.display='flex'; refreshHandoffPreview();
 }
 
