@@ -40,6 +40,10 @@
   button.tiny{padding:6px 10px; min-height:34px; font-size:13px; font-weight:600}
   .row{display:flex; gap:8px; align-items:center; flex-wrap:wrap}
   .dims{display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px}
+  /* Grid items default to min-width:auto, so a wide native control (esp. iOS's date input)
+     won't shrink and overflows into the box next to it. Letting the columns hit 0 forces a
+     true even split so Date and Provider can't collide. */
+  .dims>*{min-width:0}
   .pill{background:#eef4f3; color:var(--teal-dark); border-radius:999px; padding:3px 10px;
     font-size:12px; font-weight:700}
   .muted{color:var(--muted); font-size:13px}
@@ -92,10 +96,10 @@
     </div>
     <label for="r_fac">Facility</label>
     <input id="r_fac" placeholder="e.g. Crestmore" oninput="setRound()" onchange="onFacChange()">
-    <div class="dims" style="grid-template-columns:1fr 1fr">
+    <div class="dims" style="grid-template-columns:minmax(0,1fr) minmax(0,1fr)">
       <div>
         <label for="r_date">Date</label>
-        <input id="r_date" type="date" oninput="setRound()">
+        <input id="r_date" type="date" oninput="setRound()" style="min-width:0">
       </div>
       <div>
         <label for="r_prov">Provider</label>
