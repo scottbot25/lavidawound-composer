@@ -2747,6 +2747,45 @@ window.addEventListener('beforeunload', (e)=>{
 // so the pending debounced draft lands before the session can be torn down. No-op unless signed in.
 document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='hidden' && typeof flushDraftSave==='function') flushDraftSave(); });
 
+/* ============ IDLE AUTO-LOCK (BYOD defense-in-depth) ============================================
+   On a phone the browser tab doesn't truly "close," so the sessionStorage wipe-on-close is weaker there.
+   After a period of inactivity we LOCK: clear sessionStorage (which holds the PHI workspace AND the MSAL
+   token, since the token cache is sessionStorage) and reload — so the provider must sign in again. Work
+   is not lost: the ClinicalVault autosave has already synced (it can't have been edited in the idle
+   window), and re-signing-in restores it via Resume. Only fires when there's something to protect (a
+   signed-in session or workspace content) — an empty, signed-out idle tab is left alone.
+   Default 15 min; ?idle=<seconds> overrides it (for testing). See [[BYOD & Mobile Device Policy]]. */
+(() => {
+  const qs = new URLSearchParams(location.search);
+  const IDLE_MS = (/^\d+$/.test(qs.get('idle')||'')) ? parseInt(qs.get('idle'))*1000 : 15*60*1000;
+  let lastActivity = Date.now();
+  const bump = () => { lastActivity = Date.now(); };
+  ['mousemove','mousedown','keydown','touchstart','scroll','wheel','focus'].forEach(ev =>
+    window.addEventListener(ev, bump, {passive:true, capture:true}));
+  let locking = false;
+  function lock(){
+    if(locking) return;
+    // "Something to protect" = a NAMED patient (real PHI) or a signed-in session (a live token to clear).
+    // NB: don't use _wsHasContent() here — its byte-length heuristic reads a fresh empty note as content,
+    // which would lock (and loop on) an untouched tab.
+    let hasNamedPatient=false;
+    try{ hasNamedPatient = Object.keys(WS.patients).some(pid=>(WS.patients[pid].name||'').trim()); }catch(e){}
+    let signedIn = false;
+    try{ signedIn = (typeof AUTH!=='undefined') && AUTH.enabled && !AUTH.demo && !!(_pca && _pca.getAllAccounts && _pca.getAllAccounts().length); }catch(e){}
+    if(!hasNamedPatient && !signedIn){ lastActivity = Date.now(); return; }   // nothing to protect — re-arm, don't nag
+    locking = true;
+    try{ sessionStorage.clear(); }catch(e){}                             // clears PHI workspace + MSAL token -> forces re-auth
+    const u = new URL(location.href); u.searchParams.set('locked','1');
+    location.replace(u.toString());
+  }
+  function check(){ if(Date.now() - lastActivity >= IDLE_MS) lock(); }
+  const POLL = Math.min(30*1000, Math.max(1000, Math.floor(IDLE_MS/3)));   // ~30s poll at 15min; faster for short timeouts
+  setInterval(check, POLL);
+  document.addEventListener('visibilitychange', () => { if(document.visibilityState==='visible') check(); });  // a backgrounded phone tab locks on return
+  // Tell the user why they were signed out.
+  if(qs.get('locked')==='1'){ setTimeout(()=>{ if(typeof toast==='function') toast('Locked after inactivity — please sign in again.'); }, 400); }
+})();
+
 // Keep --header-h synced to the header's real rendered height (it wraps to 2+ lines at medium
 // widths), so the sticky side panel's offset never drifts out of sync and hides under it.
 (() => {
