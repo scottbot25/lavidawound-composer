@@ -71,6 +71,8 @@
     color:#fff; padding:10px 16px; border-radius:999px; font-size:14px; z-index:99; opacity:0;
     transition:opacity .2s; pointer-events:none; max-width:90vw; text-align:center}
   .toast.on{opacity:1}
+  .vault-ok{background:#e8f5ef; border:1px solid #9fd4c2; color:#0b6b60; border-radius:10px; padding:9px 12px; font-size:13px; margin-top:8px}
+  .vault-err{background:#fbeae8; border:1px solid #e0a49d; color:#8f2f26; border-radius:10px; padding:9px 12px; font-size:13px; margin-top:8px}
   @media print{
     header,footer,.tabs,.no-print{display:none !important}
     body{background:#fff; padding:0}
@@ -139,11 +141,19 @@
       <button class="primary" style="flex:1" onclick="emailSheet()">Email it</button>
       <button style="flex:1" onclick="printSheet()">Print it</button>
     </div>
+    <div class="row" style="margin-top:8px">
+      <button id="vaultBtn" style="flex:1;border-color:var(--teal);color:var(--teal-dark);font-weight:650" onclick="saveVault()">☁ Save to ClinicalVault</button>
+    </div>
+    <div id="vaultResult" style="display:none"></div>
   </div>
 </div>
 
 <div class="toast" id="toast"></div>
 
+<!-- Microsoft MSAL (bundled locally, same-origin — no CDN). Powers the optional "Save to
+     ClinicalVault". Same library file, Entra app, and redirect.html as the Note Composer,
+     so it's ONE sign-in across both tools. -->
+<script src="msal-browser.min.js"></script>
 <script>
 /* ============================================================================
    LaVida ROUND CARD — Phase 1 (tap/type)
@@ -152,9 +162,15 @@
    orders exist at the door.
 
    PHI discipline (same as the Note Composer):
-   - Phase 1 makes ZERO network calls. Everything below is generated in the browser.
+   - Note-authoring makes ZERO network calls. Everything below is generated in the browser.
+   - The ONE cloud action is "Save to ClinicalVault": Microsoft-only egress
+     (login.microsoftonline.com + graph.microsoft.com) into the practice's own
+     BAA-covered SharePoint tenant, with the provider's own Entra sign-in. It files
+     the orders sheet under Daily Handoffs/<facility>/<date> and a per-patient
+     roundcard.v1 record under RoundCards/<facility>/ so the Note Composer can
+     pre-fill the note from what was captured at bedside.
    - The round lives in sessionStorage only -> it dies when the tab closes. No disk,
-     no localStorage, no cloud, no analytics.
+     no localStorage, no analytics. An idle auto-lock wipes it after 15 min untouched.
    - Email recipients come from a fixed allowlist. There is no free-typed recipient.
    - Nothing is logged to the console.
    Phase 2 (voice) adds Azure Speech + Azure OpenAI, both under the Microsoft BAA,
@@ -443,6 +459,7 @@ function hasContent(p){
 function findGaps(){
   const g=[];
   if(!(S.round.fac||'').trim()) g.push('Facility is blank');
+  if(!(S.round.prov||'').trim()) g.push('Provider is blank — the saved file is labeled by provider (sign-in can fill it for you)');
   S.pts.forEach((p,pi)=>{
     const named = (p.name||'').trim();
     /* An unnamed patient is DROPPED from the sheet (the nurse can't act on "somebody").
@@ -523,6 +540,207 @@ function emailSheet(){
     toast('Draft opened — check it, then send');
   }
 }
+
+/* ---------- Save to ClinicalVault — Microsoft Graph upload ----------
+   Reuses the Note Composer's proven machinery verbatim: same Entra SPA app, same
+   redirect.html, same folder discipline. Egress is Microsoft-ONLY (sign-in + the
+   practice's own BAA-covered SharePoint). Two things are filed per save:
+   1) the orders sheet (.doc) -> Daily Handoffs/<facility>/<date>/, provider named
+      in the filename (Scott 2026-07-18) — this IS the facility handoff record now;
+   2) one roundcard.v1 JSON per named patient -> RoundCards/<facility>/<name-slug>.json,
+      overwritten on re-save (latest bedside capture wins) — the Note Composer reads
+      these to auto-create the patient and pre-fill the note (card feeds the note). */
+const VAULT_CFG = {
+  clientId:  '3702875f-471b-4878-a009-8a2575b41db3',   // LaVida Entra SPA app (client ID is public by design)
+  tenantId:  'cc541639-168a-4a8d-9880-4e3628918b70',
+  spHost:    'lavidah.sharepoint.com',
+  sitePath:  '/sites/ClinicalVault',
+  scopes:    ['Sites.ReadWrite.All']
+};
+let _pca=null;
+async function _getPca(){
+  if(_pca) return _pca;
+  if(!(window.msal && window.msal.PublicClientApplication))
+    throw new Error('Sign-in library didn’t load — this only works on the hosted site, not a local file.');
+  const redirectUri = location.origin + location.pathname.replace(/[^/]*$/, '') + 'redirect.html';
+  _pca=new window.msal.PublicClientApplication({
+    auth:{ clientId:VAULT_CFG.clientId, authority:'https://login.microsoftonline.com/'+VAULT_CFG.tenantId, redirectUri },
+    cache:{ cacheLocation:'sessionStorage', storeAuthStateInCookie:false }   // clears on tab close (PHI-friendly)
+  });
+  await _pca.initialize();
+  return _pca;
+}
+async function _vaultToken(){
+  const pca=await _getPca(), req={scopes:VAULT_CFG.scopes};
+  const acct=pca.getAllAccounts()[0];
+  if(acct){ try{ return (await pca.acquireTokenSilent(Object.assign({account:acct},req))).accessToken; }catch(e){} }
+  /* No popup (unreliable on static hosting + phones) — full-page redirect. The round survives it:
+     state is in sessionStorage, which persists across same-tab navigation. On return, tap Save again.
+     If the provider came from the Composer they're already signed in to Microsoft, so the redirect
+     bounces straight back without re-typing credentials. */
+  await pca.acquireTokenRedirect(req);
+  throw new Error('redirecting to sign in…');
+}
+function _gfetch(url,token,opts){ opts=opts||{}; opts.headers=Object.assign({Authorization:'Bearer '+token},opts.headers||{}); return fetch(url,opts); }
+function _encPath(rel){ return rel.split('/').map(encodeURIComponent).join('/'); }
+async function _vaultSiteId(token){
+  const r=await _gfetch('https://graph.microsoft.com/v1.0/sites/'+VAULT_CFG.spHost+':'+VAULT_CFG.sitePath,token);
+  if(!r.ok) throw new Error('Couldn’t reach the ClinicalVault site (HTTP '+r.status+'). Sign in with a LaVida account that has access.');
+  return (await r.json()).id;
+}
+async function _vaultDriveId(token,siteId){
+  const r=await _gfetch('https://graph.microsoft.com/v1.0/sites/'+siteId+'/drive',token);
+  if(!r.ok) throw new Error('Couldn’t open the document library (HTTP '+r.status+').');
+  return (await r.json()).id;
+}
+async function _vaultEnsureFolders(token,driveId,segs){
+  let parent='';
+  for(let i=0;i<segs.length;i++){
+    const seg=segs[i], childRel=parent?parent+'/'+seg:seg;
+    const c=await _gfetch('https://graph.microsoft.com/v1.0/drives/'+driveId+'/root:/'+_encPath(childRel),token);
+    if(c.status===404){
+      const parentUrl=parent
+        ? 'https://graph.microsoft.com/v1.0/drives/'+driveId+'/root:/'+_encPath(parent)+':/children'
+        : 'https://graph.microsoft.com/v1.0/drives/'+driveId+'/root/children';
+      const mk=await _gfetch(parentUrl,token,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:seg,folder:{},'@microsoft.graph.conflictBehavior':'fail'})});
+      if(!mk.ok && mk.status!==409) throw new Error('Couldn’t create the “'+seg+'” folder (HTTP '+mk.status+').');
+    } else if(!c.ok){ throw new Error('Folder check failed (HTTP '+c.status+').'); }
+    parent=childRel;
+  }
+}
+async function _vaultUpload(token,driveId,segs,filename,blob,ctype){
+  const url='https://graph.microsoft.com/v1.0/drives/'+driveId+'/root:/'+_encPath(segs.join('/')+'/'+filename)+':/content';
+  const r=await _gfetch(url,token,{method:'PUT',headers:{'Content-Type':ctype||'application/msword'},body:blob});
+  if(!r.ok) throw new Error('Upload failed (HTTP '+r.status+').');
+  return await r.json();
+}
+/* Path hygiene — same sanitizer as the composer: no traversal, no illegal SharePoint chars. */
+function cleanSeg(s){
+  s=String(s||'').replace(/[\\/:*?"<>|#%]/g,'').replace(/\s+/g,' ').trim();
+  if(/^\.+$/.test(s)) s='';
+  return s;
+}
+/* Stable per-patient key so a re-save OVERWRITES instead of duplicating. */
+function ptSlug(name){
+  return String(name||'').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'') || 'patient';
+}
+function _vaultResultShow(ok,msg,url){
+  const el=document.getElementById('vaultResult'); if(!el) return;
+  el.className=ok?'vault-ok':'vault-err';
+  el.innerHTML=(ok?'✓ ':'⚠ ')+esc(msg)+(ok&&url?(' · <a href="'+esc(url)+'" target="_blank" rel="noopener">open in SharePoint</a>'):'');
+  el.style.display='';
+}
+async function saveVault(){
+  const pts=S.pts.filter(p=>(p.name||'').trim());
+  if(!pts.length){ toast('Add a named patient first'); return; }
+  const btn=document.getElementById('vaultBtn'); btn.disabled=true;
+  const st=t=>{ btn.textContent=t; };
+  const resEl=document.getElementById('vaultResult'); if(resEl) resEl.style.display='none';
+  try{
+    st('Signing in…');
+    const token=await _vaultToken();
+    /* Provider designator: if the field is blank, take the signed-in account's name so the
+       filename always says WHO rounded (Scott 2026-07-18). */
+    try{
+      const a=_pca.getAllAccounts()[0];
+      if(a && !(S.round.prov||'').trim()){ S.round.prov=a.name||a.username||''; save(); paintRound(); }
+    }catch(e){}
+    const fac  = cleanSeg(S.round.fac) || 'Unfiled';
+    const date = /^\d{4}-\d{2}-\d{2}/.test(String(S.round.date||'')) ? S.round.date.slice(0,10) : 'undated';
+    const prov = cleanSeg(S.round.prov) || 'Provider unlisted';
+    st('Preparing folders…');
+    const siteId=await _vaultSiteId(token);
+    const driveId=await _vaultDriveId(token,siteId);
+    const sheetSegs=['Daily Handoffs',fac,date];
+    await _vaultEnsureFolders(token,driveId,sheetSegs);
+    st('Uploading sheet…');
+    const blob=new Blob(['﻿'+sheetHTML()],{type:'application/msword'});
+    const item=await _vaultUpload(token,driveId,sheetSegs,
+      'Wound Orders — '+fac+' — '+date+' — '+prov+'.doc',blob,'application/msword');
+    st('Saving patient records…');
+    const recSegs=['RoundCards',fac];
+    await _vaultEnsureFolders(token,driveId,recSegs);
+    for(const p of pts){
+      const rec={ schema:'roundcard.v1', savedAt:new Date().toISOString(),
+        facility:S.round.fac||'', date:date, provider:S.round.prov||'',
+        patient:{name:p.name}, edu:p.edu||'', wounds:p.wounds };
+      const jb=new Blob([JSON.stringify(rec)],{type:'application/json'});
+      await _vaultUpload(token,driveId,recSegs,ptSlug(p.name)+'.json',jb,'application/json');
+    }
+    st('✓ Saved');
+    _vaultResultShow(true,'Sheet + '+pts.length+' patient record'+(pts.length===1?'':'s')+' saved to ClinicalVault.',item&&item.webUrl);
+    setTimeout(()=>{ st('☁ Save to ClinicalVault'); btn.disabled=false; },2500);
+  }catch(e){
+    if(/redirecting/.test((e&&e.message)||'')){ st('Redirecting to sign-in…'); return; }   // page is navigating away
+    st('☁ Save to ClinicalVault'); btn.disabled=false;
+    _vaultResultShow(false,(e&&e.message)||'Save failed.');
+  }
+}
+/* Finish a returning sign-in redirect (clears any stuck interaction state, activates the account). */
+(async()=>{
+  try{
+    if(!window.msal) return;
+    const pca=await _getPca();
+    const res=await pca.handleRedirectPromise();
+    const acct=(res&&res.account)||pca.getAllAccounts()[0];
+    if(acct) pca.setActiveAccount(acct);
+    if(res&&res.account){ toast('Signed in — open Review & send, then tap Save again'); }
+  }catch(e){}
+})();
+
+/* ---------- idle auto-lock (BYOD defense-in-depth — ported from the composer) ----------
+   On a phone the tab never truly "closes," so wipe-on-close is weak there. After 15 min
+   untouched, IF there's something to protect (a named patient = PHI on screen, or a live
+   sign-in token), wipe sessionStorage (round + MSAL token) and reload. ?idle=<seconds>
+   overrides for testing. See [[BYOD & Mobile Device Policy]]. */
+(() => {
+  const qs = new URLSearchParams(location.search);
+  const IDLE_MS = (/^\d+$/.test(qs.get('idle')||'')) ? parseInt(qs.get('idle'))*1000 : 15*60*1000;
+  let lastActivity = Date.now();
+  const bump = () => { lastActivity = Date.now(); };
+  ['mousemove','mousedown','keydown','touchstart','scroll','wheel','focus'].forEach(ev =>
+    window.addEventListener(ev, bump, {passive:true, capture:true}));
+  let locking = false;
+  function lock(){
+    if(locking) return;
+    let named=false;    try{ named=S.pts.some(p=>(p.name||'').trim()); }catch(e){}
+    let signedIn=false; try{ signedIn=!!(_pca && _pca.getAllAccounts && _pca.getAllAccounts().length); }catch(e){}
+    if(!named && !signedIn){ lastActivity = Date.now(); return; }   // nothing to protect — re-arm, don't nag
+    locking = true;
+    try{ sessionStorage.clear(); }catch(e){}                        // wipes the round + MSAL token
+    const u = new URL(location.href); u.searchParams.set('locked','1');
+    location.replace(u.toString());
+  }
+  function check(){ if(Date.now() - lastActivity >= IDLE_MS) lock(); }
+  const POLL = Math.min(30*1000, Math.max(1000, Math.floor(IDLE_MS/3)));
+  setInterval(check, POLL);
+  document.addEventListener('visibilitychange', () => { if(document.visibilityState==='visible') check(); });
+  if(qs.get('locked')==='1'){ setTimeout(()=>toast('Locked after inactivity — your round was cleared for privacy.'), 400); }
+})();
+
+/* ---------- PHI input hygiene (ported from the composer) ----------
+   Stop the phone's keyboard/browser from REMEMBERING patient names and orders typed here:
+   autofill/autocorrect suggestions could resurface PHI in other apps' text fields. */
+function _hardenPHIInput(el){
+  if(!el || el.__phiHardened) return;
+  const tag=el.tagName, type=(el.type||'').toLowerCase();
+  if(tag!=='TEXTAREA' && !(tag==='INPUT' && (type===''||type==='text'||type==='search'||type==='date'))) return;
+  el.setAttribute('autocomplete','off'); el.setAttribute('autocorrect','off');
+  el.setAttribute('autocapitalize','off'); el.setAttribute('spellcheck','false');
+  el.setAttribute('data-lpignore','true'); el.setAttribute('data-1p-ignore','true');
+  el.__phiHardened=true;
+}
+(function(){
+  document.querySelectorAll('input,textarea').forEach(_hardenPHIInput);
+  try{
+    const mo=new MutationObserver(muts=>muts.forEach(m=>m.addedNodes&&m.addedNodes.forEach(n=>{
+      if(n.nodeType!==1) return;
+      if(n.matches&&n.matches('input,textarea')) _hardenPHIInput(n);
+      if(n.querySelectorAll) n.querySelectorAll('input,textarea').forEach(_hardenPHIInput);
+    })));
+    mo.observe(document.body,{childList:true,subtree:true});
+  }catch(e){}
+})();
 
 /* ---------- clear ---------- */
 function clearAll(){
