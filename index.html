@@ -884,6 +884,13 @@ function removePatient(pid){ const p=WS.patients[pid]; if(!p) return;
   if(!ids.length){ WS.patients.p1={name:'',store:newStore(),updatedAt:Date.now(),facility:String((WS.round&&WS.round.facility)||'').trim()}; WS.seq=2; activePid='p1'; }
   else if(pid===activePid){ activePid=ids[0]; }
   activateForm(); }
+// Wipe the CURRENT patient (name, facility, note) back to a fresh blank — the "clear" affordance for
+// the single/blank slot, where there's no ✕ (nothing to group into a facility box yet).
+function clearCurrentPatient(){
+  const pid=activePid; if(!WS.patients[pid]) return;
+  if(!confirm('Clear this patient — name, facility, and note — and start fresh?')) return;
+  WS.patients[pid]={ name:'', store:newStore(), updatedAt:Date.now(), facility:'' };
+  activateForm(); }
 function clearAll(){ if(!confirm('Clear the ENTIRE workspace — every patient and both notes — and wipe the in-browser session? This cannot be undone.')) return;
   WS={ seq:2, activePid:'p1', round:{}, patients:{ p1:{name:'',store:newStore(),updatedAt:Date.now(),facility:''} } }; activePid='p1';
   try{ sessionStorage.removeItem(WKEY); sessionStorage.removeItem(SKEY); sessionStorage.removeItem(PKEY); }catch(e){}
@@ -897,7 +904,8 @@ function renderPatientBar(){
   const fresh = ids.length===1 && !(WS.patients[ids[0]].name||'').trim() && !String(WS.patients[ids[0]].facility||'').trim();
   if(fresh){
     bar.innerHTML='<span class="pb-label">Start here →</span>'+
-      facilitySelectHTML('pbNewFac','pb-fac','','Pick the facility you’re rounding in to start');
+      facilitySelectHTML('pbNewFac','pb-fac','','Pick the facility you’re rounding in to start')+
+      '<button title="Clear the current note and start fresh" onclick="clearCurrentPatient()" style="margin-left:10px;background:transparent;border:1px solid var(--line);color:var(--muted);border-radius:999px;padding:5px 13px;font:inherit;font-size:13px;cursor:pointer">Clear</button>';
     _wirePbNewFac(); return;
   }
   // ONE BOX PER FACILITY (first-seen order). Each box = building name + a dropdown of that building's
