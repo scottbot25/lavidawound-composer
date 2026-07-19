@@ -2856,6 +2856,9 @@ document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState=
   const bump = () => { lastActivity = Date.now(); };
   ['mousemove','mousedown','keydown','touchstart','scroll','wheel','focus'].forEach(ev =>
     window.addEventListener(ev, bump, {passive:true, capture:true}));
+  // The Round Card overlay (a same-origin iframe) forwards its activity here — its events don't
+  // bubble to this window, so without this the timer would be blind to card use and lock mid-round.
+  window.addEventListener('message', e => { if(e.origin===location.origin && e.data==='rc-activity') bump(); });
   let locking = false;
   function lock(){
     if(locking) return;
