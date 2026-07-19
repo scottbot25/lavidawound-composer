@@ -229,8 +229,8 @@ function activePt(){ return S.pts[S.active] || null; }
    dimension string is worse than saying nothing. */
 /* Surface area = L × W, volume = L × W × D (same simple model as the composer). Returns null
    until the needed dimensions are present, so a half-filled size never shows a bogus number. */
-function calcArea(w){ const a=parseFloat(w.l), b=parseFloat(w.w); return (isFinite(a)&&isFinite(b))? a*b : null; }
-function calcVol(w){ const a=parseFloat(w.l), b=parseFloat(w.w), c=parseFloat(w.d); return (isFinite(a)&&isFinite(b)&&isFinite(c))? a*b*c : null; }
+function calcArea(w){ const a=parseFloat(w.l), b=parseFloat(w.w); return (isFinite(a)&&isFinite(b)&&a>=0&&b>=0)? a*b : null; }
+function calcVol(w){ const a=parseFloat(w.l), b=parseFloat(w.w), c=parseFloat(w.d); return (isFinite(a)&&isFinite(b)&&isFinite(c)&&a>=0&&b>=0&&c>=0)? a*b*c : null; }
 function calcText(w){
   const ar=calcArea(w); if(ar==null) return '';
   let s='Surface area '+ar.toFixed(1)+' cm²';
@@ -757,12 +757,21 @@ async function saveVault(){
     st('Saving patient records…');
     const recSegs=['RoundCards',fac];
     await _vaultEnsureFolders(token,driveId,recSegs);
+    /* Two patients whose names slug the same (e.g. two "Maria Garcia") would otherwise write the
+       SAME RoundCards/<slug>.json and one would silently overwrite the other. De-dupe within the
+       save so every patient's record survives; the resolved key rides in the record for Phase 3.
+       (Name-as-key is still fragile for genuinely-distinct same-name patients — a stable patient
+       ID is the real fix; flagged in the vault.) */
+    const seenSlugs={};
     for(const p of pts){
-      const rec={ schema:'roundcard.v1', savedAt:new Date().toISOString(),
+      let base=ptSlug(p.name), slug=base, n=1;
+      while(seenSlugs[slug]){ slug=base+'-'+(++n); }
+      seenSlugs[slug]=true;
+      const rec={ schema:'roundcard.v1', savedAt:new Date().toISOString(), key:slug,
         facility:S.round.fac||'', date:date, provider:S.round.prov||'',
         patient:{name:p.name}, edu:p.edu||'', wounds:p.wounds };
       const jb=new Blob([JSON.stringify(rec)],{type:'application/json'});
-      await _vaultUpload(token,driveId,recSegs,ptSlug(p.name)+'.json',jb,'application/json');
+      await _vaultUpload(token,driveId,recSegs,slug+'.json',jb,'application/json');
     }
     /* QC count feed (QC-COUNT-FEED-SPEC.md, Scott 2026-07-19): one COUNT-ONLY record per
        facility+provider+date so the QC program can catch visits that never became a PCC
@@ -802,6 +811,16 @@ async function saveVault(){
    sign-in token), wipe sessionStorage (round + MSAL token) and reload. ?idle=<seconds>
    overrides for testing. See [[BYOD & Mobile Device Policy]]. */
 (() => {
+  /* Inside the composer overlay (an iframe) we must NOT run our own lock — it would clear the
+     SHARED sessionStorage (the composer's workspace + MSAL token). Instead, forward activity to
+     the parent so the COMPOSER's idle timer sees the card being used (iframe events don't reach
+     the parent window on their own). The composer's lock then covers the whole tab. */
+  if(window.self !== window.top){
+    const ping=()=>{ try{ parent.postMessage('rc-activity', location.origin); }catch(e){} };
+    ['mousemove','mousedown','keydown','touchstart','scroll','wheel','focus','input','change'].forEach(ev =>
+      window.addEventListener(ev, ping, {passive:true, capture:true}));
+    return;
+  }
   const qs = new URLSearchParams(location.search);
   const IDLE_MS = (/^\d+$/.test(qs.get('idle')||'')) ? parseInt(qs.get('idle'))*1000 : 15*60*1000;
   let lastActivity = Date.now();
