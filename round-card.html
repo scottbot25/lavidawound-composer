@@ -605,6 +605,19 @@ const VAULT_CFG = {
   sitePath:  '/sites/ClinicalVault',
   scopes:    ['Sites.ReadWrite.All']
 };
+/* SANDBOX MODE (?sandbox=1, LOCALHOST ONLY — the hosted site ignores it): points every
+   upload at the ToolSandbox SharePoint site so end-to-end tests never touch the real
+   vault. Belt (config): sitePath is swapped. Suspenders (guard): _gfetch refuses any
+   URL naming the real vault while sandboxed. Best isolation: run tests signed in as
+   the guest account that has NO ClinicalVault permission — then Microsoft itself is
+   the wall, not this code. Synthetic data only, even here. */
+const SANDBOX = (()=>{ const q=new URLSearchParams(location.search);
+  return q.get('sandbox')==='1' && (location.hostname==='localhost'||location.hostname==='127.0.0.1'); })();
+if(SANDBOX){
+  VAULT_CFG.sitePath='/sites/ToolSandbox';
+  document.addEventListener('DOMContentLoaded',()=>{ const s=document.getElementById('hdrSub');
+    if(s) s.textContent='🧪 SANDBOX — saves go to the test site, never the real vault'; });
+}
 let _pca=null;
 async function _getPca(){
   if(_pca) return _pca;
@@ -629,7 +642,10 @@ async function _vaultToken(){
   await pca.acquireTokenRedirect(req);
   throw new Error('redirecting to sign in…');
 }
-function _gfetch(url,token,opts){ opts=opts||{}; opts.headers=Object.assign({Authorization:'Bearer '+token},opts.headers||{}); return fetch(url,opts); }
+function _gfetch(url,token,opts){
+  if(SANDBOX && /ClinicalVault/i.test(url)) throw new Error('SANDBOX guard: blocked a call to the real vault.');
+  opts=opts||{}; opts.headers=Object.assign({Authorization:'Bearer '+token},opts.headers||{}); return fetch(url,opts);
+}
 function _encPath(rel){ return rel.split('/').map(encodeURIComponent).join('/'); }
 async function _vaultSiteId(token){
   const r=await _gfetch('https://graph.microsoft.com/v1.0/sites/'+VAULT_CFG.spHost+':'+VAULT_CFG.sitePath,token);
