@@ -279,6 +279,8 @@
     cursor:pointer;font:inherit;font-size:12.5px}
   .draft-banner .rb-item:hover{background:#0c6d61;color:#fff;border-color:#0c6d61}
   .draft-banner .rb-x{margin-left:auto;background:none;border:none;color:var(--muted);cursor:pointer;font-size:15px}
+  /* the draft that's OPEN right now stays visibly toggled in the resume list */
+  .draft-banner .rb-item.rb-on{background:#0c6d61;color:#fff;border-color:#0c6d61;font-weight:700}
 </style>
 </head>
 <body>
@@ -298,6 +300,10 @@
 </header>
 
 <div id="draftBanner" class="draft-banner" style="display:none"></div>
+<!-- Which DAY is open. Quiet when it's today; LOUD (amber) when a resumed prior day
+     is on screen — working a back-date without noticing is how notes land on the
+     wrong day's handoff. Painted by paintDayBanner(). -->
+<div id="dayBanner" style="display:none"></div>
 <div id="patientBar" class="patient-bar"></div>
 
 <div class="wrap">
@@ -1585,7 +1591,9 @@ async function loadDraft(fileName){
   try{ return JSON.parse(await r.text()); }catch(e){ return null; }
 }
 // Rebuild the live workspace from a draft object. Validates shape; never throws on bad data.
-function applyDraft(obj){
+// dateKey = which day's file this came from — drives the day banner (a stale value
+// stored inside an old draft is overwritten here, so it can't lie tomorrow).
+function applyDraft(obj, dateKey){
   const ws=obj&&obj.ws;
   if(!ws||!ws.patients||typeof ws.patients!=='object'||!Object.keys(ws.patients).length) return false;
   if(typeof ws.seq!=='number'||ws.seq<2) ws.seq=Object.keys(ws.patients).length+1;
@@ -1594,7 +1602,9 @@ function applyDraft(obj){
     if(!p.store.new) p.store.new={}; if(!p.store.fu) p.store.fu={}; ws.patients[pid]=p; });
   migrateFacility(ws);   // a draft saved before per-patient facility carried facility only on round
   if(!ws.patients[ws.activePid]) ws.activePid=Object.keys(ws.patients)[0];
-  WS=ws; activePid=WS.activePid; saveWS(); activateForm(); renderPatientBar();
+  WS=ws; activePid=WS.activePid;
+  WS.draftDay=(dateKey||_todayKey()); WS.dayBannerHidden=false;
+  saveWS(); activateForm(); renderPatientBar(); paintDayBanner();
   return true;
 }
 function _wsHasContent(){ try{ return Object.keys(WS.patients).some(pid=>{ const p=WS.patients[pid]||{};
@@ -1619,7 +1629,7 @@ async function maybeRestoreDraft(){
     const empty=!_wsHasContent();
     if(empty && todays){
       const obj=await loadDraft(today);
-      if(obj && applyDraft(obj)){ _draftStatus('☁ restored '+_hm(),'ok'); toast('Restored your work from earlier today'); safeToSave=true; return; }
+      if(obj && applyDraft(obj, today.replace(/\.json$/i,''))){ _draftStatus('☁ restored '+_hm(),'ok'); toast('Restored your work from earlier today'); safeToSave=true; return; }
       // The draft EXISTS but wouldn't load — DO NOT enable saving (would clobber it). Warn + bail.
       _draftStatus('⚠ couldn’t load your saved work — reload','warn');
       toast('Couldn’t load your saved work — please reload the page before editing');
@@ -1630,26 +1640,87 @@ async function maybeRestoreDraft(){
   }catch(e){ _draftStatus('⚠ couldn’t reach ClinicalVault — reload before editing','warn'); }
   finally{ _draftRestoreDone=safeToSave; }
 }
+let _lastDraftList=null;           // last listing, so the banner can repaint its toggled state
+const _draftSumCache={};           // name+mtime -> "Crestmoor 4 · UH 2" (facility labels for the chips)
 function showResumeBanner(drafts){
   const el=document.getElementById('draftBanner'); if(!el) return;
+  if(drafts) _lastDraftList=drafts; else drafts=_lastDraftList||[];
   // Only this week's drafts are offered for resume — older work is done (handoffs saved separately) and
   // its draft is on its way to being purged. Keeps the list to what a provider actually needs.
   const recent=(drafts||[]).filter(d=>_draftAgeDays(d.name) <= DRAFT_RESUME_DAYS);
   if(!recent.length){ el.style.display='none'; el.innerHTML=''; return; }
-  const items=recent.slice(0,8).map(d=>{ const day=d.name.replace(/\.json$/i,'');
-    return '<button class="rb-item" onclick="resumeDraft(\''+esc(d.name)+'\')">'+esc(day)+'</button>'; }).join('');
+  const shown=recent.slice(0,8);
+  const items=shown.map(d=>{ const day=d.name.replace(/\.json$/i,'');
+    const on=(day===WS.draftDay);                       // the OPEN day stays toggled, not dismissed
+    const sum=_draftSumCache[d.name+'|'+(d.lastModifiedDateTime||'')];
+    return '<button class="rb-item'+(on?' rb-on':'')+'" id="rbi_'+esc(day)+'" onclick="resumeDraft(\''+esc(d.name)+'\')">'
+      + esc(day)+(on?' — open':'')+(sum?' · '+esc(sum):'')+'</button>'; }).join('');
   el.innerHTML='<div class="rb"><span class="rb-t">☁ Resume earlier work:</span>'+items+
     '<button class="rb-x" onclick="dismissResume()" title="Dismiss">✕</button></div>';
   el.style.display='';
+  _enrichResumeChips(shown);
+}
+/* Fill each chip with the facilities inside that day's draft ("07-15 · Crestmoor 4") so the
+   right day is recognizable by BUILDING, not just by date. Lazy + cached: downloads happen
+   in-page inside the signed-in tenant, one by one, and never block the banner. */
+async function _enrichResumeChips(shown){
+  if(!DRAFTS_ENABLED()) return;
+  for(const d of (shown||[])){
+    const key=d.name+'|'+(d.lastModifiedDateTime||'');
+    if(_draftSumCache[key]!==undefined) continue;
+    try{
+      const obj=await loadDraft(d.name);
+      _draftSumCache[key]=_draftFacSummary(obj&&obj.ws)||'';
+    }catch(e){ _draftSumCache[key]=''; }
+  }
+  showResumeBanner(null);   // repaint with whatever got filled in (uses the cached list)
+}
+function _draftFacSummary(ws){
+  try{
+    const counts={};
+    Object.keys((ws&&ws.patients)||{}).forEach(pid=>{
+      const f=String((ws.patients[pid]||{}).facility||'').trim()||'Unassigned';
+      counts[f]=(counts[f]||0)+1; });
+    return Object.keys(counts).map(f=>f+' '+counts[f]).join(' · ');
+  }catch(e){ return ''; }
 }
 function dismissResume(){ const el=document.getElementById('draftBanner'); if(el){ el.style.display='none'; el.innerHTML=''; } }
 async function resumeDraft(name){
+  const day=name.replace(/\.json$/i,'');
+  // Opening a draft REPLACES what's on screen. Today's work is already autosaved to
+  // ClinicalVault (SharePoint keeps versions), but the switch still has to be deliberate.
+  if(_wsHasContent() && day!==WS.draftDay){
+    if(!confirm('Open '+day+'?\n\nIt will replace what\'s on screen. Today\'s work is saved in ClinicalVault, so nothing is lost — but make sure you meant to switch days.')) return;
+  }
   _draftStatus('Opening…','busy');
   const obj=await loadDraft(name);
-  if(obj && applyDraft(obj)){ dismissResume(); toast('Opened '+name.replace(/\.json$/i,'')); _draftStatus('☁ restored '+_hm(),'ok'); }
+  if(obj && applyDraft(obj, day)){ showResumeBanner(null); toast('Opened '+day); _draftStatus('☁ restored '+_hm(),'ok'); }
   else { toast('Could not open that draft'); _draftStatus('⚠ open failed','warn'); }
 }
 function openResume(){ if(!DRAFTS_ENABLED()){ toast('Sign in to see saved work'); return; } _draftStatus('☁ checking…','busy'); listDrafts().then(showResumeBanner).catch(()=>{}); }
+
+/* ---------- day banner: which DAY is on screen ----------
+   Quiet when it's today. LOUD (amber, same family as the carry-forward banner) when a
+   resumed prior day is open — with the facilities on that card, so it doubles as the
+   facility indicator Scott asked for. Dismissable; reappears on the next day switch. */
+function _fmtDayKey(key){
+  const m=String(key||'').match(/^(\d{4})-(\d{2})-(\d{2})$/); if(!m) return String(key||'');
+  const d=new Date(+m[1], +m[2]-1, +m[3]);
+  return d.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});
+}
+function paintDayBanner(){
+  const el=document.getElementById('dayBanner'); if(!el) return;
+  const day=WS&&WS.draftDay, today=_todayKey();
+  if(!day || day===today || WS.dayBannerHidden){ el.style.display='none'; el.innerHTML=''; return; }
+  const facs=_draftFacSummary(WS);
+  el.className='wh-banner wh-warn';
+  el.style.display='';
+  el.innerHTML='⚠ <b>You\'re viewing '+esc(_fmtDayKey(day))+'\'s work</b>'
+    + (facs?' — '+esc(facs):'')
+    + ' — not today ('+esc(_fmtDayKey(today))+'). New edits autosave under today.'
+    + ' <button class="rb-x" style="float:right" title="Hide" onclick="WS.dayBannerHidden=true;saveWS();paintDayBanner()">✕</button>';
+}
+try{ paintDayBanner(); }catch(e){}
 
 function closeHandoff(){ document.getElementById('handoffModal').style.display='none';
   document.getElementById('handoffCard').innerHTML='';   // clear the ho_ fields so they can't be misread once the modal is closed
