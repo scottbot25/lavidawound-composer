@@ -51,6 +51,8 @@
   .pill{background:#eef4f3; color:var(--teal-dark); border-radius:999px; padding:3px 10px;
     font-size:12px; font-weight:700}
   .muted{color:var(--muted); font-size:13px}
+  .calc{color:var(--teal-dark); font-size:12.5px; font-weight:700; margin:6px 0 2px; min-height:1px}
+  .other-box{margin-top:6px}
   .tabs{display:flex; gap:8px; overflow-x:auto; padding:10px 14px 0; -webkit-overflow-scrolling:touch}
   .tab{white-space:nowrap; border:1px solid var(--line); background:#fff; border-radius:999px;
     padding:8px 14px; font-size:14px; font-weight:600; cursor:pointer; min-height:40px}
@@ -225,6 +227,16 @@ function activePt(){ return S.pts[S.active] || null; }
 
 /* Size prints only what was actually measured — a bare "cm" or a half-filled
    dimension string is worse than saying nothing. */
+/* Surface area = L × W, volume = L × W × D (same simple model as the composer). Returns null
+   until the needed dimensions are present, so a half-filled size never shows a bogus number. */
+function calcArea(w){ const a=parseFloat(w.l), b=parseFloat(w.w); return (isFinite(a)&&isFinite(b))? a*b : null; }
+function calcVol(w){ const a=parseFloat(w.l), b=parseFloat(w.w), c=parseFloat(w.d); return (isFinite(a)&&isFinite(b)&&isFinite(c))? a*b*c : null; }
+function calcText(w){
+  const ar=calcArea(w); if(ar==null) return '';
+  let s='Surface area '+ar.toFixed(1)+' cm²';
+  const vol=calcVol(w); if(vol!=null) s+='  ·  Volume '+vol.toFixed(1)+' cm³';
+  return s;
+}
 function sizeText(w){
   const has = x => String(x||'').trim() !== '';
   if(!has(w.l) && !has(w.w) && !has(w.d)) return '';
@@ -232,12 +244,17 @@ function sizeText(w){
   let s = dim(w.l)+' × '+dim(w.w);
   if(has(w.d)) s += ' × '+dim(w.d);
   s += ' cm';
-  if(has(w.l) && has(w.w)){
-    const a = parseFloat(w.l), b = parseFloat(w.w);
-    if(isFinite(a) && isFinite(b)) s += '  (area ' + (a*b).toFixed(1) + ' cm²)';
+  const ar=calcArea(w);
+  if(ar!=null){
+    let extra='area '+ar.toFixed(1)+' cm²';
+    const vol=calcVol(w); if(vol!=null) extra+=', volume '+vol.toFixed(1)+' cm³';
+    s += '  ('+extra+')';
   }
   return s;
 }
+/* A dropdown value of "Other" carries the specifics in a companion <field>Other box —
+   resolve to that free text for the sheet/record (falls back to the bare "Other"). */
+function disp(w,field){ return w[field]==='Other' ? (String(w[field+'Other']||'').trim() || 'Other') : w[field]; }
 /* Stage only exists for pressure wounds — that's the nurses' own rule ("if pressure, what stage"). */
 function isPressure(w){ return /^Pressure/.test(w.type||''); }
 
@@ -341,9 +358,15 @@ function delWound(i){
 function setW(i,f,val){
   const p=activePt(); if(!p) return;
   p.wounds[i][f]=val; save();
-  /* Type drives whether Stage is even a question -> repaint that card only */
-  if(f==='type') render();
+  /* Categorical selects re-render: Type toggles the Stage question, and any of them may now
+     read "Other" (which reveals its free-text box) or leave it. Selects don't lose focus, so a
+     repaint is safe here. */
+  if(['type','stage','drain','odor','status'].indexOf(f)>=0){ render(); return; }
+  /* Size inputs are TEXT — never re-render (would drop the keyboard). Just refresh the live calc. */
+  if(f==='l'||f==='w'||f==='d'){ const el=document.getElementById('calc_'+i); if(el) el.textContent=calcText(p.wounds[i]); }
 }
+/* The free-text that a dropdown's "Other" reveals. No re-render — keep the box focused while typing. */
+function setWOther(i,f,val){ const p=activePt(); if(!p) return; p.wounds[i][f+'Other']=val; save(); }
 
 /* ---------- render ---------- */
 function paintCount(){
@@ -357,9 +380,21 @@ function paintTabs(){
     esc((p.name||'').trim() || 'Patient '+(i+1))+'</button>').join('')
     + '<button class="tab" onclick="addPt()">+ Patient</button>';
 }
+/* A categorical dropdown that always offers an "Other" escape; picking "Other" reveals a
+   free-text box (bound to <field>Other) so a value that's off the list is never lost. */
+function selField(i,w,field,list){
+  const cur=w[field]||'';
+  const opts=list.indexOf('Other')>=0 ? list : list.concat('Other');
+  let h='<select onchange="setW('+i+',\''+field+'\',this.value)"><option value=""></option>'
+    + opts.map(o=>'<option'+(o===cur?' selected':'')+'>'+esc(o)+'</option>').join('')
+    + '</select>';
+  if(cur==='Other'){
+    h+='<input class="other-box" value="'+esc(w[field+'Other']||'')+'" placeholder="type it" '
+      + 'oninput="setWOther('+i+',\''+field+'\',this.value)">';
+  }
+  return h;
+}
 function woundHTML(w,i){
-  const opt=(list,cur)=> ['<option value=""></option>'].concat(
-      list.map(o=>'<option'+(o===cur?' selected':'')+'>'+esc(o)+'</option>')).join('');
   return '<div class="card">'
     + '<div class="wound-head"><b>Wound '+(i+1)+'</b>'
     + '<button class="tiny no-print" onclick="delWound('+i+')">Remove</button></div>'
@@ -369,12 +404,9 @@ function woundHTML(w,i){
     + 'oninput="setW('+i+',\'loc\',this.value)">'
 
     + '<label>Type</label>'
-    + '<select onchange="setW('+i+',\'type\',this.value)">'+opt(WOUND_TYPES,w.type)+'</select>'
+    + selField(i,w,'type',WOUND_TYPES)
 
-    + (isPressure(w)
-        ? '<label>Stage</label><select onchange="setW('+i+',\'stage\',this.value)">'
-          + opt(STAGES,w.stage)+'</select>'
-        : '')
+    + (isPressure(w) ? '<label>Stage</label>'+selField(i,w,'stage',STAGES) : '')
 
     + '<label>Size (cm)</label>'
     + '<div class="dims">'
@@ -382,15 +414,16 @@ function woundHTML(w,i){
     +   '<input inputmode="decimal" value="'+esc(w.w)+'" placeholder="width"  oninput="setW('+i+',\'w\',this.value)">'
     +   '<input inputmode="decimal" value="'+esc(w.d)+'" placeholder="depth"  oninput="setW('+i+',\'d\',this.value)">'
     + '</div>'
+    + '<div class="calc" id="calc_'+i+'">'+esc(calcText(w))+'</div>'
 
     + '<label>Drainage</label>'
-    + '<select onchange="setW('+i+',\'drain\',this.value)">'+opt(DRAINAGE,w.drain)+'</select>'
+    + selField(i,w,'drain',DRAINAGE)
 
     + '<label>Odor</label>'
-    + '<select onchange="setW('+i+',\'odor\',this.value)">'+opt(ODOR,w.odor)+'</select>'
+    + selField(i,w,'odor',ODOR)
 
     + '<label>Status</label>'
-    + '<select onchange="setW('+i+',\'status\',this.value)">'+opt(STATUS,w.status)+'</select>'
+    + selField(i,w,'status',STATUS)
 
     + '<label>Orders</label>'
     + '<textarea placeholder="what the nurse should do — dressing, frequency, offloading, re-check" '
@@ -436,11 +469,11 @@ function sheetText(){
     p.wounds.forEach((w,i)=>{
       L.push('');
       L.push('  Wound '+(i+1)+' — '+v(w.loc));
-      L.push('    Type:     '+v(w.type) + (isPressure(w) ? '   Stage: '+v(w.stage) : ''));
+      L.push('    Type:     '+v(disp(w,'type')) + (isPressure(w) ? '   Stage: '+v(disp(w,'stage')) : ''));
       L.push('    Size:     '+v(sizeText(w)));
-      L.push('    Drainage: '+v(w.drain));
-      L.push('    Odor:     '+v(w.odor));
-      L.push('    Status:   '+v(w.status));
+      L.push('    Drainage: '+v(disp(w,'drain')));
+      L.push('    Odor:     '+v(disp(w,'odor')));
+      L.push('    Status:   '+v(disp(w,'status')));
       L.push('    ORDERS:   '+v(w.orders));
     });
     if((p.edu||'').trim()){
@@ -475,12 +508,12 @@ function sheetHTML(){
     b += '<div class="pt"><h2>'+esc(v(p.name))+'</h2>';
     p.wounds.forEach((w,i)=>{
       b += '<div class="w"><b>Wound '+(i+1)+' — '+esc(v(w.loc))+'</b><table>'
-         + '<tr><td class="k">Type</td><td>'+esc(v(w.type))+'</td></tr>'
-         + (isPressure(w) ? '<tr><td class="k">Stage</td><td>'+esc(v(w.stage))+'</td></tr>' : '')
+         + '<tr><td class="k">Type</td><td>'+esc(v(disp(w,'type')))+'</td></tr>'
+         + (isPressure(w) ? '<tr><td class="k">Stage</td><td>'+esc(v(disp(w,'stage')))+'</td></tr>' : '')
          + '<tr><td class="k">Size</td><td>'+esc(v(sizeText(w)))+'</td></tr>'
-         + '<tr><td class="k">Drainage</td><td>'+esc(v(w.drain))+'</td></tr>'
-         + '<tr><td class="k">Odor</td><td>'+esc(v(w.odor))+'</td></tr>'
-         + '<tr><td class="k">Status</td><td>'+esc(v(w.status))+'</td></tr>'
+         + '<tr><td class="k">Drainage</td><td>'+esc(v(disp(w,'drain')))+'</td></tr>'
+         + '<tr><td class="k">Odor</td><td>'+esc(v(disp(w,'odor')))+'</td></tr>'
+         + '<tr><td class="k">Status</td><td>'+esc(v(disp(w,'status')))+'</td></tr>'
          + '<tr><td class="k">Orders</td><td class="ord">'+esc(v(w.orders))+'</td></tr>'
          + '</table></div>';
     });
