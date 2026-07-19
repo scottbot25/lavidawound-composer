@@ -664,7 +664,24 @@ async function _getPca(){
   await _pca.initialize();
   return _pca;
 }
+/* When shown inside the composer overlay (an iframe), NEVER run our own interactive auth — a redirect
+   would navigate the iframe. Ask the parent composer (which owns the signed-in session) for a token. */
+function _tokenFromParent(){
+  return new Promise((resolve,reject)=>{
+    const id='rt'+Date.now()+'_'+Math.floor(Math.random()*1e6);
+    const to=setTimeout(()=>{ window.removeEventListener('message',h); reject(new Error('Couldn’t get access from the composer — make sure you’re signed in there, then tap Save again.')); }, 20000);
+    function h(e){ if(e.origin!==location.origin) return; const d=e.data;
+      if(!d || d.type!=='rc-token-response' || d.id!==id) return;
+      clearTimeout(to); window.removeEventListener('message',h);
+      if(d.token) resolve(d.token); else reject(new Error(d.error||'The composer couldn’t provide access.'));
+    }
+    window.addEventListener('message',h);
+    try{ parent.postMessage({type:'rc-token-request', id, scopes:VAULT_CFG.scopes}, location.origin); }
+    catch(e){ clearTimeout(to); window.removeEventListener('message',h); reject(e); }
+  });
+}
 async function _vaultToken(){
+  if(window.self!==window.top) return await _tokenFromParent();
   const pca=await _getPca(), req={scopes:VAULT_CFG.scopes};
   const acct=pca.getAllAccounts()[0];
   if(acct){ try{ return (await pca.acquireTokenSilent(Object.assign({account:acct},req))).accessToken; }catch(e){} }
