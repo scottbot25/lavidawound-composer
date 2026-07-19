@@ -290,6 +290,7 @@
   </div>
   <label class="pt-field" title="For your reference and the facility handoff only — this is never copied into the PCC note.">Patient <input id="patientName" placeholder="name / ID — not copied into the note" oninput="onPatientInput(this.value)"></label>
   <button id="handoffBtn" class="primary" onclick="openHandoff()" title="Open the facility handoff for today’s patients." style="padding:8px 15px;display:inline-flex;align-items:center;gap:8px;box-shadow:0 1px 5px rgba(15,138,124,.4)">📄 Facility Handoff<span id="rosterCount" style="background:rgba(255,255,255,.28);border-radius:999px;padding:1px 9px;font-size:12.5px;font-weight:700;min-width:22px;text-align:center;display:none">0</span></button>
+  <a id="roundCardLink" href="round-card.html" target="_blank" rel="noopener" title="Bedside Round Card — quick wound orders for the nurse, same tool as on the phone. Opens in a new tab." style="text-decoration:none;padding:8px 15px;border:1px solid var(--accent);border-radius:9px;color:var(--accent);font-weight:650;display:inline-flex;align-items:center;gap:8px;background:#fff">🩹 Round Card</a>
   <span id="authUser" class="auth-user"></span>
   <button id="resumeBtn" class="ghost" onclick="openResume()" title="Reopen a saved day's work from ClinicalVault" style="display:none;padding:7px 11px">☁ Resume</button>
   <span id="draftStatus" class="draft-status"></span>
