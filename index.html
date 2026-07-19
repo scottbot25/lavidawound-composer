@@ -291,7 +291,7 @@
     <button id="tab-fu" onclick="setMode('fu')">Follow-Up · Weekly</button>
   </div>
   <label class="pt-field" title="For your reference and the facility handoff only — this is never copied into the PCC note.">Patient <input id="patientName" placeholder="name / ID — not copied into the note" oninput="onPatientInput(this.value)"></label>
-  <button id="handoffBtn" class="primary" onclick="openHandoff()" title="Open the facility handoff for today’s patients." style="padding:8px 15px;display:inline-flex;align-items:center;gap:8px;box-shadow:0 1px 5px rgba(15,138,124,.4)">📄 Facility Handoff<span id="rosterCount" style="background:rgba(255,255,255,.28);border-radius:999px;padding:1px 9px;font-size:12.5px;font-weight:700;min-width:22px;text-align:center;display:none">0</span></button>
+  <button id="handoffBtn" onclick="openHandoff()" title="Set or correct each patient’s facility (and Dx/date/provider). Facility handoffs are now sent from the Round Card." style="cursor:pointer;padding:8px 15px;border:1px solid var(--line);border-radius:9px;color:var(--ink);font-weight:650;background:#fff;display:inline-flex;align-items:center;gap:8px">🏥 Facilities<span id="rosterCount" style="background:var(--panel2);color:var(--muted);border-radius:999px;padding:1px 9px;font-size:12.5px;font-weight:700;min-width:22px;text-align:center;display:none">0</span></button>
   <button id="roundCardBtn" onclick="openRoundCard()" title="Bedside Round Card — quick wound orders for the nurse, same tool as on the phone. Opens over the composer." style="cursor:pointer;padding:8px 15px;border:1px solid var(--accent);border-radius:9px;color:var(--accent);font-weight:650;display:inline-flex;align-items:center;gap:8px;background:#fff">🩹 Round Card</button>
   <span id="authUser" class="auth-user"></span>
   <button id="resumeBtn" class="ghost" onclick="openResume()" title="Reopen a saved day's work from ClinicalVault" style="display:none;padding:7px 11px">☁ Resume</button>
@@ -1254,13 +1254,13 @@ function updateRosterBadge(){
   const el=document.getElementById('rosterCount'); if(!el) return;
   const n=rosterGet().length;
   el.textContent=n; el.style.display = n>0 ? '' : 'none';
-  const unsaved = n>0 && !rosterSavedGet();
-  el.style.background = unsaved ? '#f4b740' : 'rgba(255,255,255,.28)';   // amber = unsaved patients in the handoff
-  el.style.color = unsaved ? '#3a2d00' : '';
+  // Handoff DELIVERY moved to the Round Card, so there is no "unsaved handoff" state here anymore —
+  // this button just opens facility correction. Plain count, no amber nag.
+  el.style.background='var(--panel2)'; el.style.color='var(--muted)';
   const btn=document.getElementById('handoffBtn');
   if(btn) btn.title = n>0
-    ? (unsaved ? n+' named patient'+(n>1?'s':'')+' in today’s handoff — NOT yet saved. Save to ClinicalVault before closing the tab.' : n+' patient'+(n>1?'s':'')+' in today’s handoff, saved to ClinicalVault.')
-    : 'Open the facility handoff for today’s patients.';
+    ? (n+' patient'+(n>1?'s':'')+' this round — click to set or correct each one’s facility. Handoffs are sent from the Round Card.')
+    : 'Set or correct each patient’s facility. Handoffs are sent from the Round Card.';
 }
 function renderPatient(p){
   const row=(l,v)=>'<tr><td class="l">'+esc(l)+'</td><td>'+esc(hoVal(v))+'</td></tr>';
@@ -1820,8 +1820,9 @@ function openHandoff(){
   const card=document.getElementById('handoffCard'); const rnd=WS.round||{}; const ap=activePt()||{};
   const claims=JSON.parse(sessionStorage.getItem('id_claims')||'{}'); const today=todayISO();
   card.innerHTML=
-   '<div class="ho-head"><b>Facility Handoff</b><button class="ho-x" onclick="closeHandoff()">✕</button></div>'+
+   '<div class="ho-head"><b>Patient facility &amp; details</b><button class="ho-x" onclick="closeHandoff()">✕</button></div>'+
    '<div class="ho-body">'+
+     '<div class="ho-note" style="background:#eef7f5;border:1px solid var(--accent);color:#0c6d61"><b>📱 Facility handoffs are now sent from the Round Card.</b> Use this window to set or correct each patient’s facility (and Dx / date / provider) — that keeps the note, the wound-history, and the Round Card all filed under the right building.</div>'+
      '<div class="ho-grid">'+
        '<div><label>Patient (name or ID) <span style="color:var(--muted);font-weight:400">— this patient</span></label><input id="ho_patient" value="'+esc(getPatient())+'"></div>'+
        '<div><label>Facility <span style="color:var(--accent);font-weight:400">— this patient</span></label>'+facilitySelectHTML('ho_facility','', ap.facility||'')+'</div>'+
@@ -1829,9 +1830,7 @@ function openHandoff(){
        '<div><label>Provider <span style="color:var(--accent);font-weight:400">— whole round</span></label><input id="ho_provider" value="'+esc(rnd.provider||claims.name||'')+'"></div>'+
        '<div><label>Dx / ICD-10 <span style="color:var(--muted);font-weight:400">— this patient, copy from EMR</span></label><input id="ho_dx" placeholder="copy from EMR (e.g. L89.153, E11.621)" value="'+esc(ap.dx||'')+'"></div>'+
      '</div>'+
-     '<div class="ho-note"><b style="color:var(--accent)">Facility &amp; Dx belong to THIS patient; Date &amp; Provider apply to the whole round.</b> Changing this patient’s facility moves only them. Wound findings, procedure &amp; orders pull automatically from each note. <b>Closing this window keeps everything</b> — the workspace clears only when you close the browser tab, so save each facility below to keep it.</div>'+
-     '<div class="ho-note" style="margin-top:-2px">Download / Print leave a copy of this PHI <b>on this computer</b> — on a shared or unencrypted device prefer <b>☁ Save to ClinicalVault</b>, which stores nothing locally. Email opens a draft in your mail app (also copied to your clipboard — paste with <b>Ctrl+V</b> if it looks empty); the recipient is limited to the approved contact — <b>check it and send yourself</b>.</div>'+
-     '<div id="handoffGroups"></div>'+
+     '<div class="ho-note"><b style="color:var(--accent)">Facility &amp; Dx belong to THIS patient; Date &amp; Provider apply to the whole round.</b> Changing this patient’s facility moves only them. <b>Closing this window keeps everything</b> — the workspace clears only when you close the browser tab.</div>'+
    '</div>';
   // date + provider are round-level; patient name + Dx are per-patient — all fine to save on each keystroke.
   ['patient','date','provider','dx'].forEach(k=>{ document.getElementById('ho_'+k).oninput=()=>{ if(k==='patient'){ setPatient(document.getElementById('ho_patient').value); syncPatientField(); updateRosterBadge(); } saveHandoff(); renderHandoffGroups(); }; });
@@ -2858,11 +2857,9 @@ function _hardenPHIInput(el){
 })();
 
 // Guard against accidental loss: the running handoff list lives only for this browser tab, so warn
-// if the provider tries to close/reload the tab while patients are in the list and it hasn't been
-// captured (ClinicalVault / download / print / email) yet. Browsers show their own generic prompt.
-window.addEventListener('beforeunload', (e)=>{
-  if(rosterGet().length>0 && !rosterSavedGet()){ e.preventDefault(); e.returnValue=''; return ''; }
-});
+// (Retired 2026-07-19.) The old "you haven't sent the handoff" close-warning is gone — facility
+// handoffs are now sent from the Round Card, and the composer's own note is protected by the
+// ClinicalVault draft-autosave + Resume below, so there's nothing here to lose on close.
 // Best-effort flush of the ClinicalVault autosave when the tab is hidden (switched away / closing) —
 // so the pending debounced draft lands before the session can be torn down. No-op unless signed in.
 document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='hidden' && typeof flushDraftSave==='function') flushDraftSave(); });
