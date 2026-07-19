@@ -249,9 +249,13 @@ function isPressure(w){ return /^Pressure/.test(w.type||''); }
    private ops vault and get added at go-live. The escape options mean a missing name never
    blocks a round — it's remembered for the rest of the session. */
 const FACILITIES = ['University Heights','Crestmoor'];
-const PROVIDERS  = ['Dr. Shevie Kassai','Abby Mehler'];
+/* Names match the QC tracker's provider list EXACTLY (QC-COUNT-FEED-SPEC.md) — the
+   qcfeed.v1 provider string flows into that tracker, and identical spelling beats
+   fuzzy matching. Rounding-now first. */
+const PROVIDERS  = ['Dr. Kassai','Abby Mehler','Kendra Keene','Lolita Hanks','Molly Morris'];
 function _optList(base,extra,cur){
-  const list=base.concat(extra||[]);
+  const list=base.slice();
+  (extra||[]).forEach(x=>{ if(list.indexOf(x)<0) list.push(x); });   // dedupe: a session-add may later join the seeded list
   cur=(cur||'').trim();
   if(cur && list.indexOf(cur)<0) list.push(cur);   // whatever is stored stays selectable
   return list;
@@ -711,8 +715,19 @@ async function saveVault(){
       const jb=new Blob([JSON.stringify(rec)],{type:'application/json'});
       await _vaultUpload(token,driveId,recSegs,ptSlug(p.name)+'.json',jb,'application/json');
     }
+    /* QC count feed (QC-COUNT-FEED-SPEC.md, Scott 2026-07-19): one COUNT-ONLY record per
+       facility+provider+date so the QC program can catch visits that never became a PCC
+       note. Deliberately no names — a bare count is not PHI, so this feed can later flow
+       outside the vault (Power Automate → QC tracker) with zero HIPAA friction.
+       `patientCount` is the contract field name — don't rename casually. */
+    st('Logging QC count…');
+    await _vaultEnsureFolders(token,driveId,['QC Feed']);
+    const qc={ schema:'qcfeed.v1', date:date, facility:S.round.fac||'', provider:S.round.prov||'',
+      patientCount:pts.length, savedAt:new Date().toISOString() };
+    await _vaultUpload(token,driveId,['QC Feed'], date+' — '+fac+' — '+prov+'.json',
+      new Blob([JSON.stringify(qc)],{type:'application/json'}),'application/json');
     st('✓ Saved');
-    _vaultResultShow(true,'Sheet + '+pts.length+' patient record'+(pts.length===1?'':'s')+' saved to ClinicalVault.',item&&item.webUrl);
+    _vaultResultShow(true,'Sheet + '+pts.length+' patient record'+(pts.length===1?'':'s')+' + QC count saved to ClinicalVault.',item&&item.webUrl);
     setTimeout(()=>{ st('☁ Save to ClinicalVault'); btn.disabled=false; },2500);
   }catch(e){
     if(/redirecting/.test((e&&e.message)||'')){ st('Redirecting to sign-in…'); return; }   // page is navigating away
