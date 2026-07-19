@@ -93,7 +93,7 @@
     <div class="sub" id="hdrSub">orders for the nurse, before you leave</div>
   </div>
   <div class="row" style="gap:8px;flex:0 0 auto">
-    <a href="index.html" title="Back to the Note Composer" style="color:#fff;text-decoration:none;border:1px solid rgba(255,255,255,.55);border-radius:8px;padding:7px 11px;font-size:13px;font-weight:600">Notes</a>
+    <a id="rcNotesLink" href="index.html" title="Back to the Note Composer" style="color:#fff;text-decoration:none;border:1px solid rgba(255,255,255,.55);border-radius:8px;padding:7px 11px;font-size:13px;font-weight:600">Notes</a>
     <button class="tiny" onclick="clearAll()" title="Wipe this round from the phone">Clear</button>
   </div>
 </header>
@@ -860,6 +860,9 @@ function clearAll(){
 /* ---------- boot ---------- */
 if(!S.round.date) S.round.date=todayISO();
 paintRound(); render(); save();
+/* When shown inside the composer's overlay (an iframe), the "Notes" link would load the
+   composer INSIDE this frame — hide it; the overlay's ✕ Close is the way back. */
+if(window.self !== window.top){ const n=document.getElementById('rcNotesLink'); if(n) n.style.display='none'; }
 </script>
 </body>
 </html>
