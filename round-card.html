@@ -84,7 +84,10 @@
     <h1>Round Card</h1>
     <div class="sub" id="hdrSub">orders for the nurse, before you leave</div>
   </div>
-  <button class="tiny" onclick="clearAll()" title="Wipe this round from the phone">Clear</button>
+  <div class="row" style="gap:8px;flex:0 0 auto">
+    <a href="index.html" title="Back to the Note Composer" style="color:#fff;text-decoration:none;border:1px solid rgba(255,255,255,.55);border-radius:8px;padding:7px 11px;font-size:13px;font-weight:600">Notes</a>
+    <button class="tiny" onclick="clearAll()" title="Wipe this round from the phone">Clear</button>
+  </div>
 </header>
 
 <div class="wrap">
@@ -165,9 +168,17 @@ const FACILITY_CONTACTS = [
   { name: 'TEST — admin inbox (not a real facility)', email: 'admin@lavidaheal.com' },
 ];
 
-const WOUND_TYPES = ['Pressure','Diabetic / neuropathic','Venous','Arterial','Surgical','Trauma','Moisture-associated','Other'];
-const STAGES      = ['Stage 1','Stage 2','Stage 3','Stage 4','Unstageable','Deep tissue injury'];
+/* Option lists are kept in step with the Note Composer's note template on purpose:
+   the card feeds the composer later (Phase 3), so a value picked here must map 1:1 to
+   what the composer expects. Source of truth = the composer macro
+   (Etiology / Stage / Drainage / odor / Status lines). */
+const WOUND_TYPES = ['Pressure injury','Diabetic ulcer','Venous','Arterial','Surgical','Traumatic','MASD','Other'];
+const STAGES      = ['Stage 1','Stage 2','Stage 3','Stage 4','Unstageable','DTI'];
 const DRAINAGE    = ['None','Scant','Small','Moderate','Large'];
+const ODOR        = ['None','Mild','Strong'];
+/* Facility wants just the three-state trend. "Improving" (not "Improved") matches the
+   composer note's Status wording so a Phase-3 pre-fill copies straight across. */
+const STATUS      = ['Improving','Stable','Worsening'];
 
 /* ---------- state: sessionStorage only, wipes on tab close ---------- */
 const KEY = 'lavida_roundcard';
@@ -188,8 +199,8 @@ function v(s){ s=(s==null?'':String(s)).trim(); return s || '—'; }
 function toast(m){ const t=document.getElementById('toast'); t.textContent=m; t.classList.add('on');
   clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove('on'),2600); }
 
-function newWound(){ return { loc:'', type:'', stage:'', l:'', w:'', d:'', drain:'', orders:'' }; }
-function newPt(){ return { name:'', wounds:[newWound()] }; }
+function newWound(){ return { loc:'', type:'', stage:'', l:'', w:'', d:'', drain:'', odor:'', status:'', orders:'' }; }
+function newPt(){ return { name:'', edu:'', wounds:[newWound()] }; }
 function activePt(){ return S.pts[S.active] || null; }
 
 /* Size prints only what was actually measured — a bare "cm" or a half-filled
@@ -311,6 +322,12 @@ function woundHTML(w,i){
     + '<label>Drainage</label>'
     + '<select onchange="setW('+i+',\'drain\',this.value)">'+opt(DRAINAGE,w.drain)+'</select>'
 
+    + '<label>Odor</label>'
+    + '<select onchange="setW('+i+',\'odor\',this.value)">'+opt(ODOR,w.odor)+'</select>'
+
+    + '<label>Status</label>'
+    + '<select onchange="setW('+i+',\'status\',this.value)">'+opt(STATUS,w.status)+'</select>'
+
     + '<label>Orders</label>'
     + '<textarea placeholder="what the nurse should do — dressing, frequency, offloading, re-check" '
     + 'oninput="setW('+i+',\'orders\',this.value)">'+esc(w.orders)+'</textarea>'
@@ -333,7 +350,12 @@ function render(){
     +   '<button class="tiny" onclick="delPt('+S.active+')">Remove patient</button></div>'
     + '</div>'
     + p.wounds.map(woundHTML).join('')
-    + '<button class="ghost no-print" onclick="addWound()">+ Add another wound</button>';
+    + '<button class="ghost no-print" onclick="addWound()">+ Add another wound</button>'
+    + '<div class="card" style="margin-top:14px">'
+    +   '<label for="p_edu">Additional info, plan &amp; education</label>'
+    +   '<textarea id="p_edu" placeholder="plan, patient education, tunneling / undermining, precautions — anything else for the nurse" '
+    +   'oninput="setPt(\'edu\',this.value)">'+esc(p.edu||'')+'</textarea>'
+    + '</div>';
 }
 
 /* ---------- the sheet the nurse gets ---------- */
@@ -353,8 +375,15 @@ function sheetText(){
       L.push('    Type:     '+v(w.type) + (isPressure(w) ? '   Stage: '+v(w.stage) : ''));
       L.push('    Size:     '+v(sizeText(w)));
       L.push('    Drainage: '+v(w.drain));
+      L.push('    Odor:     '+v(w.odor));
+      L.push('    Status:   '+v(w.status));
       L.push('    ORDERS:   '+v(w.orders));
     });
+    if((p.edu||'').trim()){
+      L.push('');
+      L.push('  Additional info, plan & education:');
+      L.push('    '+p.edu.trim());
+    }
     L.push('');
   });
   L.push('----------------------------------------');
@@ -386,9 +415,15 @@ function sheetHTML(){
          + (isPressure(w) ? '<tr><td class="k">Stage</td><td>'+esc(v(w.stage))+'</td></tr>' : '')
          + '<tr><td class="k">Size</td><td>'+esc(v(sizeText(w)))+'</td></tr>'
          + '<tr><td class="k">Drainage</td><td>'+esc(v(w.drain))+'</td></tr>'
+         + '<tr><td class="k">Odor</td><td>'+esc(v(w.odor))+'</td></tr>'
+         + '<tr><td class="k">Status</td><td>'+esc(v(w.status))+'</td></tr>'
          + '<tr><td class="k">Orders</td><td class="ord">'+esc(v(w.orders))+'</td></tr>'
          + '</table></div>';
     });
+    if((p.edu||'').trim()){
+      b += '<div class="w" style="border-left-color:#888"><b>Additional info, plan &amp; education</b>'
+         + '<div style="font-size:11.5pt">'+esc(p.edu.trim())+'</div></div>';
+    }
     b += '</div>';
   });
   b += '<div class="ft">Care-coordination orders for facility use. Not an official medical record, '
@@ -401,7 +436,8 @@ function sheetHTML(){
 /* Has the provider actually put anything into this patient? Used to tell an empty
    just-tapped-+Patient card apart from one with real work in it. */
 function hasContent(p){
-  return p.wounds.some(w => ['loc','type','stage','l','w','d','drain','orders']
+  if(String(p.edu||'').trim()) return true;
+  return p.wounds.some(w => ['loc','type','stage','l','w','d','drain','odor','status','orders']
     .some(f => String(w[f]||'').trim()));
 }
 function findGaps(){
@@ -420,6 +456,7 @@ function findGaps(){
       const tag = named+' · wound '+(i+1);
       if(!(w.orders||'').trim()) g.push(tag+': no orders — the nurse gets nothing to do');
       if(!(w.loc||'').trim())    g.push(tag+': no location');
+      if(!(w.status||'').trim()) g.push(tag+': no status (improving / stable / worsening)');
       if(isPressure(w) && !(w.stage||'').trim()) g.push(tag+': pressure wound with no stage');
     });
   });
