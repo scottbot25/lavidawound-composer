@@ -1149,10 +1149,12 @@ function val(id){ const e=document.getElementById(id); return e?e.value:''; }
 // and Dx are per-patient. Works whether or not the modal is open (falls back to the stored values).
 function currentHeader(){
   const r=WS.round||{}, p=activePt()||{};
+  const claims=JSON.parse(sessionStorage.getItem('id_claims')||'{}');
   const fld=(id,fb)=>{ const e=document.getElementById(id); return e ? e.value : fb; };
-  // Facility + Dx are per-patient (fall back to THIS patient's stored values); date + provider are round-level.
+  // The Reassign modal no longer edits date/provider, so default them here (today + signed-in provider)
+  // so the wound-history record + note stay populated. Facility + Dx fall back to this patient's stored values.
   return { patient:fld('ho_patient', getPatient()), facility:fld('ho_facility', p.facility||''),
-    date:fld('ho_date', r.date||''), provider:fld('ho_provider', r.provider||''), dx:fld('ho_dx', p.dx||'') };
+    date:fld('ho_date', r.date||todayISO()), provider:fld('ho_provider', r.provider||claims.name||''), dx:fld('ho_dx', p.dx||'') };
 }
 function saveHandoff(){ const h=currentHeader();
   WS.round=WS.round||{}; WS.round.date=h.date; WS.round.provider=h.provider;   // date + provider shared across the round
@@ -1816,40 +1818,53 @@ function renderHandoffGroups(){
 }
 // After a save, flip just this group's chip without a full re-render (so the vault result link survives).
 function markGroupSaved(gi){ const el=document.getElementById('grpSaved_'+gi); if(el){ el.textContent='✓ Saved to ClinicalVault'; el.classList.add('is-saved'); } }
+/* Reassign patient = a dead-simple 2-step: pick the patient (they already exist — a dropdown, never
+   free-typed), pick the building to move them to, Move. Facility is set on ADD (patient bar); this is
+   purely the "oops, wrong building" fix. */
 function openHandoff(){
-  const card=document.getElementById('handoffCard'); const rnd=WS.round||{}; const ap=activePt()||{};
-  const claims=JSON.parse(sessionStorage.getItem('id_claims')||'{}'); const today=todayISO();
+  const card=document.getElementById('handoffCard');
+  const LBL='display:block;font-size:12.5px;font-weight:650;color:var(--muted);margin:14px 0 5px';
+  const SEL='width:100%;box-sizing:border-box;padding:10px 12px;font:inherit;font-size:15px;border:1px solid var(--line);border-radius:9px;background:#fff;color:var(--ink)';
+  const pts=Object.keys(WS.patients)
+    .map(pid=>({pid, name:(WS.patients[pid].name||'').trim(), facility:(WS.patients[pid].facility||'').trim()}))
+    .filter(p=>p.name);
+  if(!pts.length){
+    card.innerHTML='<div class="ho-head"><b>Reassign patient</b><button class="ho-x" onclick="closeHandoff()">✕</button></div>'+
+      '<div class="ho-body"><div class="ho-note">No named patients yet — add a patient and give them a name first, then you can move them between buildings here.</div></div>';
+    document.getElementById('handoffModal').style.display='flex'; return;
+  }
+  const sel = pts.find(p=>p.pid===activePid) || pts[0];
+  const facs=facilityList(); if(sel.facility && facs.indexOf(sel.facility)<0) facs.push(sel.facility);
   card.innerHTML=
    '<div class="ho-head"><b>Reassign patient</b><button class="ho-x" onclick="closeHandoff()">✕</button></div>'+
    '<div class="ho-body">'+
-     '<div class="ho-note" style="background:#eef7f5;border:1px solid var(--accent);color:#0c6d61"><b>Move this patient to a different building</b> with the Facility dropdown below — it re-files their note + wound-history under the right facility and moves only them. <span style="color:var(--muted)">(Date / provider apply to the whole round. Facility handoffs are sent from the Round Card.)</span></div>'+
-     '<div class="ho-grid">'+
-       '<div><label>Patient (name or ID) <span style="color:var(--muted);font-weight:400">— this patient</span></label><input id="ho_patient" value="'+esc(getPatient())+'"></div>'+
-       '<div><label>Facility <span style="color:var(--accent);font-weight:400">— this patient</span></label>'+facilitySelectHTML('ho_facility','', ap.facility||'')+'</div>'+
-       '<div><label>Date of service <span style="color:var(--accent);font-weight:400">— whole round</span></label><input id="ho_date" type="date" value="'+esc(rnd.date||today)+'"></div>'+
-       '<div><label>Provider <span style="color:var(--accent);font-weight:400">— whole round</span></label><input id="ho_provider" value="'+esc(rnd.provider||claims.name||'')+'"></div>'+
-       '<div><label>Dx / ICD-10 <span style="color:var(--muted);font-weight:400">— this patient, copy from EMR</span></label><input id="ho_dx" placeholder="copy from EMR (e.g. L89.153, E11.621)" value="'+esc(ap.dx||'')+'"></div>'+
-     '</div>'+
-     '<div class="ho-note"><b style="color:var(--accent)">Facility &amp; Dx belong to THIS patient; Date &amp; Provider apply to the whole round.</b> Changing this patient’s facility moves only them. <b>Closing this window keeps everything</b> — the workspace clears only when you close the browser tab.</div>'+
+     '<div class="ho-note">Moved a patient into the wrong building? Pick them and their correct building — it re-files just that patient (their note + wound-history).</div>'+
+     '<label style="'+LBL+'">Patient</label>'+
+     '<select id="ra_pt" style="'+SEL+'">'+ pts.map(p=>'<option value="'+esc(p.pid)+'"'+(p.pid===sel.pid?' selected':'')+'>'+esc(p.name)+'  —  '+esc(p.facility||'no building yet')+'</option>').join('') +'</select>'+
+     '<label style="'+LBL+'">Move to</label>'+
+     '<select id="ra_fac" style="'+SEL+'"><option value="">— choose building —</option>'+ facs.map(f=>'<option value="'+esc(f)+'"'+(f===sel.facility?' selected':'')+'>'+esc(f)+'</option>').join('') +'<option value="__add__">＋ Add a facility…</option></select>'+
+     '<div class="row" style="margin-top:16px"><button class="primary" style="flex:1" onclick="doReassign()">Move patient</button></div>'+
    '</div>';
-  // date + provider are round-level; patient name + Dx are per-patient — all fine to save on each keystroke.
-  ['patient','date','provider','dx'].forEach(k=>{ document.getElementById('ho_'+k).oninput=()=>{ if(k==='patient'){ setPatient(document.getElementById('ho_patient').value); syncPatientField(); updateRosterBadge(); } saveHandoff(); renderHandoffGroups(); }; });
-  // Facility is per-patient: on CHANGE (not each keystroke) re-stamp the active patient, keep it as the
-  // sticky default, and regroup. No scary "re-label everyone" prompt — it only ever moves this patient.
-  const fe=document.getElementById('ho_facility');
-  if(fe) fe.onchange=()=>{ const p=activePt();
-    let nf=(fe.value||'').trim();
-    if(nf==='__add__'){ const added=facilityAddPrompt(); if(!added){ fe.value=String((p||{}).facility||''); return; } nf=added;
-      // the header grid isn't re-rendered here, so add the new option to this select and select it
-      if(![].some.call(fe.options,o=>o.value===nf)) fe.add(new Option(nf,nf), fe.options[fe.options.length-1]);
-      fe.value=nf;
-    }
-    if(p && nf===String(p.facility||'').trim()) return;   // no real change
-    if(p) p.facility=nf; WS.round=WS.round||{}; WS.round.facility=nf; saveWS();
-    markWorkspaceEdited();   // moving a patient between facilities changes which sheets exist -> re-arm "unsaved"
-    if(MODE==='fu'){ _whPrior=null; if(typeof whApplyPrior==='function') whApplyPrior(); }
-    renderHandoffGroups(); renderPatientBar(); };
-  document.getElementById('handoffModal').style.display='flex'; renderHandoffGroups();
+  // Picking a different patient reflects THEIR current building in the "Move to" dropdown.
+  document.getElementById('ra_pt').onchange=function(){
+    const p=WS.patients[this.value], fac=(p&&p.facility||'').trim(), fe=document.getElementById('ra_fac');
+    if(fac && ![].some.call(fe.options,o=>o.value===fac)) fe.add(new Option(fac,fac), fe.options[fe.options.length-1]);
+    fe.value=fac;
+  };
+  document.getElementById('handoffModal').style.display='flex';
+}
+function doReassign(){
+  const pid=document.getElementById('ra_pt').value, p=WS.patients[pid]; if(!p){ closeHandoff(); return; }
+  const fe=document.getElementById('ra_fac'); let nf=(fe.value||'').trim();
+  if(nf==='__add__'){ const added=facilityAddPrompt(); if(!added){ fe.value=String(p.facility||''); return; } nf=added; }
+  if(!nf){ toast('Pick a building to move them to'); return; }
+  if(nf===String(p.facility||'').trim()){ toast((p.name||'They')+' are already in '+nf); closeHandoff(); return; }
+  p.facility=nf;
+  // If we moved the patient currently open in the form, refresh their carry-forward + sticky default.
+  if(pid===activePid){ WS.round=WS.round||{}; WS.round.facility=nf; if(MODE==='fu'){ _whPrior=null; if(typeof whApplyPrior==='function') whApplyPrior(); } }
+  saveWS(); markWorkspaceEdited(); renderPatientBar();
+  toast((p.name||'Patient')+' moved to '+nf);
+  closeHandoff();
 }
 
 /* ============ PARSER: build inline fillable controls, keep exact text ============ */
