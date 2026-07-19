@@ -291,7 +291,7 @@
     <button id="tab-fu" onclick="setMode('fu')">Follow-Up · Weekly</button>
   </div>
   <label class="pt-field" title="For your reference and the facility handoff only — this is never copied into the PCC note.">Patient <input id="patientName" placeholder="name / ID — not copied into the note" oninput="onPatientInput(this.value)"></label>
-  <button id="handoffBtn" onclick="openHandoff()" title="Set or correct each patient’s facility (and Dx/date/provider). Facility handoffs are now sent from the Round Card." style="cursor:pointer;padding:8px 15px;border:1px solid var(--line);border-radius:9px;color:var(--ink);font-weight:650;background:#fff;display:inline-flex;align-items:center;gap:8px">🏥 Facilities<span id="rosterCount" style="background:var(--panel2);color:var(--muted);border-radius:999px;padding:1px 9px;font-size:12.5px;font-weight:700;min-width:22px;text-align:center;display:none">0</span></button>
+  <button id="handoffBtn" onclick="openHandoff()" title="Move the current patient to a different building (and edit round date / provider). Facility handoffs are sent from the Round Card." style="cursor:pointer;padding:8px 15px;border:1px solid var(--line);border-radius:9px;color:var(--ink);font-weight:650;background:#fff;display:inline-flex;align-items:center;gap:8px">⇄ Reassign patient</button>
   <button id="roundCardBtn" onclick="openRoundCard()" title="Bedside Round Card — quick wound orders for the nurse, same tool as on the phone. Opens over the composer." style="cursor:pointer;padding:8px 15px;border:1px solid var(--accent);border-radius:9px;color:var(--accent);font-weight:650;display:inline-flex;align-items:center;gap:8px;background:#fff">🩹 Round Card</button>
   <span id="authUser" class="auth-user"></span>
   <button id="resumeBtn" class="ghost" onclick="openResume()" title="Reopen a saved day's work from ClinicalVault" style="display:none;padding:7px 11px">☁ Resume</button>
@@ -1820,9 +1820,9 @@ function openHandoff(){
   const card=document.getElementById('handoffCard'); const rnd=WS.round||{}; const ap=activePt()||{};
   const claims=JSON.parse(sessionStorage.getItem('id_claims')||'{}'); const today=todayISO();
   card.innerHTML=
-   '<div class="ho-head"><b>Patient facility &amp; details</b><button class="ho-x" onclick="closeHandoff()">✕</button></div>'+
+   '<div class="ho-head"><b>Reassign patient</b><button class="ho-x" onclick="closeHandoff()">✕</button></div>'+
    '<div class="ho-body">'+
-     '<div class="ho-note" style="background:#eef7f5;border:1px solid var(--accent);color:#0c6d61"><b>📱 Facility handoffs are now sent from the Round Card.</b> Use this window to set or correct each patient’s facility (and Dx / date / provider) — that keeps the note, the wound-history, and the Round Card all filed under the right building.</div>'+
+     '<div class="ho-note" style="background:#eef7f5;border:1px solid var(--accent);color:#0c6d61"><b>Move this patient to a different building</b> with the Facility dropdown below — it re-files their note + wound-history under the right facility and moves only them. <span style="color:var(--muted)">(Date / provider apply to the whole round. Facility handoffs are sent from the Round Card.)</span></div>'+
      '<div class="ho-grid">'+
        '<div><label>Patient (name or ID) <span style="color:var(--muted);font-weight:400">— this patient</span></label><input id="ho_patient" value="'+esc(getPatient())+'"></div>'+
        '<div><label>Facility <span style="color:var(--accent);font-weight:400">— this patient</span></label>'+facilitySelectHTML('ho_facility','', ap.facility||'')+'</div>'+
