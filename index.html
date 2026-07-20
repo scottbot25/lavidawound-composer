@@ -1926,7 +1926,12 @@ function rcPrefill(rec){
   addPatientToFacility((rec.facility||'').trim());        // new patient, stamped facility, active
   setPatient((rec.patient&&rec.patient.name)||'');
   MODE='new';
-  const S=STORE['new']; const wids=[];
+  const S=STORE['new'];
+  // Creating the patient already rendered a default EMPTY wound as number 1. Wipe the new-note store
+  // and reset the wound registry so OUR pulled wounds number from 1 (not 2).
+  Object.keys(S).forEach(k=>delete S[k]);
+  { const _p=activePt(); if(_p) _p.wreg={seq:1, widSeq:null, byId:{}}; }
+  const wids=[];
   (rec.wounds||[]).forEach(w=>{
     const wid=mintWid(); woundNum(wid); wids.push(wid);
     const P='1:w'+wid;
