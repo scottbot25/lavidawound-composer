@@ -881,7 +881,7 @@ function newPatient(){ if(typeof refreshActiveSummary==='function') refreshActiv
 function removePatient(pid){ const p=WS.patients[pid]; if(!p) return;
   if(!confirm('Remove '+((p.name&&p.name.trim())||'this patient')+' and their note from the workspace?\n(Does not affect anything already saved to ClinicalVault or pasted into PCC.)')) return;
   delete WS.patients[pid]; const ids=Object.keys(WS.patients);
-  if(!ids.length){ WS.patients.p1={name:'',store:newStore(),updatedAt:Date.now(),facility:String((WS.round&&WS.round.facility)||'').trim()}; WS.seq=2; activePid='p1'; }
+  if(!ids.length){ WS.patients.p1={name:'',store:newStore(),updatedAt:Date.now(),facility:''}; WS.seq=2; activePid='p1'; WS.round=WS.round||{}; WS.round.facility=''; }  // removed the LAST patient -> truly reset to a blank "Start here" (don't re-inherit the sticky facility)
   else if(pid===activePid){ activePid=ids[0]; }
   activateForm(); }
 // Wipe the CURRENT patient (name, facility, note) back to a fresh blank — the "clear" affordance for
@@ -890,6 +890,7 @@ function clearCurrentPatient(){
   const pid=activePid; if(!WS.patients[pid]) return;
   if(!confirm('Clear this patient — name, facility, and note — and start fresh?')) return;
   WS.patients[pid]={ name:'', store:newStore(), updatedAt:Date.now(), facility:'' };
+  WS.round=WS.round||{}; WS.round.facility='';   // drop the sticky default too, so it's a real blank reset
   activateForm(); }
 function clearAll(){ if(!confirm('Clear the ENTIRE workspace — every patient and both notes — and wipe the in-browser session? This cannot be undone.')) return;
   WS={ seq:2, activePid:'p1', round:{}, patients:{ p1:{name:'',store:newStore(),updatedAt:Date.now(),facility:''} } }; activePid='p1';
