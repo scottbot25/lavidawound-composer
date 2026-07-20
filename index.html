@@ -2003,6 +2003,12 @@ function _rcWriteWound(S, wid, w){
   // :15 tunneling; :14/:16 are the "to" boxes, left empty). Verified keys; the sink prints a lone value cleanly.
   if(String(w.undermining||'').trim()) S[P+':13']=String(w.undermining).trim();
   if(String(w.tunneling||'').trim())   S[P+':15']=String(w.tunneling).trim();
+  // Wound bed: the card carries the same pieces as the composer's structured field -> :wb: keys directly.
+  if(String(w.wbGran||'').trim())   S[P+':wb:gran']=String(w.wbGran).trim();
+  if(String(w.wbSlough||'').trim()) S[P+':wb:slough']=String(w.wbSlough).trim();
+  if(String(w.wbFib||'').trim())    S[P+':wb:fib']=String(w.wbFib).trim();
+  if(String(w.wbEpi||'').trim())    S[P+':wb:epi']=String(w.wbEpi).trim();
+  if(w.wbEschar==='yes'||w.wbEschar==='no') S[P+':wb:eschar']=w.wbEschar;
 }
 // Compose the A&P free text (orders per wound + patient education) — used by every pull path.
 function _rcComposeAP(ordLines, edu){

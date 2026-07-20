@@ -249,7 +249,17 @@ function v(s){ s=(s==null?'':String(s)).trim(); return s || '—'; }
 function toast(m){ const t=document.getElementById('toast'); t.textContent=m; t.classList.add('on');
   clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove('on'),2600); }
 
-function newWound(){ return { loc:'', type:[], stage:'', l:'', w:'', d:'', drain:'', odor:'', status:'', exposed:[], periwound:[], undermining:'', tunneling:'', orders:'' }; }
+function newWound(){ return { loc:'', type:[], stage:'', l:'', w:'', d:'', drain:'', odor:'', status:'', wbGran:'', wbSlough:'', wbFib:'', wbEpi:'', wbEschar:'', exposed:[], periwound:[], undermining:'', tunneling:'', orders:'' }; }
+/* Wound bed = the composer's structured field: gran/slough/fibrin/epithelialization % + eschar yes/no.
+   Compose the same "N% granulation, …, eschar: yes" string for the sheet; the composer pull maps each
+   piece straight into its :wb: keys. */
+function wbText(w){
+  const parts=[];
+  [['wbGran','granulation'],['wbSlough','slough'],['wbFib','fibrin/exudate'],['wbEpi','epithelialization']]
+    .forEach(([f,lab])=>{ const v=String(w[f]||'').trim(); if(v) parts.push(v+'% '+lab); });
+  if((w.wbEschar||'').trim()) parts.push('eschar: '+w.wbEschar.trim());
+  return parts.join(', ');
+}
 /* Stable per-patient id — the composer's match key (filename in the vault too). Random + time so two
    patients added in the same second can't collide; never derived from the name (two "Maria Garcia"
    stay distinct). */
@@ -481,6 +491,18 @@ function woundHTML(w,i){
     + '<label>Status</label>'
     + selField(i,w,'status',STATUS)
 
+    + '<label>Wound bed (% tissue)</label>'
+    + '<div class="dims" style="grid-template-columns:1fr 1fr 1fr 1fr">'
+    +   '<input inputmode="numeric" value="'+esc(w.wbGran||'')+'"   placeholder="% gran"   oninput="setW('+i+',\'wbGran\',this.value)">'
+    +   '<input inputmode="numeric" value="'+esc(w.wbSlough||'')+'" placeholder="% slough" oninput="setW('+i+',\'wbSlough\',this.value)">'
+    +   '<input inputmode="numeric" value="'+esc(w.wbFib||'')+'"    placeholder="% fibrin" oninput="setW('+i+',\'wbFib\',this.value)">'
+    +   '<input inputmode="numeric" value="'+esc(w.wbEpi||'')+'"    placeholder="% epi"    oninput="setW('+i+',\'wbEpi\',this.value)">'
+    + '</div>'
+    + '<label>Eschar</label>'
+    + '<select onchange="setW('+i+',\'wbEschar\',this.value)"><option value=""></option>'
+    +   '<option value="yes"'+(w.wbEschar==='yes'?' selected':'')+'>yes</option>'
+    +   '<option value="no"'+(w.wbEschar==='no'?' selected':'')+'>no</option></select>'
+
     + '<label>Exposed structures</label>'
     + multiField(i,w,'exposed',EXPOSED)
 
@@ -544,6 +566,7 @@ function sheetText(list){
       L.push('    Drainage: '+v(disp(w,'drain')));
       L.push('    Odor:     '+v(disp(w,'odor')));
       L.push('    Status:   '+v(disp(w,'status')));
+      { const wb=wbText(w); if(wb) L.push('    Wound bed:'+wb); }
       { const exp=disp(w,'exposed'); if(exp) L.push('    Exposed:  '+exp); }
       { const pw=disp(w,'periwound'); if(pw) L.push('    Periwound:'+pw); }
       if((w.undermining||'').trim()) L.push('    Undermining: '+w.undermining.trim());
@@ -625,6 +648,7 @@ function sheetHTML(list){
          + '<tr><td class="k">Drainage</td><td class="val">'+esc(v(disp(w,'drain')))
          +   (odor && odor!=='None' ? ' &nbsp;·&nbsp; odor '+esc(odor) : '')+'</td></tr>'
          + '<tr><td class="k">Status</td><td class="val">'+statusBadge(w)+'</td></tr>'
+         + (wbText(w) ? '<tr><td class="k">Wound bed</td><td class="val">'+esc(wbText(w))+'</td></tr>' : '')
          + (disp(w,'exposed')   ? '<tr><td class="k">Exposed</td><td class="val">'+esc(disp(w,'exposed'))+'</td></tr>' : '')
          + (disp(w,'periwound') ? '<tr><td class="k">Periwound</td><td class="val">'+esc(disp(w,'periwound'))+'</td></tr>' : '')
          + ((w.undermining||'').trim() ? '<tr><td class="k">Undermining</td><td class="val">'+esc(w.undermining.trim())+'</td></tr>' : '')
@@ -649,7 +673,7 @@ function sheetHTML(list){
    just-tapped-+Patient card apart from one with real work in it. */
 function hasContent(p){
   if(String(p.edu||'').trim()) return true;
-  return p.wounds.some(w => ['loc','type','stage','l','w','d','drain','odor','status','exposed','periwound','undermining','tunneling','orders']
+  return p.wounds.some(w => ['loc','type','stage','l','w','d','drain','odor','status','wbGran','wbSlough','wbFib','wbEpi','wbEschar','exposed','periwound','undermining','tunneling','orders']
     .some(f => (Array.isArray(w[f])? w[f].length>0 : String(w[f]||'').trim()!=='')));
 }
 function findGaps(){
