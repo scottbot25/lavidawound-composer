@@ -292,8 +292,7 @@
   </div>
   <label class="pt-field" title="For your reference and the facility handoff only — this is never copied into the PCC note.">Patient <input id="patientName" placeholder="name / ID — not copied into the note" oninput="onPatientInput(this.value)"></label>
   <button id="handoffBtn" onclick="openHandoff()" title="Move the current patient to a different building (and edit round date / provider). Facility handoffs are sent from the Round Card." style="cursor:pointer;padding:8px 15px;border:1px solid var(--line);border-radius:9px;color:var(--ink);font-weight:650;background:#fff;display:inline-flex;align-items:center;gap:8px">⇄ Reassign patient</button>
-  <button id="roundCardBtn" onclick="openRoundCard()" title="Bedside Round Card — quick wound orders for the nurse, same tool as on the phone. Opens over the composer." style="cursor:pointer;padding:8px 15px;border:1px solid var(--accent);border-radius:9px;color:var(--accent);font-weight:650;display:inline-flex;align-items:center;gap:8px;background:#fff">🩹 Round Card</button>
-  <button id="rcPullBtn" onclick="openRoundCardPull()" title="Pull a patient the bedside Round Card captured — pre-fills a new note with their wounds." style="cursor:pointer;padding:8px 15px;border:1px solid var(--line);border-radius:9px;color:var(--ink);font-weight:650;display:inline-flex;align-items:center;gap:8px;background:#fff">📋 From Round Card</button>
+  <button id="roundCardBtn" onclick="openRoundCard()" title="Bedside Round Card — quick wound orders for the nurse, same tool as on the phone. Opens over the composer. Patients you send from it appear here automatically." style="cursor:pointer;padding:8px 15px;border:1px solid var(--accent);border-radius:9px;color:var(--accent);font-weight:650;display:inline-flex;align-items:center;gap:8px;background:#fff">🩹 Round Card</button>
   <span id="authUser" class="auth-user"></span>
   <button id="resumeBtn" class="ghost" onclick="openResume()" title="Reopen a saved day's work from ClinicalVault" style="display:none;padding:7px 11px">☁ Resume</button>
   <span id="draftStatus" class="draft-status"></span>
@@ -324,17 +323,6 @@
 <div id="handoffModal" style="display:none;position:fixed;inset:0;z-index:90;background:rgba(6,10,15,.75);align-items:flex-start;justify-content:center;padding:24px;overflow:auto">
   <div id="handoffCard"></div>
 </div>
-<div id="rcPullModal" style="display:none;position:fixed;inset:0;z-index:95;background:rgba(6,10,15,.7);align-items:flex-start;justify-content:center;padding:24px;overflow:auto">
-  <div style="background:var(--panel);border-radius:14px;max-width:560px;width:100%;padding:16px">
-    <div class="ho-head"><b>📋 Pull from Round Card</b><button class="ho-x" onclick="closeRoundCardPull()">✕</button></div>
-    <div class="ho-body">
-      <div class="ho-note">Bring in a patient the bedside Round Card captured — it pre-fills the wound fields into a new note; you complete the rest.</div>
-      <label style="display:block;font-size:12.5px;font-weight:650;color:var(--muted);margin:14px 0 5px">Building</label>
-      <select id="rcPullFac" style="width:100%;box-sizing:border-box;padding:10px 12px;font:inherit;font-size:15px;border:1px solid var(--line);border-radius:9px;background:#fff;color:var(--ink)"></select>
-      <div id="rcPullBody" style="margin-top:12px"></div>
-    </div>
-  </div>
-</div>
 <div id="rcOverlay" style="display:none;position:fixed;inset:0;z-index:150;background:rgba(6,10,15,.55)">
   <div style="position:absolute;inset:0;display:flex;flex-direction:column;background:var(--bg)">
     <div style="display:flex;align-items:center;gap:10px;padding:8px 14px;border-bottom:1px solid var(--line);background:var(--panel)">
@@ -363,7 +351,11 @@ document.addEventListener('keydown',function(e){ if(e.key==='Escape') closeRound
    We never redirect on the card's behalf. */
 window.addEventListener('message', async function(e){
   if(e.origin!==location.origin) return;
-  var d=e.data; if(!d || d.type!=='rc-token-request') return;
+  var d=e.data;
+  // The overlay card just saved patients to the vault — pull them in so closing the card lands them
+  // in the note with no extra step.
+  if(d && d.type==='rc-saved'){ if(typeof rcAutoPull==='function') rcAutoPull('overlay-save'); return; }
+  if(!d || d.type!=='rc-token-request') return;
   var resp={type:'rc-token-response', id:d.id};
   try{
     var pca=await _getPca(); var acct=pca.getAllAccounts()[0];
@@ -1709,7 +1701,11 @@ async function maybeRestoreDraft(){
     if(drafts.length){ showResumeBanner(drafts); }
     _draftStatus('☁ ready','ok'); safeToSave=true;      // no draft for today (or session already has work) — safe
   }catch(e){ _draftStatus('⚠ couldn’t reach ClinicalVault — reload before editing','warn'); }
-  finally{ _draftRestoreDone=safeToSave; }
+  finally{ _draftRestoreDone=safeToSave;
+    // Once it's safe to touch the workspace, auto-pull any Round Card patients (deferred so this
+    // call fully unwinds first, and so it runs no matter which return path we took above).
+    if(safeToSave) setTimeout(()=>{ if(typeof rcAutoPull==='function') rcAutoPull('load'); }, 0);
+  }
 }
 let _lastDraftList=null;           // last listing, so the banner can repaint its toggled state
 const _draftSumCache={};           // name+mtime -> "Crestmoor 4 · UH 2" (facility labels for the chips)
@@ -1960,36 +1956,69 @@ function rcPrefill(rec){
   const edu=String(rec.edu||'').trim();
   const ap=[ord, edu?('Additional info / education: '+edu):''].filter(Boolean).join('\n\n');
   if(ap) S['2:ta:1']=ap;   // A&P "Assessment:" free-text (text fields key as <sec>:ta:<seq>, verified)
+  { const _p=activePt(); if(_p) _p.srcRcKey=_rcKey(rec); }   // tag the source record so auto-pull never double-pulls it
   setMode('new'); persist(); renderPatientBar();
 }
 
-function openRoundCardPull(){
-  const cur=((WS.round&&WS.round.facility)||((activePt()||{}).facility)||'').trim();
-  const facs=facilityList(); if(cur && facs.indexOf(cur)<0) facs.push(cur);
-  document.getElementById('rcPullFac').innerHTML='<option value="">— choose building —</option>'+facs.map(f=>'<option value="'+esc(f)+'"'+(f===cur?' selected':'')+'>'+esc(f)+'</option>').join('');
-  document.getElementById('rcPullFac').onchange=rcPullRefresh;
-  document.getElementById('rcPullModal').style.display='flex';
-  rcPullRefresh();
+/* ===== AUTO-PULL — the composer brings Round Card patients in by itself =====================
+   No building-picker, no per-record Pull button. On open (and when a card is saved from the overlay,
+   and when the tab regains focus) the composer scans RoundCards/ for every recent record and creates
+   any it hasn't already handled — each under the building it was filed in, name + wounds carried over.
+   Dedup is by stable id, remembered durably so re-opening never re-dumps and a patient you finished
+   and removed doesn't come back. All best-effort: a read hiccup never blocks the note. */
+const RC_PULL_DAYS=3;                        // how far back to look (a provider writing next-day notes still gets yesterday's)
+const RC_SEEN_KEY='rc_pulled_v1';            // durable set of already-pulled round-card IDs. IDs are random
+const RC_SEEN_TTL_MS=21*24*60*60*1000;       // tokens (no patient info), so this localStorage set is NOT PHI.
+function _rcRecentCutoff(){ const d=new Date(); d.setDate(d.getDate()-RC_PULL_DAYS); return d.toISOString().slice(0,10); }
+function _rcKey(rec){ return (rec&&rec.id) || [_rcFacSeg(rec&&rec.facility), String((rec&&rec.patient&&rec.patient.name)||'').toLowerCase().trim(), String((rec&&rec.date)||'').slice(0,10)].join('|'); }
+function _rcSeenLoad(){ try{ const o=JSON.parse(localStorage.getItem(RC_SEEN_KEY)||'{}'); return (o&&typeof o==='object')?o:{}; }catch(e){ return {}; } }
+function _rcSeenSave(o){ try{ localStorage.setItem(RC_SEEN_KEY, JSON.stringify(o)); }catch(e){} }
+
+/* Every recent roundcard.v1 record across all buildings. Auto-discovers buildings by listing the
+   RoundCards/ folder's children — no roster needed, and it works for a provider covering 2–3 buildings. */
+async function rcListAllRecent(){
+  const ctx=await _draftContext(); if(!ctx) return [];
+  const rootUrl='https://graph.microsoft.com/v1.0/drives/'+ctx.driveId+'/root:/RoundCards:/children?$top=200';
+  let rr; try{ rr=await _gfetch(rootUrl, ctx.token); }catch(e){ return []; }
+  if(!rr || !rr.ok) return [];                                  // 404 = no RoundCards folder yet -> nothing to pull
+  const facs=((await rr.json()).value||[]).filter(it=>it.folder).map(it=>it.name);
+  const cutoff=_rcRecentCutoff(); const out=[];
+  for(const fac of facs){
+    try{ const recs=await rcList(fac);
+      recs.forEach(r=>{ const d=String(r.date||'').slice(0,10); if(!d || d>=cutoff) out.push(r); });
+    }catch(e){}
+  }
+  return out;
 }
-function closeRoundCardPull(){ document.getElementById('rcPullModal').style.display='none'; }
-async function rcPullRefresh(){
-  const fac=document.getElementById('rcPullFac').value, body=document.getElementById('rcPullBody');
-  if(!fac){ body.innerHTML='<div class="ho-note">Pick a building to see its Round Cards.</div>'; _rcRecs=[]; return; }
-  body.innerHTML='<div class="ho-note">Loading '+esc(fac)+' Round Cards…</div>';
+
+let _rcPulling=false, _rcLastPull=0;
+async function rcAutoPull(reason){
+  if(!DRAFTS_ENABLED() || !_draftRestoreDone || _rcPulling) return;
+  _rcPulling=true;
   try{
-    _rcRecs=await rcList(fac);
-    if(!_rcRecs.length){ body.innerHTML='<div class="ho-note">No Round Cards found for '+esc(fac)+'.</div>'; return; }
-    body.innerHTML=_rcRecs.map((r,i)=>{
-      const nm=(r.patient&&r.patient.name)||'(no name)'; const n=(r.wounds||[]).length;
-      const clash=Object.keys(WS.patients).some(pid=>String(WS.patients[pid].name||'').trim().toLowerCase()===String(nm).trim().toLowerCase());
-      return '<div style="display:flex;align-items:center;gap:10px;padding:10px 2px;border-top:1px solid var(--line)">'+
-        '<div style="flex:1"><b>'+esc(nm)+'</b>'+(clash?' <span style="color:var(--warn);font-size:12px">· already in workspace</span>':'')+
-        '<div style="font-size:12px;color:var(--muted)">'+n+' wound'+(n===1?'':'s')+' · '+esc(String(r.date||'').slice(0,10))+(r.provider?' · '+esc(r.provider):'')+'</div></div>'+
-        '<button class="primary" onclick="rcPullOne('+i+')">Pull</button></div>';
-    }).join('');
-  }catch(e){ body.innerHTML='<div class="ho-note" style="color:var(--warn)">'+esc((e&&e.message)||'Couldn’t load Round Cards.')+'</div>'; }
+    const recs=await rcListAllRecent();
+    WS.rcPulled=WS.rcPulled||{};                                // session-only dedup for legacy records that predate stable ids
+    const seen=_rcSeenLoad();
+    const fresh=recs.filter(r=>{
+      if(r&&r.id) return !seen[r.id];                           // durable id dedup (the normal path)
+      const k=_rcKey(r); return k && !WS.rcPulled[k];           // legacy no-id record: name-based, this session only
+    });
+    if(!fresh.length) return;
+    // Don't yank a provider off a note they're mid-way through: remember where they were, go back after.
+    const returnPid=activePid, returnNamed=!!((((WS.patients[returnPid]||{}).name)||'').trim());
+    const now=Date.now(), byFac={};
+    fresh.forEach(r=>{ rcPrefill(r);
+      if(r&&r.id) seen[r.id]=now; else WS.rcPulled[_rcKey(r)]=true;
+      const f=facLabel(r.facility||'')||'Unfiled'; byFac[f]=(byFac[f]||0)+1; });
+    Object.keys(seen).forEach(id=>{ if(now-(seen[id]||0) > RC_SEEN_TTL_MS) delete seen[id]; });   // prune old ids
+    _rcSeenSave(seen);
+    if(returnNamed && WS.patients[returnPid]) switchPatient(returnPid);
+    saveWS(); renderPatientBar();
+    const total=fresh.length, parts=Object.keys(byFac).map(f=>f+': '+byFac[f]).join(' · ');
+    toast('Brought in '+total+' patient'+(total===1?'':'s')+' from Round Cards ('+parts+')');
+  }catch(e){}
+  finally{ _rcPulling=false; _rcLastPull=Date.now(); }
 }
-function rcPullOne(i){ const rec=_rcRecs[i]; if(!rec) return; rcPrefill(rec); closeRoundCardPull(); toast('Pulled '+((rec.patient&&rec.patient.name)||'patient')+' from the Round Card'); }
 
 /* ============ PARSER: build inline fillable controls, keep exact text ============ */
 let sectionResolvers = [];   // one resolve() per section
@@ -3002,6 +3031,9 @@ function _hardenPHIInput(el){
 // Best-effort flush of the ClinicalVault autosave when the tab is hidden (switched away / closing) —
 // so the pending debounced draft lands before the session can be torn down. No-op unless signed in.
 document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='hidden' && typeof flushDraftSave==='function') flushDraftSave(); });
+// Coming BACK to the tab: check for Round Cards a nurse may have filed while we were away (throttled,
+// so switching tabs rapidly doesn't hammer the vault).
+document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='visible' && typeof rcAutoPull==='function' && Date.now()-_rcLastPull>45000) rcAutoPull('focus'); });
 
 /* ============ IDLE AUTO-LOCK (BYOD defense-in-depth) ============================================
    On a phone the browser tab doesn't truly "close," so the sessionStorage wipe-on-close is weaker there.

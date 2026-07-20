@@ -74,10 +74,21 @@
     padding:16px; overflow:auto}
   .modal.on{display:block}
   .sheet{background:var(--panel); border-radius:14px; max-width:720px; margin:0 auto; padding:16px}
-  .prev{border:1px solid var(--line); border-radius:10px; background:#fff; padding:12px;
-    max-height:46vh; overflow:auto; font-size:13.5px; white-space:pre-wrap; margin:10px 0}
+  .prev{border:1px solid var(--line); border-radius:10px; background:#f5f4ef; overflow:hidden; margin:10px 0}
+  .prev-frame{width:100%; height:48vh; border:0; display:block; background:#fff}
+  .prev-empty{padding:22px; text-align:center; color:var(--muted); font-size:14px}
   .warn{background:#fdf3e3; border:1px solid var(--amber); border-radius:10px; padding:10px;
     font-size:13px; margin:10px 0}
+  #sendPick:not(:empty){border:1px solid var(--line); border-radius:10px; background:#fff;
+    padding:10px 12px; margin:10px 0}
+  .sp-head{display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px; font-size:14px}
+  .sp-head .sp-btns{margin-left:auto; display:flex; gap:6px}
+  .sp-list{display:flex; flex-wrap:wrap; gap:6px}
+  .sp-item{display:inline-flex; align-items:center; gap:6px; border:1px solid var(--line);
+    border-radius:999px; padding:8px 13px; font-size:14px; background:#fff; cursor:pointer;
+    -webkit-tap-highlight-color:transparent}
+  .sp-item.on{border-color:var(--teal); background:#eef4f3; color:var(--teal-dark); font-weight:600}
+  .sp-item input{width:auto; margin:0; accent-color:var(--teal)}
   .toast{position:fixed; left:50%; bottom:96px; transform:translateX(-50%); background:var(--ink);
     color:#fff; padding:10px 16px; border-radius:999px; font-size:14px; z-index:99; opacity:0;
     transition:opacity .2s; pointer-events:none; max-width:90vw; text-align:center}
@@ -144,13 +155,14 @@
     </div>
     <div class="muted" style="margin-top:6px">This is exactly what the nurse gets. Anything blank shows as “—”.</div>
     <div id="gaps"></div>
+    <div id="sendPick"></div>
     <div class="prev" id="prev"></div>
     <label for="toSel">Send to</label>
     <select id="toSel"></select>
     <div class="muted" style="margin-top:6px">Fixed list on purpose — a typo can't send a patient's info to a stranger.</div>
     <div class="row" style="margin-top:12px">
-      <button class="primary" style="flex:1" onclick="emailSheet()">Email it</button>
-      <button style="flex:1" onclick="printSheet()">Print it</button>
+      <button id="emailBtn" class="primary" style="flex:1" onclick="emailSheet()">Email it</button>
+      <button id="printBtn" style="flex:1" onclick="printSheet()">Print it</button>
     </div>
     <div class="row" style="margin-top:8px">
       <button id="vaultBtn" style="flex:1;border-color:var(--teal);color:var(--teal-dark);font-weight:650" onclick="saveVault()">☁ Save to ClinicalVault</button>
@@ -216,8 +228,15 @@ const KEY = 'lavida_roundcard';
 let S = load();
 function blank(){ return { round:{fac:'',date:todayISO(),prov:''}, pts:[], active:0 }; }
 function load(){
-  try{ const r = sessionStorage.getItem(KEY); if(r) return JSON.parse(r); }catch(e){}
+  try{ const r = sessionStorage.getItem(KEY); if(r){ const o=JSON.parse(r); normalizePts(o); return o; } }catch(e){}
   return blank();
+}
+/* Backfill fields added after a card was first saved this session: every patient needs a stable `id`
+   (so the composer can tell two same-name patients apart and never double-pull) and a `send` flag
+   (default true — you're sending everyone unless you uncheck them). */
+function normalizePts(o){
+  if(!o || !Array.isArray(o.pts)) return;
+  o.pts.forEach(p=>{ if(!p.id) p.id=newId(); if(typeof p.send!=='boolean') p.send=true; });
 }
 function save(){ try{ sessionStorage.setItem(KEY, JSON.stringify(S)); }catch(e){} }
 function todayISO(){ const d=new Date(), p=n=>String(n).padStart(2,'0');
@@ -231,7 +250,11 @@ function toast(m){ const t=document.getElementById('toast'); t.textContent=m; t.
   clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove('on'),2600); }
 
 function newWound(){ return { loc:'', type:[], stage:'', l:'', w:'', d:'', drain:'', odor:'', status:'', exposed:[], periwound:[], orders:'' }; }
-function newPt(){ return { name:'', edu:'', wounds:[newWound()] }; }
+/* Stable per-patient id — the composer's match key (filename in the vault too). Random + time so two
+   patients added in the same second can't collide; never derived from the name (two "Maria Garcia"
+   stay distinct). */
+function newId(){ return 'rc-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,7); }
+function newPt(){ return { id:newId(), name:'', edu:'', wounds:[newWound()], send:true }; }
 function activePt(){ return S.pts[S.active] || null; }
 
 /* Size prints only what was actually measured — a bare "cm" or a half-filled
@@ -495,13 +518,13 @@ function render(){
 }
 
 /* ---------- the sheet the nurse gets ---------- */
-function sheetText(){
+function sheetText(list){
   const r=S.round, L=[];
   L.push('WOUND CARE ORDERS');
   L.push('Facility: '+v(r.fac)+'    Date: '+v(r.date));
   L.push('Provider: '+v(r.prov));
   L.push('');
-  const pts = S.pts.filter(p=>(p.name||'').trim());
+  const pts = list || S.pts.filter(p=>(p.name||'').trim());
   pts.forEach(p=>{
     L.push('----------------------------------------');
     L.push('PATIENT: '+v(p.name));
@@ -529,42 +552,79 @@ function sheetText(){
   L.push('billing document; the signed EHR note is the authoritative record.');
   return L.join('\n');
 }
-function sheetHTML(){
+/* Status as a colored badge (green improving / neutral stable / red worsening) so the nurse can scan
+   the sheet at a glance. Inline background + color so it degrades to colored text if a mail/Word client
+   ignores the background. */
+function statusBadge(w){
+  const s=disp(w,'status'); if(!s) return '<span class="val-muted">—</span>';
+  const t=String(s).toLowerCase();
+  const cls = t.indexOf('improv')>=0 ? 'b-imp' : (t.indexOf('wors')>=0 ? 'b-wor' : 'b-stb');
+  return '<span class="badge '+cls+'">'+esc(s)+'</span>';
+}
+/* The nurse's sheet — a real document, not a text dump: teal header band, one clean card per patient,
+   and the orders called out so they can't be missed. Solid colors + real <table>s so it survives being
+   saved as .doc and opened in Word (gradients/rounded corners degrade gracefully). */
+function sheetHTML(list){
   const r=S.round;
-  const pts = S.pts.filter(p=>(p.name||'').trim());
-  let b='<html><head><meta charset="utf-8"><title>Wound Care Orders</title><style>'
-   + 'body{font:13pt/1.4 Georgia,serif; color:#111; margin:26px}'
-   + 'h1{font-size:17pt; margin:0 0 2px} .hd{color:#444; font-size:11pt; margin-bottom:14px}'
-   + '.pt{page-break-inside:avoid; border-top:2px solid #111; padding-top:8px; margin-top:14px}'
-   + '.pt h2{font-size:13.5pt; margin:0 0 6px}'
-   + '.w{margin:0 0 10px 0; padding-left:10px; border-left:3px solid #bbb}'
-   + '.w b{display:block; font-size:12pt}'
-   + 'table{border-collapse:collapse; margin-top:3px} td{padding:1px 10px 1px 0; vertical-align:top; font-size:11.5pt}'
-   + 'td.k{color:#555; white-space:nowrap} .ord{font-weight:bold}'
-   + '.ft{margin-top:22px; border-top:1px solid #999; padding-top:6px; color:#555; font-size:9.5pt}'
-   + '</style></head><body>';
-  b += '<h1>Wound Care Orders</h1><div class="hd">'+esc(v(r.fac))+' &nbsp;·&nbsp; '+esc(v(r.date))
-     + ' &nbsp;·&nbsp; '+esc(v(r.prov))+'</div>';
+  const pts = list || S.pts.filter(p=>(p.name||'').trim());
+  const css =
+    "body{font:12pt/1.45 'Segoe UI',Arial,Helvetica,sans-serif;color:#26241f;margin:0;padding:22px;background:#fff}"
+   +".banner{background:#0f8a7c;color:#fff;padding:15px 20px;border-radius:10px}"
+   +".banner h1{font-size:18pt;margin:0;letter-spacing:.3px;font-weight:700}"
+   +".chips{margin-top:10px}"
+   +".chip{display:inline-block;background:#0c7568;border:1px solid #3aa99b;border-radius:20px;padding:4px 13px;font-size:9.5pt;margin:0 6px 4px 0;color:#fff}"
+   +".chip .ck{color:#bfeee6;text-transform:uppercase;letter-spacing:.5px;font-size:8pt;margin-right:5px}"
+   +".pt{border:1px solid #e2ded4;border-radius:10px;margin-top:16px;page-break-inside:avoid}"
+   +".pt-hd{background:#eef4f2;border-bottom:1px solid #d7e5e1;padding:9px 15px;font-size:12.5pt;font-weight:700;color:#0c5f56;border-radius:10px 10px 0 0}"
+   +".pt-hd .n{color:#6a8a84;font-weight:600;font-size:9.5pt;margin-left:7px}"
+   +".pt-body{padding:4px 15px 13px}"
+   +".w{margin-top:11px;padding-top:11px;border-top:1px dashed #e6e2d8}"
+   +".w-first{border-top:0}"
+   +".w-title{font-size:11.5pt;font-weight:700;color:#33312c;margin-bottom:5px}"
+   +".w-title .loc{color:#0f8a7c}"
+   +"table{border-collapse:collapse;margin:2px 0 0}"
+   +"td.k{color:#948f83;font-size:8.5pt;padding:2px 14px 2px 0;white-space:nowrap;vertical-align:top;text-transform:uppercase;letter-spacing:.4px}"
+   +"td.val{font-size:10.5pt;padding:2px 0;vertical-align:top;color:#2a2925}"
+   +".val-muted{color:#a8a294}"
+   +".badge{display:inline-block;border-radius:5px;padding:1px 9px;font-size:9.5pt;font-weight:700}"
+   +".b-imp{background:#e3f5ea;color:#1a7f46}.b-stb{background:#eef0f2;color:#565656}.b-wor{background:#fde8e3;color:#c0492b}"
+   +".orders{margin-top:9px;background:#f2faf8;border-left:4px solid #0f8a7c;border-radius:0 7px 7px 0;padding:8px 13px}"
+   +".orders .lab{font-size:8pt;text-transform:uppercase;letter-spacing:.6px;color:#0c5f56;font-weight:700;margin-bottom:2px}"
+   +".orders .txt{font-size:11pt;font-weight:600;color:#1b1b1b;white-space:pre-wrap}"
+   +".edu{margin-top:10px;background:#faf7f0;border:1px solid #ece5d5;border-radius:8px;padding:8px 13px}"
+   +".edu .lab{font-size:8pt;text-transform:uppercase;letter-spacing:.6px;color:#8a7a52;font-weight:700;margin-bottom:2px}"
+   +".edu .txt{font-size:10.5pt;white-space:pre-wrap}"
+   +".ft{margin-top:20px;border-top:1px solid #e2ded4;padding-top:9px;color:#948f83;font-size:8.5pt;line-height:1.4}";
+  let b='<html><head><meta charset="utf-8"><title>Wound Care Orders</title><style>'+css+'</style></head><body>';
+  b += '<div class="banner"><h1>Wound Care Orders</h1><div class="chips">'
+     + '<span class="chip"><span class="ck">Facility</span>'+esc(v(r.fac))+'</span>'
+     + '<span class="chip"><span class="ck">Date</span>'+esc(v(r.date))+'</span>'
+     + '<span class="chip"><span class="ck">Provider</span>'+esc(v(r.prov))+'</span>'
+     + '<span class="chip"><span class="ck">Patients</span>'+pts.length+'</span>'
+     + '</div></div>';
   pts.forEach(p=>{
-    b += '<div class="pt"><h2>'+esc(v(p.name))+'</h2>';
+    b += '<div class="pt"><div class="pt-hd">'+esc(v(p.name))
+       + '<span class="n">'+p.wounds.length+' wound'+(p.wounds.length===1?'':'s')+'</span></div><div class="pt-body">';
     p.wounds.forEach((w,i)=>{
-      b += '<div class="w"><b>Wound '+(i+1)+' — '+esc(v(w.loc))+'</b><table>'
-         + '<tr><td class="k">Type</td><td>'+esc(v(disp(w,'type')))+'</td></tr>'
-         + (isPressure(w) ? '<tr><td class="k">Stage</td><td>'+esc(v(disp(w,'stage')))+'</td></tr>' : '')
-         + '<tr><td class="k">Size</td><td>'+esc(v(sizeText(w)))+'</td></tr>'
-         + '<tr><td class="k">Drainage</td><td>'+esc(v(disp(w,'drain')))+'</td></tr>'
-         + '<tr><td class="k">Odor</td><td>'+esc(v(disp(w,'odor')))+'</td></tr>'
-         + '<tr><td class="k">Status</td><td>'+esc(v(disp(w,'status')))+'</td></tr>'
-         + (disp(w,'exposed') ? '<tr><td class="k">Exposed</td><td>'+esc(disp(w,'exposed'))+'</td></tr>' : '')
-         + (disp(w,'periwound') ? '<tr><td class="k">Periwound</td><td>'+esc(disp(w,'periwound'))+'</td></tr>' : '')
-         + '<tr><td class="k">Orders</td><td class="ord">'+esc(v(w.orders))+'</td></tr>'
-         + '</table></div>';
+      const odor=disp(w,'odor');
+      b += '<div class="w'+(i===0?' w-first':'')+'"><div class="w-title">Wound '+(i+1)+' — <span class="loc">'+esc(v(w.loc))+'</span></div>'
+         + '<table>'
+         + '<tr><td class="k">Type</td><td class="val">'+esc(v(disp(w,'type')))
+         +   (isPressure(w) ? ' &nbsp;·&nbsp; <b>'+esc(v(disp(w,'stage')))+'</b>' : '')+'</td></tr>'
+         + '<tr><td class="k">Size</td><td class="val">'+esc(v(sizeText(w)))+'</td></tr>'
+         + '<tr><td class="k">Drainage</td><td class="val">'+esc(v(disp(w,'drain')))
+         +   (odor && odor!=='None' ? ' &nbsp;·&nbsp; odor '+esc(odor) : '')+'</td></tr>'
+         + '<tr><td class="k">Status</td><td class="val">'+statusBadge(w)+'</td></tr>'
+         + (disp(w,'exposed')   ? '<tr><td class="k">Exposed</td><td class="val">'+esc(disp(w,'exposed'))+'</td></tr>' : '')
+         + (disp(w,'periwound') ? '<tr><td class="k">Periwound</td><td class="val">'+esc(disp(w,'periwound'))+'</td></tr>' : '')
+         + '</table>'
+         + '<div class="orders"><div class="lab">Orders for the nurse</div><div class="txt">'+esc(v(w.orders))+'</div></div>'
+         + '</div>';
     });
     if((p.edu||'').trim()){
-      b += '<div class="w" style="border-left-color:#888"><b>Additional info, plan &amp; education</b>'
-         + '<div style="font-size:11.5pt">'+esc(p.edu.trim())+'</div></div>';
+      b += '<div class="edu"><div class="lab">Additional info, plan &amp; education</div><div class="txt">'+esc(p.edu.trim())+'</div></div>';
     }
-    b += '</div>';
+    b += '</div></div>';
   });
   b += '<div class="ft">Care-coordination orders for facility use. Not an official medical record, '
      + 'provider note, or billing document; the signed EHR note is the authoritative record.</div>'
@@ -593,6 +653,7 @@ function findGaps(){
       if(hasContent(p)) g.push('⚠ Patient '+(pi+1)+' has no name — IT WILL NOT BE SENT. Add a name or room number.');
       return;   // nothing else to say about an empty unnamed card
     }
+    if(p.send===false) return;   // held back this send — don't nag about its gaps
     p.wounds.forEach((w,i)=>{
       const tag = named+' · wound '+(i+1);
       if(!(w.orders||'').trim()) g.push(tag+': no orders — the nurse gets nothing to do');
@@ -613,23 +674,62 @@ function openReview(){
       : 'Add a patient first');
     return;
   }
+  const sel=document.getElementById('toSel');
+  sel.innerHTML = FACILITY_CONTACTS.map((c,i)=>'<option value="'+i+'">'+esc(c.name)+' — '+esc(c.email)+'</option>').join('');
+  paintReview();
+  document.getElementById('review').classList.add('on');
+}
+function closeReview(){ document.getElementById('review').classList.remove('on'); }
+
+/* The patients this send will actually carry: named AND still checked. Everything downstream
+   (preview, email, print, Save to ClinicalVault) runs off this one set. */
+function sentNamed(){ return S.pts.filter(p=>(p.name||'').trim() && p.send!==false); }
+function toggleSend(id,on){ const p=S.pts.find(x=>x.id===id); if(p){ p.send=on; save(); paintReview(); } }
+function setAllSend(on){ S.pts.forEach(p=>{ if((p.name||'').trim()) p.send=on; }); save(); paintReview(); }
+
+/* The "send which patients?" chooser. Hidden when there's only one named patient — nothing to choose,
+   so no needless control (fewer taps for the provider). */
+function paintSendPick(){
+  const el=document.getElementById('sendPick'); if(!el) return;
+  const named=S.pts.filter(p=>(p.name||'').trim());
+  if(named.length<=1){ el.innerHTML=''; return; }
+  const sel=named.filter(p=>p.send!==false).length;
+  el.innerHTML='<div class="sp-head"><b>Send which patients?</b> <span class="muted">'+sel+' of '+named.length+' selected</span>'
+    +'<span class="sp-btns"><button class="tiny" onclick="setAllSend(true)">All</button>'
+    +'<button class="tiny" onclick="setAllSend(false)">None</button></span></div>'
+    +'<div class="sp-list">'+named.map(p=>{ const on=p.send!==false;
+      return '<label class="sp-item'+(on?' on':'')+'"><input type="checkbox"'+(on?' checked':'')
+        +' onchange="toggleSend(\''+esc(p.id)+'\',this.checked)"> '+esc(p.name.trim())+'</label>';
+    }).join('')+'</div>';
+}
+/* Repaint the whole review screen from the current selection — gaps, chooser, preview, and whether the
+   send buttons are live. Called on open and on every checkbox toggle. */
+function paintReview(){
   const gaps=findGaps();
   document.getElementById('gaps').innerHTML = gaps.length
     ? '<div class="warn"><b>Worth a look before you send:</b><br>· '+gaps.map(esc).join('<br>· ')+'</div>'
     : '';
-  document.getElementById('prev').textContent = sheetText();
-  const sel=document.getElementById('toSel');
-  sel.innerHTML = FACILITY_CONTACTS.map((c,i)=>'<option value="'+i+'">'+esc(c.name)+' — '+esc(c.email)+'</option>').join('');
-  document.getElementById('review').classList.add('on');
+  paintSendPick();
+  const pts=sentNamed();
+  const prev=document.getElementById('prev');
+  if(pts.length){
+    // Show the ACTUAL styled sheet the nurse will get (isolated in an iframe so its own CSS applies),
+    // not a plain-text dump — so "Review" looks like the real document.
+    prev.innerHTML='<iframe class="prev-frame" title="Sheet preview"></iframe>';
+    prev.querySelector('iframe').srcdoc=sheetHTML(pts);
+  } else {
+    prev.innerHTML='<div class="prev-empty">No patients selected to send.</div>';
+  }
+  const none=pts.length===0;
+  ['emailBtn','printBtn','vaultBtn'].forEach(id=>{ const b=document.getElementById(id); if(b) b.disabled=none; });
 }
-function closeReview(){ document.getElementById('review').classList.remove('on'); }
 
 /* ---------- deliver ---------- */
 function printSheet(){
   const f=document.createElement('iframe');
   f.style.cssText='position:fixed;right:0;bottom:0;width:0;height:0;border:0';
   document.body.appendChild(f);
-  const d=f.contentDocument; d.open(); d.write(sheetHTML()); d.close();
+  const d=f.contentDocument; d.open(); d.write(sheetHTML(sentNamed())); d.close();
   /* A document.write'n iframe may be ready BEFORE onload fires (mobile Safari) or only after
      (Chrome) — so both paths have to be able to trigger the print. `done` makes sure exactly one
      of them wins: without it the provider gets two print dialogs and prints the sheet twice. */
@@ -646,9 +746,11 @@ function emailSheet(){
   const i=document.getElementById('toSel').value;
   const c=FACILITY_CONTACTS[i];
   if(!c){ toast('No facility contact set up yet'); return; }
-  const r=S.round, n=S.pts.filter(p=>(p.name||'').trim()).length;
+  const pts=sentNamed();
+  if(!pts.length){ toast('No patients selected to send'); return; }
+  const r=S.round, n=pts.length;
   const subj='Wound care orders — '+(r.fac||'')+' — '+(r.date||'')+' ('+n+' patient'+(n===1?'':'s')+')';
-  const body=sheetText();
+  const body=sheetText(pts);
   /* Stage on the clipboard first: older mail apps silently truncate a long mailto body,
      so the paste-fallback has to exist BEFORE the draft opens. */
   try{ navigator.clipboard && navigator.clipboard.writeText(body); }catch(e){}
@@ -788,8 +890,8 @@ function _vaultResultShow(ok,msg,url){
   el.style.display='';
 }
 async function saveVault(){
-  const pts=S.pts.filter(p=>(p.name||'').trim());
-  if(!pts.length){ toast('Add a named patient first'); return; }
+  const pts=sentNamed();
+  if(!pts.length){ toast('Select at least one named patient to send'); return; }
   const btn=document.getElementById('vaultBtn'); btn.disabled=true;
   const st=t=>{ btn.textContent=t; };
   const resEl=document.getElementById('vaultResult'); if(resEl) resEl.style.display='none';
@@ -817,21 +919,18 @@ async function saveVault(){
     st('Saving patient records…');
     const recSegs=['RoundCards',fac];
     await _vaultEnsureFolders(token,driveId,recSegs);
-    /* Two patients whose names slug the same (e.g. two "Maria Garcia") would otherwise write the
-       SAME RoundCards/<slug>.json and one would silently overwrite the other. De-dupe within the
-       save so every patient's record survives; the resolved key rides in the record for Phase 3.
-       (Name-as-key is still fragile for genuinely-distinct same-name patients — a stable patient
-       ID is the real fix; flagged in the vault.) */
-    const seenSlugs={};
+    /* Each patient's record is filed under their STABLE id (RoundCards/<fac>/<id>.json), not a
+       name-slug — so two genuinely-different same-name patients get separate files, and the composer
+       can tell them apart and never double-pulls one. The id also rides inside the record as the
+       composer's match key. Re-saving the same patient reuses their id, so it overwrites (latest
+       bedside capture wins) instead of duplicating. `key` keeps the old name-slug for readability. */
     for(const p of pts){
-      let base=ptSlug(p.name), slug=base, n=1;
-      while(seenSlugs[slug]){ slug=base+'-'+(++n); }
-      seenSlugs[slug]=true;
-      const rec={ schema:'roundcard.v1', savedAt:new Date().toISOString(), key:slug,
+      const id=p.id || newId();
+      const rec={ schema:'roundcard.v1', id:id, savedAt:new Date().toISOString(), key:ptSlug(p.name),
         facility:S.round.fac||'', date:date, provider:S.round.prov||'',
         patient:{name:p.name}, edu:p.edu||'', wounds:p.wounds };
       const jb=new Blob([JSON.stringify(rec)],{type:'application/json'});
-      await _vaultUpload(token,driveId,recSegs,slug+'.json',jb,'application/json');
+      await _vaultUpload(token,driveId,recSegs,id+'.json',jb,'application/json');
     }
     /* QC count feed (QC-COUNT-FEED-SPEC.md, Scott 2026-07-19): one COUNT-ONLY record per
        facility+provider+date so the QC program can catch visits that never became a PCC
@@ -845,6 +944,9 @@ async function saveVault(){
     await _vaultUpload(token,driveId,['QC Feed'], date+' — '+fac+' — '+prov+'.json',
       new Blob([JSON.stringify(qc)],{type:'application/json'}),'application/json');
     st('✓ Saved');
+    /* If we're running inside the composer's overlay iframe, tell it to pull the patients we just
+       filed — so the provider closes the card and they're already in the note, no extra step. */
+    try{ if(window.parent && window.parent!==window) window.parent.postMessage({type:'rc-saved'}, location.origin); }catch(e){}
     _vaultResultShow(true,'Sheet + '+pts.length+' patient record'+(pts.length===1?'':'s')+' + QC count saved to ClinicalVault.',item&&item.webUrl);
     setTimeout(()=>{ st('☁ Save to ClinicalVault'); btn.disabled=false; },2500);
   }catch(e){
