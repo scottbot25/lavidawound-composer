@@ -413,8 +413,8 @@ Review of systems: [negative except as noted in HPI / additional findings: ***].
       ["Physical Exam",
 `General: [alert, no acute distress / ill-appearing / lethargic / altered mental status / febrile-appearing / other: ***].
 Cardiovascular: [regular rate per pulse / tachycardic / irregular / other: ***].
-Respiratory: [normal effort / tachypneic / increased work of breathing / other: ***].
-Abdomen: [non-distended / distended / tender / other: ***].
+Respiratory: [normal effort, no increased WOB / tachypneic / increased work of breathing / other: ***].
+Abdomen: [non-distended, non-tender / distended / tender / other: ***].
 Neuro: [grossly non-focal / focal deficit / altered mental status / other: ***].
 Skin: [warm and dry / diaphoretic / cool / mottled / other: ***].
 Extremities:
@@ -460,7 +460,7 @@ Plans:
 -Offloading with [ heel protectors / PRAFO / air mattress / q2h turns / wheelchair cushion / other: ***]
 -ABI/TBI/arterial duplex ***, vascular surgery referral as indicated pending results review
 -Encourage protein supplementation and dietitian evaluation as needed
--Re-evaluation in [1 week / 2 weeks / PRN]. Notify LaVida MD or APP sooner for any concerns- conveyed to facility wound care RN and DON.`],
+-Re-evaluation [in 1 week / in 2 weeks / PRN]. Notify LaVida MD or APP sooner for any concerns- conveyed to facility wound care RN and DON.`],
       ["Procedures", PROC()],
       ["Total Time", TIME()]
       /* Medical Decision-Making Summary DELETED — Abby, on the record (7/16 Zoom): "Claude record
@@ -486,8 +486,8 @@ Plans:
 `Physical exam
 General: [alert, no acute distress / ill-appearing / lethargic / altered mental status / febrile-appearing / other: ***].
 Cardiovascular: [regular rate per pulse / tachycardic / irregular / other: ***].
-Respiratory: [normal effort / tachypneic / increased work of breathing / other: ***].
-Abdomen: [non-distended / distended / tender / other: ***].
+Respiratory: [normal effort, no increased WOB / tachypneic / increased work of breathing / other: ***].
+Abdomen: [non-distended, non-tender / distended / tender / other: ***].
 Neuro: [grossly non-focal / focal deficit / altered mental status / other: ***].
 Skin: [warm and dry / diaphoretic / cool / mottled / other: ***].
 Extremities:
@@ -530,7 +530,7 @@ Periwound: [normal/macerated/erythematous/indurated/ecchymotic/callused/fluctuan
 -Offloading with [ heel protectors / PRAFO / air mattress / q2h turns / wheelchair cushion / other: ***]
 -ABI/TBI/arterial duplex ***, vascular surgery referral as indicated pending results review
 -Encourage protein supplementation and dietitian evaluation as needed
--Re-evaluation in [1 week / 2 weeks / PRN]. Notify LaVida MD or APP sooner for any concerns- conveyed to facility wound care RN and DON.`],
+-Re-evaluation [in 1 week / in 2 weeks / PRN]. Notify LaVida MD or APP sooner for any concerns- conveyed to facility wound care RN and DON.`],
       ["Procedures", PROC()],
       ["Total Time", TIME()]
       /* Medical Decision-Making Summary DELETED — Abby, on the record (7/16 Zoom): "Claude record
@@ -2167,6 +2167,11 @@ function renderLines(text, container, keyPrefix){
         if(STATE[fk]!=null) fillInp.value=STATE[fk];
         fillInp.oninput=()=>{STATE[fk]=fillInp.value; persist(); resolveAll();}; }
       const updFill=()=>{ if(fillInp) fillInp.style.display=isFillOpt(sel.value)?'':'none'; };
+      // Normal-findings auto-fill (Abby: "only the NORMAL findings are here; if abnormal the app changes
+      // them"). The five systemic exam lines default to their normal option (the first) on first render, so
+      // a normal patient's exam prints itself and the provider only touches abnormals. Only when never set —
+      // a provider's later change (incl. clearing to blank) is preserved.
+      if(STATE[k]==null && /^(General|Cardiovascular|Respiratory|Abdomen|Neuro):\s*$/.test(lastLit) && tk.opts.length) STATE[k]=tk.opts[0];
       if(STATE[k]!=null && [...sel.options].some(o=>o.value===STATE[k])) sel.value=STATE[k];
       sel.classList.toggle('unset',!sel.value); updFill();
       sel.onchange=()=>{STATE[k]=sel.value; sel.classList.toggle('unset',!sel.value); updFill(); persist(); resolveAll();};
