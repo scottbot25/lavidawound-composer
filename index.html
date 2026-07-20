@@ -455,7 +455,7 @@ Location / laterality: ***
 L: *** cm W: *** cm D: *** cm
 Surface area (auto): *** cm²
 Volume (auto): *** cm³
-Etiology/classification: [pressure injury stage / diabetic ulcer Wagner grade / venous / arterial / surgical / traumatic / MASD / other].
+Etiology/classification: [pressure injury / diabetic ulcer / venous / arterial / surgical / traumatic / MASD / other].
 If pressure injury → Stage: [1 / 2 / 3 / 4 / unstageable / DTI].
 If diabetic ulcer → Wagner grade: [0 / 1 / 2 / 3 / 4 / 5].
 Status: [new/not healed/improving/stable/worsening/healed].
@@ -528,7 +528,7 @@ Location / laterality: ***
 L: *** cm W: *** cm D: *** cm
 Surface area (auto): *** cm²
 Volume (auto): *** cm³
-Etiology/classification: [pressure injury stage / diabetic ulcer Wagner grade / venous / arterial / surgical / traumatic / MASD / other].
+Etiology/classification: [pressure injury / diabetic ulcer / venous / arterial / surgical / traumatic / MASD / other].
 If pressure injury → Stage: [1 / 2 / 3 / 4 / unstageable / DTI].
 If diabetic ulcer → Wagner grade: [0 / 1 / 2 / 3 / 4 / 5].
 Status: [new/not healed/improving/stable/worsening/healed].
@@ -1950,7 +1950,7 @@ function doReassign(){
    (schema roundcard.v1). Here the composer reads them (same ClinicalVault read the
    follow-up carry-forward uses), auto-creates the patient, and pre-fills the wound
    fields. It's a HEAD START — the provider completes the full note. */
-const _RC_ETIO={ 'Pressure injury':'pressure injury stage','Diabetic ulcer':'diabetic ulcer Wagner grade','Venous':'venous','Arterial':'arterial','Surgical':'surgical','Traumatic':'traumatic','MASD':'MASD','Other':'other' };
+const _RC_ETIO={ 'Pressure injury':'pressure injury','Diabetic ulcer':'diabetic ulcer','Venous':'venous','Arterial':'arterial','Surgical':'surgical','Traumatic':'traumatic','MASD':'MASD','Other':'other' };
 const _RC_STAGE={ 'Stage 1':'1','Stage 2':'2','Stage 3':'3','Stage 4':'4','Unstageable':'unstageable','DTI':'DTI' };
 const _RC_STATUS={ 'Improving':'improving','Stable':'stable','Worsening':'worsening' };
 const _RC_DRAIN={ 'None':'none','Scant':'scant','Small':'small','Moderate':'moderate','Large':'large' };
