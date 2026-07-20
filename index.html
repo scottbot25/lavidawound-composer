@@ -2404,6 +2404,23 @@ function renderLines(text, container, keyPrefix){
       return;
     }
 
+    if(/^Consent:/.test(line.trim())){   // clear Yes/No (the single-option toggle was too easy to miss — Scott)
+      const k=keyPrefix+':consent';
+      const row=document.createElement('div'); row.className='frow';
+      const lab=document.createElement('div'); lab.className='flabel'; lab.textContent='Consent — risks, benefits & alternatives discussed and agreed?';
+      const ctr=document.createElement('div'); ctr.className='fctrls';
+      const sel=document.createElement('select');
+      [['','Select…'],['yes','Yes'],['no','No']].forEach(([v,t])=>{const op=document.createElement('option');op.value=v;op.textContent=t;sel.appendChild(op);});
+      if(STATE[k]!=null && [...sel.options].some(o=>o.value===STATE[k])) sel.value=STATE[k];
+      sel.classList.toggle('unset',!sel.value);
+      sel.onchange=()=>{STATE[k]=sel.value; sel.classList.toggle('unset',!sel.value); persist(); resolveAll();};
+      ctr.appendChild(sel);
+      row.appendChild(lab); row.appendChild(ctr); container.appendChild(row);
+      addLine(row, ()=> sel.value==='yes' ? 'Consent: Risks, benefits, and alternatives discussed and agreed.'
+                     : (sel.value==='no' ? 'Consent: Not obtained.' : ''), li, true);
+      return;
+    }
+
     if(/^Wound bed:/.test(line.trim())){   // 4 %'s sum to 100; eschar + exposed structure = yes/no
       const row=document.createElement('div'); row.className='frow';
       const lab=document.createElement('div'); lab.className='flabel'; lab.textContent='Wound bed';
