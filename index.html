@@ -2490,7 +2490,11 @@ function renderLines(text, container, keyPrefix, opts){
       ws.forEach(w=>{ const s=read(w); const list=[...s.sel]; if(s.other) list.push(s.other); parts.push(list.join(', ')); });
       if(!parts.some(p=>p)) return tk.raw;
       if(n===1) return parts[0];
-      return parts.map((p,i)=>'\nWound '+woundNum(ws[i].id)+': '+(p||'—')).join('');
+      // Only emit a "Wound N:" line for wounds that actually have a dressing. A wound with none used to
+      // paste a dangling "Wound N:" into the Plan (that label is exempt from the empty-line stripper so
+      // multi-wound titles survive, so it wouldn't get cleaned) — omit it here instead.
+      return ws.map((w,i)=>({num:woundNum(w.id), p:parts[i]})).filter(x=>x.p)
+               .map(x=>'\nWound '+x.num+': '+x.p).join('');
     });
     return wrap;
   }
@@ -3026,7 +3030,11 @@ function buildSection(name,idx,text){
       // Wound numbers come from the patient's permanent registry — NEVER the array index. This is the
       // text that lands in the chart, so a positional number here would mislabel findings after any
       // wound is removed, and would break next week's carry-forward match.
-      const tail = wt.length<=1 ? ' '+(wt[0]||'') : '\n\n'+wt.map((t,i)=>'Wound '+woundNum(wounds[i].id)+':\n'+t).join('\n\n');
+      // Join the (single) wound with a NEWLINE, not a space: pre.resolve() ends with the
+      // "Per-wound findings below." marker line, and cleanForCopy blanks that whole marker line — a space
+      // here glued the wound's first line (Location) onto the marker, so the location was silently wiped
+      // from every single-wound paste. A newline keeps the marker on its own line so only it is blanked.
+      const tail = wt.length<=1 ? '\n'+(wt[0]||'') : '\n\n'+wt.map((t,i)=>'Wound '+woundNum(wounds[i].id)+':\n'+t).join('\n\n');
       return pre.resolve()+tail;
     };
     // resolve() = what COPIES (stars stripped) — unchanged. resolveRaw() = display only: keeps the
