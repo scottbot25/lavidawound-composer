@@ -290,9 +290,9 @@
 <body>
 <header>
   <h1>LaVida Wound Note Composer</h1>
-  <div class="toggle">
-    <button id="tab-new" class="on" onclick="setMode('new')">Initial · New Patient</button>
-    <button id="tab-fu" onclick="setMode('fu')">Follow-Up · Weekly</button>
+  <div class="toggle" title="Each patient is an Initial OR a Follow-up, chosen once. Click the other type to change it (asks first).">
+    <button id="tab-new" class="on" onclick="chooseNoteType('new')">Initial · New Patient</button>
+    <button id="tab-fu" onclick="chooseNoteType('fu')">Follow-Up · Weekly</button>
   </div>
   <label class="pt-field" title="For your reference and the facility handoff only — this is never copied into the PCC note.">Patient <input id="patientName" placeholder="name / ID — not copied into the note" oninput="onPatientInput(this.value)"></label>
   <button id="handoffBtn" onclick="openHandoff()" title="Move the current patient to a different building (and edit round date / provider). Facility handoffs are sent from the Round Card." style="cursor:pointer;padding:8px 15px;border:1px solid var(--line);border-radius:9px;color:var(--ink);font-weight:650;background:#fff;display:inline-flex;align-items:center;gap:8px">⇄ Reassign patient</button>
@@ -581,12 +581,30 @@ const PKEY='lavida_patient_name';             // legacy patient-name key — mig
 const WKEY='lavida_wound_patients';           // the multi-patient workspace
 let MODE='new';
 function newStore(){ return {new:{}, fu:{}}; }
+/* NOTE-TYPE IS A PER-PATIENT PROPERTY, CHOSEN ONCE (Scott, 2026-07-20: "note-type is set once").
+   Each patient is EITHER an Initial or a Follow-up — never both. `p.noteType` ('new'|'fu') is the single
+   source of truth; the active patient's noteType drives the global MODE. The old free Initial/Follow-Up
+   tab toggle (which let a provider half-fill both stores at once) is gone — switching type now takes an
+   explicit confirm (chooseNoteType) and clears the abandoned side, so there's never a second hidden note.
+   The store keeps its {new,fu} shape internally, but only the patient's own side is ever filled. */
+function ptNoteType(p){ return (p && p.noteType==='fu') ? 'fu' : 'new'; }
+// Does a single store side hold REAL charted content (ignore internal keys: wound list __wc_, section-off __secoff)?
+function _storeHasContent(s){ if(!s) return false;
+  return Object.keys(s).some(k=>{ if(/^__/.test(k)) return false;
+    const v=s[k]; if(v==null||v==='') return false;
+    if(Array.isArray(v)) return v.length>0;
+    if(typeof v==='object') return Object.keys(v).length>0;
+    return String(v).trim()!==''; }); }
+// Backfill noteType on an older patient (pre-2026-07-20 workspaces had no noteType): follow-up only if the
+// fu side has content and the new side doesn't — otherwise Initial. Never overwrites an existing value.
+function ensureNoteType(p){ if(!p) return; if(p.noteType==='new'||p.noteType==='fu') return;
+  p.noteType = (_storeHasContent(p.store&&p.store.fu) && !_storeHasContent(p.store&&p.store.new)) ? 'fu' : 'new'; }
 /* Older workspaces (and drafts) stored facility once on WS.round and overlaid it onto everyone — that's
    the mixing bug. Bring them forward by stamping each patient with the round's old facility (they were
    all under one facility anyway), so from here on each patient carries its own. Only fills a MISSING
    stamp; never overwrites one that's already set. */
 function migrateFacility(ws){ if(!ws||!ws.patients) return; const rf=String((ws.round&&ws.round.facility)||'').trim();
-  Object.keys(ws.patients).forEach(pid=>{ const p=ws.patients[pid]; if(p && p.facility==null) p.facility=rf; }); }
+  Object.keys(ws.patients).forEach(pid=>{ const p=ws.patients[pid]; if(p && p.facility==null) p.facility=rf; if(p) ensureNoteType(p); }); }
 function loadWorkspace(){
   try{ const r=sessionStorage.getItem(WKEY); if(r){ const o=JSON.parse(r);
     if(o&&o.patients&&Object.keys(o.patients).length){ if(!o.patients[o.activePid]) o.activePid=Object.keys(o.patients)[0]; if(!o.round) o.round={}; migrateFacility(o); return o; } } }catch(e){}
@@ -596,12 +614,16 @@ function loadWorkspace(){
   try{ name=sessionStorage.getItem(PKEY)||''; }catch(e){}
   // round = date + provider shared across the round; facility is PER-PATIENT (round.facility is only the
   // sticky default the next new patient inherits). See migrateFacility.
-  return { seq:2, activePid:'p1', round:{}, patients:{ p1:{ name, store, updatedAt:0, facility:'' } } };
+  // A migrated single note carried whichever store had content; noteType follows it (fu only if the
+  // fu side has data and new doesn't). ensureNoteType stamps it once the patient object exists.
+  const p1={ name, store, updatedAt:0, facility:'' }; ensureNoteType(p1);
+  return { seq:2, activePid:'p1', round:{}, patients:{ p1 } };
 }
 let WS=loadWorkspace();
 let activePid=WS.activePid;
 let STORE=WS.patients[activePid].store;
-let STATE=STORE.new, _saveT;
+MODE=ptNoteType(WS.patients[activePid]);          // active patient's own type drives the initial view
+let STATE=STORE[MODE], _saveT;
 function activePt(){ return WS.patients[activePid]; }
 function saveWS(){ try{ sessionStorage.setItem(WKEY, JSON.stringify(WS)); }catch(e){} if(typeof scheduleDraftSave==='function') scheduleDraftSave(); }
 function persist(){ const p=activePt(); if(p){ p.store=STORE; p.updatedAt=Date.now(); } WS.activePid=activePid; saveWS();
@@ -895,17 +917,17 @@ function whApplyPrior(){
 /* ---- patient workspace operations ---- */
 // Point STORE at the active patient's store and rebuild the form. The outgoing patient's edits are
 // already saved (persist runs on every field change), so we never overwrite here.
-function activateForm(){ STORE=activePt().store; STATE=STORE[MODE]; WS.activePid=activePid; saveWS(); syncPatientField(); setMode(MODE); }
+function activateForm(){ STORE=activePt().store; MODE=ptNoteType(activePt()); STATE=STORE[MODE]; WS.activePid=activePid; saveWS(); syncPatientField(); setMode(MODE); }
 function switchPatient(pid){ if(!WS.patients[pid]||pid===activePid) return; if(typeof refreshActiveSummary==='function') refreshActiveSummary(); activePid=pid; activateForm(); }
 function newPatient(){ if(typeof refreshActiveSummary==='function') refreshActiveSummary(); const pid='p'+(WS.seq++);
   // a new patient inherits the facility you're rounding in now (the sticky default) so you don't retype
   // it per patient — but it's their OWN stamp from here, not a shared label.
-  WS.patients[pid]={ name:'', store:newStore(), updatedAt:Date.now(), facility:String((WS.round&&WS.round.facility)||'').trim() };
+  WS.patients[pid]={ name:'', store:newStore(), updatedAt:Date.now(), facility:String((WS.round&&WS.round.facility)||'').trim(), noteType:'new' };
   activePid=pid; activateForm(); const el=document.getElementById('patientName'); if(el){ el.focus(); } }
 function removePatient(pid){ const p=WS.patients[pid]; if(!p) return;
   if(!confirm('Remove '+((p.name&&p.name.trim())||'this patient')+' and their note from the workspace?\n(Does not affect anything already saved to ClinicalVault or pasted into PCC.)')) return;
   delete WS.patients[pid]; const ids=Object.keys(WS.patients);
-  if(!ids.length){ WS.patients.p1={name:'',store:newStore(),updatedAt:Date.now(),facility:''}; WS.seq=2; activePid='p1'; WS.round=WS.round||{}; WS.round.facility=''; }  // removed the LAST patient -> truly reset to a blank "Start here" (don't re-inherit the sticky facility)
+  if(!ids.length){ WS.patients.p1={name:'',store:newStore(),updatedAt:Date.now(),facility:'',noteType:'new'}; WS.seq=2; activePid='p1'; WS.round=WS.round||{}; WS.round.facility=''; }  // removed the LAST patient -> truly reset to a blank "Start here" (don't re-inherit the sticky facility)
   else if(pid===activePid){ activePid=ids[0]; }
   activateForm(); }
 // Wipe the CURRENT patient (name, facility, note) back to a fresh blank — the "clear" affordance for
@@ -913,11 +935,11 @@ function removePatient(pid){ const p=WS.patients[pid]; if(!p) return;
 function clearCurrentPatient(){
   const pid=activePid; if(!WS.patients[pid]) return;
   if(!confirm('Clear this patient — name, facility, and note — and start fresh?')) return;
-  WS.patients[pid]={ name:'', store:newStore(), updatedAt:Date.now(), facility:'' };
+  WS.patients[pid]={ name:'', store:newStore(), updatedAt:Date.now(), facility:'', noteType:'new' };
   WS.round=WS.round||{}; WS.round.facility='';   // drop the sticky default too, so it's a real blank reset
   activateForm(); }
 function clearAll(){ if(!confirm('Clear the ENTIRE workspace — every patient and both notes — and wipe the in-browser session? This cannot be undone.')) return;
-  WS={ seq:2, activePid:'p1', round:{}, patients:{ p1:{name:'',store:newStore(),updatedAt:Date.now(),facility:''} } }; activePid='p1';
+  WS={ seq:2, activePid:'p1', round:{}, patients:{ p1:{name:'',store:newStore(),updatedAt:Date.now(),facility:'',noteType:'new'} } }; activePid='p1';
   try{ sessionStorage.removeItem(WKEY); sessionStorage.removeItem(SKEY); sessionStorage.removeItem(PKEY); }catch(e){}
   activateForm(); }
 // The patient switcher strip under the header (built in renderPatientBar; called from setMode).
@@ -980,7 +1002,7 @@ function addPatientToFacility(fac){
   if(typeof refreshActiveSummary==='function') refreshActiveSummary();
   fac=String(fac||'').trim();
   const pid='p'+(WS.seq++);
-  WS.patients[pid]={ name:'', store:newStore(), updatedAt:Date.now(), facility:fac };
+  WS.patients[pid]={ name:'', store:newStore(), updatedAt:Date.now(), facility:fac, noteType:'new' };
   WS.round=WS.round||{}; WS.round.facility=fac;
   activePid=pid; activateForm();
   const el=document.getElementById('patientName'); if(el) el.focus();
@@ -1937,18 +1959,23 @@ async function rcList(facility){
   return out;
 }
 
-/* Create the patient + pre-fill an Initial note from a roundcard.v1 record. Seeds STATE keys
-   BEFORE setMode renders, so every value flows out through the normal resolve chain. The wound
-   field positions (:0,:1,… on keyPrefix "1:w<wid>") track the current Objective template. */
-function rcPrefill(rec){
+/* Create the patient + pre-fill the note from a roundcard.v1 record. Seeds STATE keys BEFORE setMode
+   renders, so every value flows out through the normal resolve chain. The wound field positions
+   (:0,:1,… on keyPrefix "1:w<wid>") track the current Objective template — the same in both templates.
+   NOTE-TYPE IS DECIDED HERE FROM HISTORY (Scott 2026-07-20): a returning patient (a prior committed
+   visit exists) opens as a Follow-up; a first-time patient opens as an Initial — no hard-coded 'new'. */
+async function rcPrefill(rec){
   addPatientToFacility((rec.facility||'').trim());        // new patient, stamped facility, active
-  setPatient((rec.patient&&rec.patient.name)||'');
-  MODE='new';
-  const S=STORE['new'];
-  // Creating the patient already rendered a default EMPTY wound as number 1. Wipe the new-note store
-  // and reset the wound registry so OUR pulled wounds number from 1 (not 2).
-  Object.keys(S).forEach(k=>delete S[k]);
-  { const _p=activePt(); if(_p) _p.wreg={seq:1, widSeq:null, byId:{}}; }
+  const nm=(rec.patient&&rec.patient.name)||'';
+  setPatient(nm);
+  let nt='new';
+  try{ if(nm.trim()){ const pv=await whPriorVisit(nm); if(pv) nt='fu'; } }catch(e){}   // prior committed visit => Follow-up
+  // Creating the patient rendered a default EMPTY wound into the Initial side. Reset BOTH sides + the
+  // wound registry so this patient carries ONE clean note of the chosen type (no hidden second store)
+  // and OUR pulled wounds number from 1. Capture S AFTER the reset so it points at the live (fresh) side.
+  { const _p=activePt(); if(_p){ _p.noteType=nt; _p.store.new={}; _p.store.fu={}; _p.wreg={seq:1, widSeq:null, byId:{}}; } }
+  MODE=nt;
+  const S=STORE[nt];
   const wids=[];
   (rec.wounds||[]).forEach(w=>{
     const wid=mintWid(); woundNum(wid); wids.push(wid);
@@ -1977,7 +2004,7 @@ function rcPrefill(rec){
   const ap=[ord, edu?('Additional info / education: '+edu):''].filter(Boolean).join('\n\n');
   if(ap) S['2:ta:1']=ap;   // A&P "Assessment:" free-text (text fields key as <sec>:ta:<seq>, verified)
   { const _p=activePt(); if(_p) _p.srcRcKey=_rcKey(rec); }   // tag the source record so auto-pull never double-pulls it
-  setMode('new'); persist(); renderPatientBar();
+  setMode(nt); persist(); renderPatientBar();
 }
 
 /* ===== AUTO-PULL — the composer brings Round Card patients in by itself =====================
@@ -2027,9 +2054,11 @@ async function rcAutoPull(reason){
     // Don't yank a provider off a note they're mid-way through: remember where they were, go back after.
     const returnPid=activePid, returnNamed=!!((((WS.patients[returnPid]||{}).name)||'').trim());
     const now=Date.now(), byFac={};
-    fresh.forEach(r=>{ rcPrefill(r);
+    // rcPrefill is async now (it checks wound-history to decide Initial vs Follow-up), so await each in
+    // turn — a for-of loop, not forEach, so the seen-marking and counts stay in step with each create.
+    for(const r of fresh){ await rcPrefill(r);
       if(r&&r.id) seen[r.id]=now; else WS.rcPulled[_rcKey(r)]=true;
-      const f=facLabel(r.facility||'')||'Unfiled'; byFac[f]=(byFac[f]||0)+1; });
+      const f=facLabel(r.facility||'')||'Unfiled'; byFac[f]=(byFac[f]||0)+1; }
     Object.keys(seen).forEach(id=>{ if(now-(seen[id]||0) > RC_SEEN_TTL_MS) delete seen[id]; });   // prune old ids
     _rcSeenSave(seen);
     if(returnNamed && WS.patients[returnPid]) switchPatient(returnPid);
@@ -3067,8 +3096,33 @@ function copyText(t,msg){ copyRaw(t); toast(msg); }
 function toast(m){const el=document.getElementById('toast');el.textContent=m;el.classList.add('show');setTimeout(()=>el.classList.remove('show'),1400);}
 
 /* ============ MODE ============ */
+// The note-type tabs are now a per-patient INDICATOR + a deliberate switch, not a free toggle. Clicking
+// the type a patient already is does nothing; clicking the other type asks first (and clears the side you
+// leave, so a patient never carries a half-filled second note). This is the "note-type set once" model.
+function chooseNoteType(nt){
+  nt = (nt==='fu') ? 'fu' : 'new';
+  const p=activePt(); if(!p) return;
+  const cur=ptNoteType(p);
+  if(nt===cur){ setMode(cur); return; }                 // already this type — just re-assert the view
+  const toLabel   = nt==='fu' ? 'Follow-Up' : 'Initial';
+  const fromLabel = cur==='fu' ? 'Follow-Up' : 'Initial';
+  const hadContent = _storeHasContent(p.store && p.store[cur]);
+  const msg = hadContent
+    ? ('Change this patient from '+fromLabel+' to '+toLabel+'?\n\nThe '+fromLabel+' note you started will be cleared — a patient can only have one note type.')
+    : ('Make this patient a '+toLabel+' note?');
+  if(!confirm(msg)){ setMode(cur); return; }             // cancelled — leave everything as it was
+  p.store[cur] = {};                                     // drop the abandoned side so there's no hidden second note
+  p.noteType = nt;
+  _whPrior = null;                                        // a new type re-evaluates carry-forward for this patient
+  persist();
+  setMode(nt);
+}
 function setMode(mode){
-  MODE=mode; STATE=STORE[mode]; dressingsSync=null; procSync=null; procHooks=[];
+  // setMode is the pure renderer for a given note-type. It is only ever called with the ACTIVE patient's
+  // own noteType (activateForm/chooseNoteType/init all pass it), so keep the two in lockstep; the backstop
+  // stamp only fills a missing value (a brand-new patient), never flips an existing one.
+  MODE=mode; { const _p=activePt(); if(_p && !_p.noteType) _p.noteType=mode; }
+  STATE=STORE[mode]; dressingsSync=null; procSync=null; procHooks=[];
   syncPatientField();
   document.getElementById('tab-new').classList.toggle('on',mode==='new');
   document.getElementById('tab-fu').classList.toggle('on',mode==='fu');
@@ -3105,7 +3159,7 @@ const AUTH = {
 const LOGIN_SCOPES = ['openid','profile','email'];
 function _acctName(a){ return (a && (a.username || (a.idTokenClaims && (a.idTokenClaims.preferred_username||a.idTokenClaims.email)) || a.name)) || 'signed in'; }
 async function beginSignIn(){
-  if(AUTH.demo){ document.getElementById('authGate').style.display='none'; showUser({username:'operations@lavidaheal.com (demo)',name:'Demo User'}); setMode('new'); return; }
+  if(AUTH.demo){ document.getElementById('authGate').style.display='none'; showUser({username:'operations@lavidaheal.com (demo)',name:'Demo User'}); setMode(ptNoteType(activePt())); return; }
   const btn=document.querySelector('#authGate button'); if(btn) btn.disabled=true;
   try{
     const pca=await _getPca();
@@ -3133,15 +3187,15 @@ async function startApp(){
   const _qs=new URLSearchParams(location.search);
   // LOCAL-ONLY UI preview: skip the sign-in gate and just build the app. Guarded to localhost so it
   // can NEVER bypass the gate on the deployed site (and the real data boundary is Entra/SharePoint anyway).
-  if(_qs.get('preview')==='1' && (location.hostname==='127.0.0.1'||location.hostname==='localhost')){ AUTH.enabled=false; setMode('new'); return; }
+  if(_qs.get('preview')==='1' && (location.hostname==='127.0.0.1'||location.hostname==='localhost')){ AUTH.enabled=false; setMode(ptNoteType(activePt())); return; }
   if(_qs.get('demo')==='1'){ AUTH.enabled=true; AUTH.demo=true; }
-  if(!AUTH.enabled){ setMode('new'); return; }
+  if(!AUTH.enabled){ setMode(ptNoteType(activePt())); return; }
   if(AUTH.demo){ showGate(); return; }
   try{
     const pca=await _getPca();
     const res=await pca.handleRedirectPromise();   // finishes a returning sign-in AND clears any stuck "interaction_in_progress"
     const acct=(res&&res.account) || pca.getAllAccounts()[0];
-    if(acct){ pca.setActiveAccount(acct); showUser(acct); setMode('new'); maybeRestoreDraft(); return; }
+    if(acct){ pca.setActiveAccount(acct); showUser(acct); setMode(ptNoteType(activePt())); maybeRestoreDraft(); return; }
   }catch(e){ showGate('Sign-in unavailable — reload the page. ('+((e&&e.message)||e)+')'); return; }
   showGate();
 }
