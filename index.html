@@ -1898,6 +1898,8 @@ const _RC_STAGE={ 'Stage 1':'1','Stage 2':'2','Stage 3':'3','Stage 4':'4','Unsta
 const _RC_STATUS={ 'Improving':'improving','Stable':'stable','Worsening':'worsening' };
 const _RC_DRAIN={ 'None':'none','Scant':'scant','Small':'small','Moderate':'moderate','Large':'large' };
 const _RC_ODOR={ 'None':'none','Mild':'mild','Strong':'strong' };
+const _RC_EXPOSED={ 'None':'none','Subcutaneous tissue':'subcutaneous tissue','Tendon':'tendon','Muscle':'muscle','Bone':'bone','Hardware':'hardware' };
+const _RC_PERIWOUND={ 'Normal':'normal','Macerated':'macerated','Erythematous':'erythematous','Indurated':'indurated','Ecchymotic':'ecchymotic','Callused':'callused','Fluctuant':'fluctuant','Warm':'warm','Tender':'tender' };
 /* Match the Round Card's own folder sanitizer (cleanSeg) so we read the same path it wrote. */
 function _rcFacSeg(f){ f=String(f||'').replace(/[\\/:*?"<>|#%]/g,'').replace(/\s+/g,' ').trim(); if(/^\.+$/.test(f)) f=''; return f||'Unfiled'; }
 let _rcRecs=[];
@@ -1939,11 +1941,19 @@ function rcPrefill(rec){
     if(String(w.l||'').trim())   S[P+':1']=String(w.l).trim();
     if(String(w.w||'').trim())   S[P+':2']=String(w.w).trim();
     if(String(w.d||'').trim())   S[P+':3']=String(w.d).trim();
-    const et=_RC_ETIO[w.type]; if(et){ S[P+':4']=[et]; if(et==='other' && String(w.typeOther||'').trim()) S[P+':4:fill']=String(w.typeOther).trim(); }
-    if(/^Pressure/.test(w.type||'') && _RC_STAGE[w.stage]) S[P+':5']=_RC_STAGE[w.stage];
+    const types=Array.isArray(w.type)?w.type:(w.type?[w.type]:[]);
+    const ets=types.map(t=>_RC_ETIO[t]).filter(Boolean);
+    if(ets.length){ S[P+':4']=ets; if(ets.indexOf('other')>=0 && String(w.typeOther||'').trim()) S[P+':4:fill']=String(w.typeOther).trim(); }
+    // Field keys VERIFIED empirically against the live Objective template (positional, choice/select/
+    // checkbox tokens only): loc :0, L/W/D :1/:2/:3, etiology :4, stage :5, status :7, exposed :8,
+    // drainage :9, odor :12, periwound :17. (Placeholder text can false-positive a naive check — these
+    // were confirmed by driving the actual DOM controls and reading the resulting STATE key.)
+    if(types.some(t=>/^Pressure/.test(t)) && _RC_STAGE[w.stage]) S[P+':5']=_RC_STAGE[w.stage];
     if(_RC_STATUS[w.status]) S[P+':7']=_RC_STATUS[w.status];
-    if(_RC_DRAIN[w.drain])   S[P+':15']=_RC_DRAIN[w.drain];
-    if(_RC_ODOR[w.odor])     S[P+':18']=_RC_ODOR[w.odor];
+    if(_RC_DRAIN[w.drain])   S[P+':9']=_RC_DRAIN[w.drain];
+    if(_RC_ODOR[w.odor])     S[P+':12']=_RC_ODOR[w.odor];
+    const exps=(Array.isArray(w.exposed)?w.exposed:[]).map(x=>_RC_EXPOSED[x]).filter(Boolean); if(exps.length) S[P+':8']=exps;
+    const pws=(Array.isArray(w.periwound)?w.periwound:[]).map(x=>_RC_PERIWOUND[x]).filter(Boolean); if(pws.length) S[P+':17']=pws;
   });
   if(wids.length) S['__wc_1']=wids;
   const ord=(rec.wounds||[]).map((w,i)=>{ const o=String(w.orders||'').trim(); return o?('Wound '+(i+1)+(String(w.loc||'').trim()?' ('+String(w.loc).trim()+')':'')+': '+o):''; }).filter(Boolean).join('\n');
