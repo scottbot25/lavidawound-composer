@@ -169,8 +169,11 @@
   .proc-q.proc-q-unset .proc-q-lab{color:#b26a00}
   .proc-q.proc-q-unset .proc-q-lab::before{content:'⚠ '}
   .proc-q.proc-q-unset .proc-seg{border-color:#e6a23c;box-shadow:0 0 0 2px rgba(230,162,60,.25)}
-  .wound-card.proc-off{background:var(--panel2)}
+  /* "No" answered -> the wound's procedure card RECEDES, same as the section-level "Not performed"
+     greys a whole section (opacity + grayscale). The Yes/No stays clickable so it can be flipped back. */
+  .wound-card.proc-off{background:var(--panel2);opacity:.5;filter:grayscale(.6)}
   .wound-card.proc-off .wound-title{color:var(--muted)}
+  .wound-card.proc-off .proc-q{background:var(--panel2)}
   /* PRIOR BLOCK — last visit's numbers, shown ABOVE this visit's fields for comparison.
      Deliberately styled as an inert reference card (muted, boxed, no inputs) so it never reads as
      something you fill in or something that prints. It is not wired to any resolver. */
