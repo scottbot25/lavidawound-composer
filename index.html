@@ -660,6 +660,18 @@ function woundNum(wid, p){ p=p||activePt(); const R=wreg(p); const k=String(wid)
   return R.byId[k].num;
 }
 function woundMeta(wid, p){ p=p||activePt(); const R=wreg(p); woundNum(wid,p); return R.byId[String(wid)]; }
+// Free a wound's DISPLAY number when it's deleted before ever being committed (Scott, 2026-07-19: "a wound
+// shouldn't be stricken until it's committed"). A wound you add by mistake and delete should give its number
+// back, so the next add reuses it — instead of permanently burning it and skipping to the next. Only numbers
+// on COMMITTED wounds are permanent (they're a wound's identity across visits, so carry-forward stays right).
+// The wid itself is NOT reclaimed (wids must stay unique so a reused number gets a fresh, empty store).
+function releaseWoundNum(wid, p){ p=p||activePt(); const R=wreg(p); const k=String(wid); const e=R.byId[k];
+  if(!e || e.committed) return;                       // never touch a committed wound's number
+  delete R.byId[k];
+  let mx=0; Object.keys(R.byId).forEach(kk=>{ mx=Math.max(mx, R.byId[kk].num||0); });
+  R.seq=mx+1;                                          // next number = one past the highest still in use
+  try{ persist(); }catch(e){}
+}
 
 /* ============ WOUND HISTORY — the carry-forward store ============
    Abby (7/16 Zoom): on a follow-up she needs LAST visit's wound bed + measurements sitting next to
@@ -754,6 +766,9 @@ async function whCommit(){
     const h=(await whLoad(name)) || whBlank(name);
     h.patient=name; h.facility=whFacility();
     const hdr=currentHeader(); const date=(hdr.date||todayISO());
+    // These wounds are now COMMITTED — lock their numbers in permanently (a later delete won't reclaim them,
+    // and next visit's carry-forward matches on them). Must run before the wreg snapshot so it's recorded.
+    woundRegistry.forEach(w=>{ const e=wreg().byId[String(w.id)]; if(e) e.committed=true; });
     const rec={ date, provider:hdr.provider||'', mode:MODE, savedAt:Date.now(), wounds:whSnapshotWounds(),
                 wreg:JSON.parse(JSON.stringify(wreg().byId||{})) };
     const i=h.visits.findIndex(v=>v.date===date);
@@ -791,6 +806,7 @@ async function whRefreshPrior(){
     if(visit && visit.wreg){
       const R=wreg(); let mx=R.seq;
       Object.keys(visit.wreg).forEach(k=>{ if(!R.byId[k]) R.byId[k]=JSON.parse(JSON.stringify(visit.wreg[k]));
+        R.byId[k].committed=true;                       // came from a committed visit -> its number is permanent
         mx=Math.max(mx, (R.byId[k].num||0)+1); });
       R.seq=Math.max(R.seq, mx);
       try{ persist(); }catch(e){}
@@ -2636,7 +2652,7 @@ function buildSection(name,idx,text){
       inner.appendChild(prior);
       const block=renderLines(woundTmpl, inner, idx+':w'+id);
       const w={id, resolve:block.resolve, title, keyPrefix:idx+':w'+id, priorEl:prior, underFrom:block.underFrom, underTo:block.underTo, tunFrom:block.tunFrom, tunTo:block.tunTo};
-      rm.onclick=()=>{ if(wounds.length<=1) return; const i=wounds.indexOf(w); if(i>=0){ wounds.splice(i,1); card.remove(); saveWounds(); paintWoundHeads(); if(dressingsSync) dressingsSync(); resolveAll(); } };
+      rm.onclick=()=>{ if(wounds.length<=1) return; const i=wounds.indexOf(w); if(i>=0){ wounds.splice(i,1); releaseWoundNum(w.id); card.remove(); saveWounds(); paintWoundHeads(); if(dressingsSync) dressingsSync(); resolveAll(); } };
       wounds.push(w); woundsWrap.appendChild(card); paintWoundHeads(); if(dressingsSync) dressingsSync();
     }
     addBtn.onclick=()=>{ addWound(); saveWounds(); resolveAll(); };
@@ -2812,7 +2828,12 @@ function richDisplayBlocks(text){
     return h ? '<div class="ql">'+h+'</div>' : '<div class="ql qgap"></div>';
   }).join('');
 }
-function richClipboard(text){ return String(text||'').split('\n').map(l=>{ const h=fmtLine(l); return h?'<div>'+h+'</div>':'<div><br></div>'; }).join(''); }  // block-per-line for paste
+// Clipboard HTML for pasting a section into PCC. Uses explicit <br> hard line breaks instead of wrapping
+// each line in its own <div>: PCC's note editor MERGES adjacent block <div>s on paste, running the lines
+// together into jumbled text (Scott, 2026-07-19). A <br> is an inline hard break editors don't collapse,
+// so every line — including blank template rows — survives on its own row. (Only the per-section Copy
+// buttons use this; the handoff/email sheets are separate.)
+function richClipboard(text){ return String(text||'').split('\n').map(l=>fmtLine(l)).join('<br>\n'); }  // <br>-per-line for paste
 // Strip unfilled [option] placeholders + drop lines that become empty, so ONLY real filled content
 // copies into PCC (no brackets/*** for surveyors + billers to see). The preview keeps the ghosted
 // placeholders; this is what actually lands on the clipboard.
