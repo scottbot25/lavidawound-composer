@@ -1999,6 +1999,10 @@ function _rcWriteWound(S, wid, w){
   if(_RC_ODOR[w.odor])     S[P+':12']=_RC_ODOR[w.odor];
   const exps=(Array.isArray(w.exposed)?w.exposed:[]).map(x=>_RC_EXPOSED[x]).filter(Boolean); if(exps.length) S[P+':8']=exps;
   const pws=(Array.isArray(w.periwound)?w.periwound:[]).map(x=>_RC_PERIWOUND[x]).filter(Boolean); if(pws.length) S[P+':17']=pws;
+  // Undermining/tunneling are free text on the Round Card -> the composer's "from" box (:13 undermining,
+  // :15 tunneling; :14/:16 are the "to" boxes, left empty). Verified keys; the sink prints a lone value cleanly.
+  if(String(w.undermining||'').trim()) S[P+':13']=String(w.undermining).trim();
+  if(String(w.tunneling||'').trim())   S[P+':15']=String(w.tunneling).trim();
 }
 // Compose the A&P free text (orders per wound + patient education) — used by every pull path.
 function _rcComposeAP(ordLines, edu){
@@ -2365,7 +2369,11 @@ function renderLines(text, container, keyPrefix, opts){
         const fl=document.createElement('span'); fl.className='lit'; fl.textContent='from';
         const tl=document.createElement('span'); tl.className='lit'; tl.textContent='to';
         wrap.appendChild(fl); wrap.appendChild(from); wrap.appendChild(tl); wrap.appendChild(to);
-        sink.push(()=>{ const a=from.value.trim(), b=to.value.trim(); return (a||b) ? 'from '+a+' to '+b : tk.raw; });
+        // "from A to B" when both sides are filled; a lone value (e.g. a whole string pulled from the
+        // Round Card into the "from" field, or a provider who fills only one side) prints on its own —
+        // no dangling "from X to " / "to Y" scaffolding.
+        sink.push(()=>{ const a=from.value.trim(), b=to.value.trim();
+          if(a&&b) return 'from '+a+' to '+b; if(a) return a; if(b) return b; return tk.raw; });
         if(isUnder){ underFrom=from; underTo=to;
           // Clock trigger lives right here on the Undermining line (adjacent to Tunneling) instead of
           // up in the card header — opens the dial that fills both fields. Reads under/tun inputs
