@@ -2239,6 +2239,7 @@ let woundSectionName = null; // name of the section that owns the wound cards �
 let dressingsSync = null;    // re-renders the per-wound dressings rows when wounds change
 let procSync = null;         // rebuilds the per-wound Procedures cards when the wound set changes (add/remove)
 let procHooks = [];          // live repaint fns for procedure blocks (inherited PRE-debridement dims + debrided SA); run on every resolveAll
+let peNormalFields = [];     // the 5 systemic PE lines (General/CV/Resp/Abd/Neuro) — the "Normal exam" macro button fills/clears these; NOT auto-prefilled (Scott 2026-07-20)
 function isFillOpt(o){ o=String(o).trim(); return /\*\*\*/.test(o) || /^other\b/i.test(o); }  // "***", "other: ***", or "other"
 // Exam fields documented per-leg (Right/Left) — extremities + vascular. See renderBilateral.
 const BILAT = new Set([
@@ -2372,14 +2373,18 @@ function renderLines(text, container, keyPrefix, opts){
         if(STATE[fk]!=null) fillInp.value=STATE[fk];
         fillInp.oninput=()=>{STATE[fk]=fillInp.value; persist(); resolveAll();}; }
       const updFill=()=>{ if(fillInp) fillInp.style.display=isFillOpt(sel.value)?'':'none'; };
-      // Normal-findings auto-fill (Abby: "only the NORMAL findings are here; if abnormal the app changes
-      // them"). The five systemic exam lines default to their normal option (the first) on first render, so
-      // a normal patient's exam prints itself and the provider only touches abnormals. Only when never set —
-      // a provider's later change (incl. clearing to blank) is preserved.
-      if(STATE[k]==null && /^(General|Cardiovascular|Respiratory|Abdomen|Neuro):\s*$/.test(lastLit) && tk.opts.length) STATE[k]=tk.opts[0];
       if(STATE[k]!=null && [...sel.options].some(o=>o.value===STATE[k])) sel.value=STATE[k];
       sel.classList.toggle('unset',!sel.value); updFill();
       sel.onchange=()=>{STATE[k]=sel.value; sel.classList.toggle('unset',!sel.value); updFill(); persist(); resolveAll();};
+      // The five systemic PE lines are NO LONGER auto-prefilled to normal (Scott 2026-07-20: a note should
+      // only claim a normal exam once the provider asserts it). Instead they register here, and the "Normal
+      // exam" macro button (in the Physical Exam section) fills or clears all five in one click.
+      if(/^(General|Cardiovascular|Respiratory|Abdomen|Neuro):\s*$/.test(lastLit) && tk.opts.length){
+        peNormalFields.push({
+          normal:()=>{ STATE[k]=tk.opts[0]; sel.value=tk.opts[0]; sel.classList.toggle('unset',false); updFill(); },
+          clear: ()=>{ STATE[k]='';        sel.value='';        sel.classList.toggle('unset',true);  updFill(); }
+        });
+      }
       sink.push(()=>{ if(!sel.value) return tk.raw; if(!isFillOpt(sel.value)) return sel.value;
         const t=fillInp&&fillInp.value.trim();
         // "other" / "other: ***" -> emit ONLY the free text (no "other:" prefix); empty -> drop it entirely
@@ -2935,6 +2940,26 @@ function buildSection(name,idx,text){
     const woundTmpl=text.slice(mi+marker.length).replace(/^\s+/,'');
     const pre=renderLines(preText, body, idx+':g');
 
+    // "Normal exam" MACRO — the systemic exam lines are no longer auto-filled to normal; this button drops
+    // in the normals in one click (and Clear resets them), so the note claims a normal exam only when the
+    // provider asserts it. Operates on the 5 systemic fields that just registered during renderLines above.
+    const peFields=peNormalFields.slice();
+    if(peFields.length){
+      const bar=document.createElement('div'); bar.className='pe-macro-bar';
+      bar.style.cssText='display:flex;gap:8px;align-items:center;margin:2px 0 10px;flex-wrap:wrap';
+      const lab=document.createElement('span'); lab.className='lit'; lab.style.cssText='font-size:12px;color:var(--muted)'; lab.textContent='Systemic exam macro:';
+      const bN=document.createElement('button'); bN.type='button'; bN.textContent='🄽 Normal exam';
+      bN.title='Fill General / Cardiovascular / Respiratory / Abdomen / Neuro with their normal findings';
+      bN.style.cssText='padding:5px 12px;border:1px solid var(--good,#3a9);border-radius:8px;background:#eaf6ef;color:var(--good,#2b8a63);font:inherit;font-size:12.5px;font-weight:650;cursor:pointer';
+      const bC=document.createElement('button'); bC.type='button'; bC.textContent='Clear';
+      bC.title='Clear all five systemic exam lines';
+      bC.style.cssText='padding:5px 12px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink);font:inherit;font-size:12.5px;cursor:pointer';
+      bN.onclick=()=>{ peFields.forEach(f=>f.normal()); persist(); resolveAll(); };
+      bC.onclick=()=>{ peFields.forEach(f=>f.clear());  persist(); resolveAll(); };
+      bar.appendChild(lab); bar.appendChild(bN); bar.appendChild(bC);
+      body.insertBefore(bar, body.firstChild);
+    }
+
     const woundsWrap=document.createElement('div'); body.appendChild(woundsWrap);
     const addBtn=document.createElement('button'); addBtn.className='add-wound'; addBtn.textContent='+ Add another wound'; body.appendChild(addBtn);
 
@@ -3284,7 +3309,7 @@ function setMode(mode){
   // own noteType (activateForm/chooseNoteType/init all pass it), so keep the two in lockstep; the backstop
   // stamp only fills a missing value (a brand-new patient), never flips an existing one.
   MODE=mode; { const _p=activePt(); if(_p && !_p.noteType) _p.noteType=mode; }
-  STATE=STORE[mode]; dressingsSync=null; procSync=null; procHooks=[];
+  STATE=STORE[mode]; dressingsSync=null; procSync=null; procHooks=[]; peNormalFields=[];
   syncPatientField();
   document.getElementById('tab-new').classList.toggle('on',mode==='new');
   document.getElementById('tab-fu').classList.toggle('on',mode==='fu');
