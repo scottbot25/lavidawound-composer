@@ -157,9 +157,19 @@
   .wound-card{border:1px solid var(--line);border-radius:10px;margin:12px 0 6px;overflow:hidden;background:rgba(43,179,163,.04)}
   .wound-head{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--panel2);border-bottom:1px solid var(--line)}
   .wound-title{font-size:12px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#2f8f83}
-  /* Per-wound Procedures gate — an un-toggled wound's debridement block is collapsed; the card reads as OFF. */
-  .proc-toggle input{margin:0}
-  .wound-card.proc-off{background:var(--panel2);opacity:.75}
+  /* Per-wound Procedures gate — a clear "procedure performed?" Yes/No question (not a skippable checkbox).
+     Until answered it sits in an amber bar so a performed procedure can't be silently omitted. */
+  .proc-q{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:9px 12px;background:var(--panel2);border-bottom:1px solid var(--line)}
+  .proc-q-lab{font-size:13px;font-weight:650;color:var(--ink)}
+  .proc-seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#fff}
+  .proc-seg button{border:none;background:transparent;color:var(--ink);font:inherit;font-size:12.5px;font-weight:650;padding:6px 18px;cursor:pointer}
+  .proc-seg button+button{border-left:1px solid var(--line)}
+  .proc-seg button.on{background:#2bb3a3;color:#fff}
+  .proc-q.proc-q-unset{background:#fff7ea;border-bottom-color:#e6a23c}
+  .proc-q.proc-q-unset .proc-q-lab{color:#b26a00}
+  .proc-q.proc-q-unset .proc-q-lab::before{content:'⚠ '}
+  .proc-q.proc-q-unset .proc-seg{border-color:#e6a23c;box-shadow:0 0 0 2px rgba(230,162,60,.25)}
+  .wound-card.proc-off{background:var(--panel2)}
   .wound-card.proc-off .wound-title{color:var(--muted)}
   /* PRIOR BLOCK — last visit's numbers, shown ABOVE this visit's fields for comparison.
      Deliberately styled as an inert reference card (muted, boxed, no inputs) so it never reads as
@@ -2905,19 +2915,32 @@ function buildSection(name,idx,text){
         const card=document.createElement('div'); card.className='wound-card';
         const head=document.createElement('div'); head.className='wound-head';
         const title=document.createElement('span'); title.className='wound-title'; title.textContent='Wound '+woundNum(w.id);
-        // Per-wound gate. OFF by default → this wound contributes nothing to the note (whCommit/PCC).
-        const tog=document.createElement('label'); tog.className='proc-toggle';
-        tog.style.cssText='margin-left:auto;display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--muted);cursor:pointer';
-        const cb=document.createElement('input'); cb.type='checkbox'; cb.style.width='auto'; cb.checked=STATE[dk]===true;
-        tog.appendChild(cb); tog.appendChild(document.createTextNode('Debridement / procedure performed'));
-        head.appendChild(title); head.appendChild(tog);
+        head.appendChild(title);
+        // A CLEAR yes/no QUESTION, not a skippable checkbox (Scott 2026-07-20: the greyed toggle "looks
+        // very easy to skip over" — and a performed procedure silently dropping is a billing miss). Until
+        // it's answered the question sits in an amber "needs an answer" bar so it can't be blown past.
+        // Only "Yes" prints the block. Migrate the old boolean flag (true -> 'yes').
+        if(STATE[dk]===true) STATE[dk]='yes';
+        const qbar=document.createElement('div'); qbar.className='proc-q';
+        const qlab=document.createElement('span'); qlab.className='proc-q-lab'; qlab.textContent='Procedure / debridement performed on this wound?';
+        const seg=document.createElement('div'); seg.className='proc-seg';
+        const yesB=document.createElement('button'); yesB.type='button'; yesB.textContent='Yes';
+        const noB=document.createElement('button'); noB.type='button'; noB.textContent='No';
+        seg.appendChild(yesB); seg.appendChild(noB);
+        qbar.appendChild(qlab); qbar.appendChild(seg);
         const inner=document.createElement('div'); inner.className='wound-body';
-        card.appendChild(head); card.appendChild(inner);
+        card.appendChild(head); card.appendChild(qbar); card.appendChild(inner);
         const blk=renderLines(PROC(), inner, pref, { inheritDims:w.dims });
-        const on=()=>cb.checked;
-        const paintOn=()=>{ inner.style.display=on()?'':'none'; card.classList.toggle('proc-off',!on()); };
-        cb.onchange=()=>{ STATE[dk]=cb.checked; persist(); paintOn(); resolveAll(); };
-        paintOn();
+        const on=()=>STATE[dk]==='yes';
+        const paintQ=()=>{
+          yesB.classList.toggle('on', STATE[dk]==='yes');
+          noB.classList.toggle('on', STATE[dk]==='no');
+          qbar.classList.toggle('proc-q-unset', STATE[dk]!=='yes' && STATE[dk]!=='no');   // amber until answered
+          inner.style.display=on()?'':'none'; card.classList.toggle('proc-off',!on());
+        };
+        yesB.onclick=()=>{ STATE[dk]='yes'; persist(); paintQ(); resolveAll(); };
+        noB.onclick =()=>{ STATE[dk]='no';  persist(); paintQ(); resolveAll(); };
+        paintQ();
         blocks.push({wid:w.id, on, resolve:blk.resolve});
         cardsWrap.appendChild(card);
       });
