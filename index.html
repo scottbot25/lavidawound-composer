@@ -702,7 +702,11 @@ function woundMeta(wid, p){ p=p||activePt(); const R=wreg(p); woundNum(wid,p); r
 // on COMMITTED wounds are permanent (they're a wound's identity across visits, so carry-forward stays right).
 // The wid itself is NOT reclaimed (wids must stay unique so a reused number gets a fresh, empty store).
 function releaseWoundNum(wid, p){ p=p||activePt(); const R=wreg(p); const k=String(wid); const e=R.byId[k];
-  if(!e || e.committed) return;                       // never touch a committed wound's number
+  // Free the number only if the wound was NOT committed IN THIS SESSION (committedHere). A carried-forward
+  // wound is `committed` (its number is a permanent cross-visit identity) but committedHere=false until it
+  // is re-copied this visit — so on a FOLLOW-UP, delete+re-add reuses the number instead of iterating up
+  // (Scott 2026-07-20: deleting/re-adding a wound on a follow-up "iterating up… will create a mess").
+  if(!e || e.committedHere) return;
   delete R.byId[k];
   let mx=0; Object.keys(R.byId).forEach(kk=>{ mx=Math.max(mx, R.byId[kk].num||0); });
   R.seq=mx+1;                                          // next number = one past the highest still in use
@@ -804,7 +808,7 @@ async function whCommit(){
     const hdr=currentHeader(); const date=(hdr.date||todayISO());
     // These wounds are now COMMITTED — lock their numbers in permanently (a later delete won't reclaim them,
     // and next visit's carry-forward matches on them). Must run before the wreg snapshot so it's recorded.
-    woundRegistry.forEach(w=>{ const e=wreg().byId[String(w.id)]; if(e) e.committed=true; });
+    woundRegistry.forEach(w=>{ const e=wreg().byId[String(w.id)]; if(e){ e.committed=true; e.committedHere=true; } });   // finalized THIS visit -> number locked against reuse now
     const rec={ date, provider:hdr.provider||'', mode:MODE, savedAt:Date.now(), wounds:whSnapshotWounds(),
                 wreg:JSON.parse(JSON.stringify(wreg().byId||{})) };
     const i=h.visits.findIndex(v=>v.date===date);
@@ -843,6 +847,7 @@ async function whRefreshPrior(){
       const R=wreg(); let mx=R.seq;
       Object.keys(visit.wreg).forEach(k=>{ if(!R.byId[k]) R.byId[k]=JSON.parse(JSON.stringify(visit.wreg[k]));
         R.byId[k].committed=true;                       // came from a committed visit -> its number is permanent
+        R.byId[k].committedHere=false;                  // ...but NOT committed THIS session, so delete+re-add can reuse its number this visit (clears any stale flag stored in the prior visit's wreg)
         mx=Math.max(mx, (R.byId[k].num||0)+1); });
       R.seq=Math.max(R.seq, mx);
       try{ persist(); }catch(e){}
