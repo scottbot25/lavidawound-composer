@@ -1472,7 +1472,10 @@ async function _getPca(){
   const redirectUri = location.origin + location.pathname.replace(/[^/]*$/, '') + 'redirect.html';
   _pca=new window.msal.PublicClientApplication({
     auth:{ clientId:VAULT_CFG.clientId, authority:'https://login.microsoftonline.com/'+VAULT_CFG.tenantId, redirectUri },
-    cache:{ cacheLocation:'sessionStorage', storeAuthStateInCookie:false }   // clears on tab close (PHI-friendly)
+    // Production: sessionStorage — token clears on tab close (no PHI at rest). SANDBOX ONLY: localStorage,
+    // so a guest sign-in PERSISTS across tabs (the full-page redirect drops the tab from automation, and a
+    // fresh drivable tab must still see the guest account). Sandbox holds synthetic data only.
+    cache:{ cacheLocation: _CSANDBOX ? 'localStorage' : 'sessionStorage', storeAuthStateInCookie:false }
   });
   await _pca.initialize();
   return _pca;
@@ -1482,7 +1485,8 @@ async function _vaultToken(){
   const acct=pca.getAllAccounts()[0];
   if(acct){ try{ return (await pca.acquireTokenSilent(Object.assign({account:acct},req))).accessToken; }catch(e){} }
   // no popup (unreliable on static hosting) — get consent via a full-page redirect; on return, click Save again
-  await pca.acquireTokenRedirect(req);
+  // SANDBOX ONLY: force the account picker on the consent redirect too, so it can't grab a real account.
+  await pca.acquireTokenRedirect(_CSANDBOX ? Object.assign({prompt:'select_account'},req) : req);
   throw new Error('redirecting to grant ClinicalVault access…');
 }
 function _gfetch(url,token,opts){
@@ -3359,7 +3363,11 @@ async function beginSignIn(){
   const btn=document.querySelector('#authGate button'); if(btn) btn.disabled=true;
   try{
     const pca=await _getPca();
-    await pca.loginRedirect({scopes:LOGIN_SCOPES});   // full-page redirect to Microsoft; returns via redirect.html (no popup)
+    const _lopts={scopes:LOGIN_SCOPES};
+    // SANDBOX ONLY: force the account picker so Microsoft SSO can't silently sign in a real, vault-capable
+    // account (operations@/scottsilver@) instead of the walled test guest. Production sign-in is unchanged.
+    if(_CSANDBOX) _lopts.prompt='select_account';
+    await pca.loginRedirect(_lopts);   // full-page redirect to Microsoft; returns via redirect.html (no popup)
   }catch(e){
     if(btn) btn.disabled=false;
     showGate('Sign-in couldn’t start — reload the page and try again. ('+((e&&e.message)||e)+')');
