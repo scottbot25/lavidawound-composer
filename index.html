@@ -293,6 +293,7 @@
   <label class="pt-field" title="For your reference and the facility handoff only — this is never copied into the PCC note.">Patient <input id="patientName" placeholder="name / ID — not copied into the note" oninput="onPatientInput(this.value)"></label>
   <button id="handoffBtn" onclick="openHandoff()" title="Move the current patient to a different building (and edit round date / provider). Facility handoffs are sent from the Round Card." style="cursor:pointer;padding:8px 15px;border:1px solid var(--line);border-radius:9px;color:var(--ink);font-weight:650;background:#fff;display:inline-flex;align-items:center;gap:8px">⇄ Reassign patient</button>
   <button id="roundCardBtn" onclick="openRoundCard()" title="Bedside Round Card — quick wound orders for the nurse, same tool as on the phone. Opens over the composer." style="cursor:pointer;padding:8px 15px;border:1px solid var(--accent);border-radius:9px;color:var(--accent);font-weight:650;display:inline-flex;align-items:center;gap:8px;background:#fff">🩹 Round Card</button>
+  <button id="rcPullBtn" onclick="openRoundCardPull()" title="Pull a patient the bedside Round Card captured — pre-fills a new note with their wounds." style="cursor:pointer;padding:8px 15px;border:1px solid var(--line);border-radius:9px;color:var(--ink);font-weight:650;display:inline-flex;align-items:center;gap:8px;background:#fff">📋 From Round Card</button>
   <span id="authUser" class="auth-user"></span>
   <button id="resumeBtn" class="ghost" onclick="openResume()" title="Reopen a saved day's work from ClinicalVault" style="display:none;padding:7px 11px">☁ Resume</button>
   <span id="draftStatus" class="draft-status"></span>
@@ -322,6 +323,17 @@
 </div>
 <div id="handoffModal" style="display:none;position:fixed;inset:0;z-index:90;background:rgba(6,10,15,.75);align-items:flex-start;justify-content:center;padding:24px;overflow:auto">
   <div id="handoffCard"></div>
+</div>
+<div id="rcPullModal" style="display:none;position:fixed;inset:0;z-index:95;background:rgba(6,10,15,.7);align-items:flex-start;justify-content:center;padding:24px;overflow:auto">
+  <div style="background:var(--panel);border-radius:14px;max-width:560px;width:100%;padding:16px">
+    <div class="ho-head"><b>📋 Pull from Round Card</b><button class="ho-x" onclick="closeRoundCardPull()">✕</button></div>
+    <div class="ho-body">
+      <div class="ho-note">Bring in a patient the bedside Round Card captured — it pre-fills the wound fields into a new note; you complete the rest.</div>
+      <label style="display:block;font-size:12.5px;font-weight:650;color:var(--muted);margin:14px 0 5px">Building</label>
+      <select id="rcPullFac" style="width:100%;box-sizing:border-box;padding:10px 12px;font:inherit;font-size:15px;border:1px solid var(--line);border-radius:9px;background:#fff;color:var(--ink)"></select>
+      <div id="rcPullBody" style="margin-top:12px"></div>
+    </div>
+  </div>
 </div>
 <div id="rcOverlay" style="display:none;position:fixed;inset:0;z-index:150;background:rgba(6,10,15,.55)">
   <div style="position:absolute;inset:0;display:flex;flex-direction:column;background:var(--bg)">
@@ -1875,6 +1887,94 @@ function doReassign(){
   toast((p.name||'Patient')+' moved to '+nf);
   closeHandoff();
 }
+
+/* ================= Phase 3 — pull a Round Card into a note =================
+   The Round Card tool files per-patient records at RoundCards/<facility>/<slug>.json
+   (schema roundcard.v1). Here the composer reads them (same ClinicalVault read the
+   follow-up carry-forward uses), auto-creates the patient, and pre-fills the wound
+   fields. It's a HEAD START — the provider completes the full note. */
+const _RC_ETIO={ 'Pressure injury':'pressure injury stage','Diabetic ulcer':'diabetic ulcer Wagner grade','Venous':'venous','Arterial':'arterial','Surgical':'surgical','Traumatic':'traumatic','MASD':'MASD','Other':'other' };
+const _RC_STAGE={ 'Stage 1':'1','Stage 2':'2','Stage 3':'3','Stage 4':'4','Unstageable':'unstageable','DTI':'DTI' };
+const _RC_STATUS={ 'Improving':'improving','Stable':'stable','Worsening':'worsening' };
+const _RC_DRAIN={ 'None':'none','Scant':'scant','Small':'small','Moderate':'moderate','Large':'large' };
+const _RC_ODOR={ 'None':'none','Mild':'mild','Strong':'strong' };
+/* Match the Round Card's own folder sanitizer (cleanSeg) so we read the same path it wrote. */
+function _rcFacSeg(f){ f=String(f||'').replace(/[\\/:*?"<>|#%]/g,'').replace(/\s+/g,' ').trim(); if(/^\.+$/.test(f)) f=''; return f||'Unfiled'; }
+let _rcRecs=[];
+
+async function rcList(facility){
+  const ctx=await _draftContext(); if(!ctx) throw new Error('Sign in to read Round Cards.');
+  const seg=_rcFacSeg(facility);
+  const url='https://graph.microsoft.com/v1.0/drives/'+ctx.driveId+'/root:/'+_encPath(['RoundCards',seg].join('/'))+':/children?$top=200';
+  const r=await _gfetch(url, ctx.token);
+  if(r.status===404) return [];                                   // no records for this building yet
+  if(!r.ok) throw new Error('Couldn’t read Round Cards (HTTP '+r.status+').');
+  const items=(await r.json()).value||[]; const out=[];
+  for(const it of items){
+    if(it.folder || !/\.json$/i.test(it.name||'')) continue;
+    const dl=it['@microsoft.graph.downloadUrl']; if(!dl) continue;
+    try{ const c=await fetch(dl); if(c.ok){ const rec=await c.json(); if(rec && rec.schema==='roundcard.v1') out.push(rec); } }catch(e){}
+  }
+  out.sort((a,b)=>String(b.savedAt||'').localeCompare(String(a.savedAt||'')));   // newest first
+  return out;
+}
+
+/* Create the patient + pre-fill an Initial note from a roundcard.v1 record. Seeds STATE keys
+   BEFORE setMode renders, so every value flows out through the normal resolve chain. The wound
+   field positions (:0,:1,… on keyPrefix "1:w<wid>") track the current Objective template. */
+function rcPrefill(rec){
+  addPatientToFacility((rec.facility||'').trim());        // new patient, stamped facility, active
+  setPatient((rec.patient&&rec.patient.name)||'');
+  MODE='new';
+  const S=STORE['new']; const wids=[];
+  (rec.wounds||[]).forEach(w=>{
+    const wid=mintWid(); woundNum(wid); wids.push(wid);
+    const P='1:w'+wid;
+    if(String(w.loc||'').trim()) S[P+':0']=String(w.loc).trim();
+    if(String(w.l||'').trim())   S[P+':1']=String(w.l).trim();
+    if(String(w.w||'').trim())   S[P+':2']=String(w.w).trim();
+    if(String(w.d||'').trim())   S[P+':3']=String(w.d).trim();
+    const et=_RC_ETIO[w.type]; if(et){ S[P+':4']=[et]; if(et==='other' && String(w.typeOther||'').trim()) S[P+':4:fill']=String(w.typeOther).trim(); }
+    if(/^Pressure/.test(w.type||'') && _RC_STAGE[w.stage]) S[P+':5']=_RC_STAGE[w.stage];
+    if(_RC_STATUS[w.status]) S[P+':7']=_RC_STATUS[w.status];
+    if(_RC_DRAIN[w.drain])   S[P+':15']=_RC_DRAIN[w.drain];
+    if(_RC_ODOR[w.odor])     S[P+':18']=_RC_ODOR[w.odor];
+  });
+  if(wids.length) S['__wc_1']=wids;
+  const ord=(rec.wounds||[]).map((w,i)=>{ const o=String(w.orders||'').trim(); return o?('Wound '+(i+1)+(String(w.loc||'').trim()?' ('+String(w.loc).trim()+')':'')+': '+o):''; }).filter(Boolean).join('\n');
+  const edu=String(rec.edu||'').trim();
+  const ap=[ord, edu?('Additional info / education: '+edu):''].filter(Boolean).join('\n\n');
+  if(ap) S['2:ta:1']=ap;   // A&P "Assessment:" free-text (text fields key as <sec>:ta:<seq>, verified)
+  setMode('new'); persist(); renderPatientBar();
+}
+
+function openRoundCardPull(){
+  const cur=((WS.round&&WS.round.facility)||((activePt()||{}).facility)||'').trim();
+  const facs=facilityList(); if(cur && facs.indexOf(cur)<0) facs.push(cur);
+  document.getElementById('rcPullFac').innerHTML='<option value="">— choose building —</option>'+facs.map(f=>'<option value="'+esc(f)+'"'+(f===cur?' selected':'')+'>'+esc(f)+'</option>').join('');
+  document.getElementById('rcPullFac').onchange=rcPullRefresh;
+  document.getElementById('rcPullModal').style.display='flex';
+  rcPullRefresh();
+}
+function closeRoundCardPull(){ document.getElementById('rcPullModal').style.display='none'; }
+async function rcPullRefresh(){
+  const fac=document.getElementById('rcPullFac').value, body=document.getElementById('rcPullBody');
+  if(!fac){ body.innerHTML='<div class="ho-note">Pick a building to see its Round Cards.</div>'; _rcRecs=[]; return; }
+  body.innerHTML='<div class="ho-note">Loading '+esc(fac)+' Round Cards…</div>';
+  try{
+    _rcRecs=await rcList(fac);
+    if(!_rcRecs.length){ body.innerHTML='<div class="ho-note">No Round Cards found for '+esc(fac)+'.</div>'; return; }
+    body.innerHTML=_rcRecs.map((r,i)=>{
+      const nm=(r.patient&&r.patient.name)||'(no name)'; const n=(r.wounds||[]).length;
+      const clash=Object.keys(WS.patients).some(pid=>String(WS.patients[pid].name||'').trim().toLowerCase()===String(nm).trim().toLowerCase());
+      return '<div style="display:flex;align-items:center;gap:10px;padding:10px 2px;border-top:1px solid var(--line)">'+
+        '<div style="flex:1"><b>'+esc(nm)+'</b>'+(clash?' <span style="color:var(--warn);font-size:12px">· already in workspace</span>':'')+
+        '<div style="font-size:12px;color:var(--muted)">'+n+' wound'+(n===1?'':'s')+' · '+esc(String(r.date||'').slice(0,10))+(r.provider?' · '+esc(r.provider):'')+'</div></div>'+
+        '<button class="primary" onclick="rcPullOne('+i+')">Pull</button></div>';
+    }).join('');
+  }catch(e){ body.innerHTML='<div class="ho-note" style="color:var(--warn)">'+esc((e&&e.message)||'Couldn’t load Round Cards.')+'</div>'; }
+}
+function rcPullOne(i){ const rec=_rcRecs[i]; if(!rec) return; rcPrefill(rec); closeRoundCardPull(); toast('Pulled '+((rec.patient&&rec.patient.name)||'patient')+' from the Round Card'); }
 
 /* ============ PARSER: build inline fillable controls, keep exact text ============ */
 let sectionResolvers = [];   // one resolve() per section
