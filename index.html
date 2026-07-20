@@ -1959,52 +1959,214 @@ async function rcList(facility){
   return out;
 }
 
+// Write ONE card wound's fields into store S under the given wid (keyPrefix "1:w<wid>"). Field positions
+// (:0 loc, :1/:2/:3 L/W/D, :4 etiology, :5 stage, :7 status, :8 exposed, :9 drainage, :12 odor, :17
+// periwound) are verified empirically against the live Objective template (choice/select/checkbox tokens).
+function _rcWriteWound(S, wid, w){
+  const P='1:w'+wid;
+  if(String(w.loc||'').trim()) S[P+':0']=String(w.loc).trim();
+  if(String(w.l||'').trim())   S[P+':1']=String(w.l).trim();
+  if(String(w.w||'').trim())   S[P+':2']=String(w.w).trim();
+  if(String(w.d||'').trim())   S[P+':3']=String(w.d).trim();
+  const types=Array.isArray(w.type)?w.type:(w.type?[w.type]:[]);
+  const ets=types.map(t=>_RC_ETIO[t]).filter(Boolean);
+  if(ets.length){ S[P+':4']=ets; if(ets.indexOf('other')>=0 && String(w.typeOther||'').trim()) S[P+':4:fill']=String(w.typeOther).trim(); }
+  if(types.some(t=>/^Pressure/.test(t)) && _RC_STAGE[w.stage]) S[P+':5']=_RC_STAGE[w.stage];
+  if(_RC_STATUS[w.status]) S[P+':7']=_RC_STATUS[w.status];
+  if(_RC_DRAIN[w.drain])   S[P+':9']=_RC_DRAIN[w.drain];
+  if(_RC_ODOR[w.odor])     S[P+':12']=_RC_ODOR[w.odor];
+  const exps=(Array.isArray(w.exposed)?w.exposed:[]).map(x=>_RC_EXPOSED[x]).filter(Boolean); if(exps.length) S[P+':8']=exps;
+  const pws=(Array.isArray(w.periwound)?w.periwound:[]).map(x=>_RC_PERIWOUND[x]).filter(Boolean); if(pws.length) S[P+':17']=pws;
+}
+// Compose the A&P free text (orders per wound + patient education) — used by every pull path.
+function _rcComposeAP(ordLines, edu){
+  return [ (ordLines||[]).filter(Boolean).join('\n'), edu?('Additional info / education: '+edu):'' ].filter(Boolean).join('\n\n');
+}
+// STATE key of the A&P free-text box for the CURRENT note type. A `***`-only line becomes a textarea
+// keyed "<sectionIdx>:ta:<lineIndex>" — and that line sits at index 1 in the Initial A&P but index 0 in
+// the Follow-up A&P, so the key differs by mode. Computed from the live template, never hard-coded.
+function _rcApKey(){
+  const secs=(TEMPLATES[MODE]||{}).sections||[];
+  const si=secs.findIndex(s=>s[0]==='Assessment & Plan'); if(si<0) return null;
+  const li=String(secs[si][1]).split('\n').findIndex(l=>l.trim()==='***'); if(li<0) return null;
+  return si+':ta:'+li;
+}
+function _rcSetAP(S, ap){ const k=_rcApKey(); if(!k) return; if(ap) S[k]=ap; else delete S[k]; }
+
+/* ===== Card→Follow-up WOUND MATCHING (Scott 2026-07-20) =========================================
+   When a RETURNING patient is pulled, this visit's bedside wounds must land on the SAME wound the
+   provider tracked last week — not a fresh number that would duplicate or (worse) silently conflate a
+   wound (Abby's stated fear). We match by LOCATION, and — following the identity rule already settled
+   for patients ("suggest, never auto-apply") — we only auto-apply a match when it is unambiguous:
+     • one wound on each side  → match,
+     • an EXACT location match to exactly one prior wound → match,
+     • no location overlap with any prior wound → a genuinely NEW wound.
+   Anything partial/contested is left for a one-tap confirm screen (rcPending → reconcile modal), so a
+   wound number is never reassigned on a guess. Location tokens are normalised (laterality abbrevs
+   expanded, filler words dropped) and scored by Jaccard overlap. */
+function _rcLocToks(s){
+  s=' '+String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,' ')+' ';
+  s=s.replace(/ (r|rt) /g,' right ').replace(/ (l|lt) /g,' left ').replace(/ bilat /g,' bilateral ');
+  return s.split(/\s+/).filter(t=>t && !['the','a','of','on','to','and','wound','area','at'].includes(t));
+}
+function _rcLocScore(a,b){
+  const A=new Set(_rcLocToks(a)), B=new Set(_rcLocToks(b));
+  if(!A.size||!B.size) return 0;
+  let inter=0; A.forEach(t=>{ if(B.has(t)) inter++; });
+  return inter/(A.size+B.size-inter);
+}
+// True when one location's token set is a subset of the other's — i.e. one is an abbreviation of the
+// other ("heel" ⊆ "right heel"), NOT a laterally/site-different wound ("left heel" vs "right heel").
+function _rcContained(a,b){ const A=new Set(_rcLocToks(a)), B=new Set(_rcLocToks(b));
+  if(!A.size||!B.size) return false; const sub=(X,Y)=>[...X].every(t=>Y.has(t)); return sub(A,B)||sub(B,A); }
+// Returns one proposal per card wound: {priorWid|null, confident, alts:[{wid,num,loc,score} sorted]}.
+// Auto-confident ONLY when it's certain — exact-location match, a UNIQUE containment (abbreviation), or
+// zero location overlap (a genuinely new wound). Anything partial/contested (incl. a laterality mismatch)
+// is left NOT confident, so it goes to the one-tap reconcile screen — a wound number is never guessed.
+function rcMatchWounds(cardWounds, priorList){
+  const props=cardWounds.map(cw=>({ priorWid:null, confident:false, _loc:cw.loc||'',
+    alts: priorList.map(pw=>({wid:pw.wid, num:pw.num, loc:pw.location||'', score:_rcLocScore(cw.loc, pw.location)}))
+                   .sort((x,y)=>y.score-x.score) }));
+  if(!priorList.length){ props.forEach(p=>{ p.priorWid=null; p.confident=true; }); return props; }
+  const taken=new Set();
+  // 1) exact location -> confident match
+  props.forEach(p=>{ const b=p.alts.find(a=>!taken.has(String(a.wid)) && a.score>=0.999);
+    if(b){ p.priorWid=b.wid; p.confident=true; taken.add(String(b.wid)); } });
+  // 2) unique containment (an abbreviation of exactly one remaining prior) -> confident match
+  props.forEach(p=>{ if(p.confident) return;
+    const ov=p.alts.filter(a=>!taken.has(String(a.wid)) && a.score>0);
+    if(ov.length===1 && _rcContained(p._loc, ov[0].loc)){ p.priorWid=ov[0].wid; p.confident=true; taken.add(String(ov[0].wid)); } });
+  // 3) no location overlap with any prior -> confident NEW wound
+  props.forEach(p=>{ if(p.confident) return;
+    if(!p.alts.some(a=>!taken.has(String(a.wid)) && a.score>0)){ p.priorWid=null; p.confident=true; } });
+  // 4) partial / contested / laterality-different -> ambiguous: pre-guess the best available, NOT confident
+  props.forEach(p=>{ if(p.confident) return;
+    const b=p.alts.find(a=>!taken.has(String(a.wid)) && a.score>0); if(b){ p.priorWid=b.wid; taken.add(String(b.wid)); } });
+  return props;
+}
+// Seed all prior wounds (carry-forward), then overlay each card wound onto its mapped wid (null = a new
+// wound). Rebuilds __wc_1 (prior wids in number order + any new wids) and the A&P orders text.
+function rcApplyMapping(S, priorList, cardWounds, mapping, edu){
+  const orderWids=priorList.map(pw=>pw.wid);
+  const ordLines=[];
+  (cardWounds||[]).forEach((cw,ci)=>{
+    let wid=mapping[ci];
+    if(wid==null){ wid=mintWid(); woundNum(wid); orderWids.push(wid); } else { woundNum(wid); }
+    _rcWriteWound(S, wid, cw);
+    const o=String(cw.orders||'').trim();
+    if(o) ordLines.push('Wound '+woundNum(wid)+(String(cw.loc||'').trim()?' ('+String(cw.loc).trim()+')':'')+': '+o);
+  });
+  S['__wc_1']=orderWids;
+  _rcSetAP(S, _rcComposeAP(ordLines, edu));
+}
+
 /* Create the patient + pre-fill the note from a roundcard.v1 record. Seeds STATE keys BEFORE setMode
-   renders, so every value flows out through the normal resolve chain. The wound field positions
-   (:0,:1,… on keyPrefix "1:w<wid>") track the current Objective template — the same in both templates.
+   renders, so every value flows out through the normal resolve chain.
    NOTE-TYPE IS DECIDED HERE FROM HISTORY (Scott 2026-07-20): a returning patient (a prior committed
-   visit exists) opens as a Follow-up; a first-time patient opens as an Initial — no hard-coded 'new'. */
+   visit exists) opens as a Follow-up — and its bedside wounds are reconciled to last visit's wounds
+   (above); a first-time patient opens as an Initial with fresh wound numbers. */
 async function rcPrefill(rec){
   addPatientToFacility((rec.facility||'').trim());        // new patient, stamped facility, active
   const nm=(rec.patient&&rec.patient.name)||'';
   setPatient(nm);
-  let nt='new';
-  try{ if(nm.trim()){ const pv=await whPriorVisit(nm); if(pv) nt='fu'; } }catch(e){}   // prior committed visit => Follow-up
-  // Creating the patient rendered a default EMPTY wound into the Initial side. Reset BOTH sides + the
-  // wound registry so this patient carries ONE clean note of the chosen type (no hidden second store)
-  // and OUR pulled wounds number from 1. Capture S AFTER the reset so it points at the live (fresh) side.
-  { const _p=activePt(); if(_p){ _p.noteType=nt; _p.store.new={}; _p.store.fu={}; _p.wreg={seq:1, widSeq:null, byId:{}}; } }
+  // Reset BOTH store sides + the wound registry so this patient carries ONE clean note (no hidden second
+  // store). Then load the prior visit (this also rehydrates the wreg numbers for a follow-up).
+  { const _p=activePt(); if(_p){ _p.store.new={}; _p.store.fu={}; _p.wreg={seq:1, widSeq:null, byId:{}}; _p.rcPending=null; } }
+  let nt='new', pv=null;
+  if(nm.trim()){
+    _whPrior=null;
+    try{ await whRefreshPrior(); }catch(e){}
+    pv = (_whPrior && _whPrior.key===_whKey()) ? _whPrior.visit : null;   // most recent committed visit
+    if(pv && pv.wounds && Object.keys(pv.wounds).length) nt='fu';
+  }
+  { const _p=activePt(); if(_p) _p.noteType=nt; }
   MODE=nt;
   const S=STORE[nt];
-  const wids=[];
-  (rec.wounds||[]).forEach(w=>{
-    const wid=mintWid(); woundNum(wid); wids.push(wid);
-    const P='1:w'+wid;
-    if(String(w.loc||'').trim()) S[P+':0']=String(w.loc).trim();
-    if(String(w.l||'').trim())   S[P+':1']=String(w.l).trim();
-    if(String(w.w||'').trim())   S[P+':2']=String(w.w).trim();
-    if(String(w.d||'').trim())   S[P+':3']=String(w.d).trim();
-    const types=Array.isArray(w.type)?w.type:(w.type?[w.type]:[]);
-    const ets=types.map(t=>_RC_ETIO[t]).filter(Boolean);
-    if(ets.length){ S[P+':4']=ets; if(ets.indexOf('other')>=0 && String(w.typeOther||'').trim()) S[P+':4:fill']=String(w.typeOther).trim(); }
-    // Field keys VERIFIED empirically against the live Objective template (positional, choice/select/
-    // checkbox tokens only): loc :0, L/W/D :1/:2/:3, etiology :4, stage :5, status :7, exposed :8,
-    // drainage :9, odor :12, periwound :17. (Placeholder text can false-positive a naive check — these
-    // were confirmed by driving the actual DOM controls and reading the resulting STATE key.)
-    if(types.some(t=>/^Pressure/.test(t)) && _RC_STAGE[w.stage]) S[P+':5']=_RC_STAGE[w.stage];
-    if(_RC_STATUS[w.status]) S[P+':7']=_RC_STATUS[w.status];
-    if(_RC_DRAIN[w.drain])   S[P+':9']=_RC_DRAIN[w.drain];
-    if(_RC_ODOR[w.odor])     S[P+':12']=_RC_ODOR[w.odor];
-    const exps=(Array.isArray(w.exposed)?w.exposed:[]).map(x=>_RC_EXPOSED[x]).filter(Boolean); if(exps.length) S[P+':8']=exps;
-    const pws=(Array.isArray(w.periwound)?w.periwound:[]).map(x=>_RC_PERIWOUND[x]).filter(Boolean); if(pws.length) S[P+':17']=pws;
-  });
-  if(wids.length) S['__wc_1']=wids;
-  const ord=(rec.wounds||[]).map((w,i)=>{ const o=String(w.orders||'').trim(); return o?('Wound '+(i+1)+(String(w.loc||'').trim()?' ('+String(w.loc).trim()+')':'')+': '+o):''; }).filter(Boolean).join('\n');
+  const cardWounds=(rec.wounds||[]);
   const edu=String(rec.edu||'').trim();
-  const ap=[ord, edu?('Additional info / education: '+edu):''].filter(Boolean).join('\n\n');
-  if(ap) S['2:ta:1']=ap;   // A&P "Assessment:" free-text (text fields key as <sec>:ta:<seq>, verified)
+
+  if(nt==='fu' && pv && pv.wounds){
+    // Carry-forward: seed every UNHEALED prior wound (reuse its wid -> permanent number + prior block).
+    const priorList=Object.keys(pv.wounds)
+      .filter(k=>!/healed|resolved/i.test(String(pv.wounds[k].status||'')))
+      .map(k=>{ const wid=isNaN(+k)?k:+k; return {wid, location:pv.wounds[k].location||'', num:(pv.wounds[k].num||woundNum(wid))}; })
+      .sort((a,b)=>(a.num||0)-(b.num||0));
+    priorList.forEach(pw=>woundNum(pw.wid));
+    const props=rcMatchWounds(cardWounds, priorList);
+    if(props.some(p=>!p.confident)){
+      // Ambiguous — don't guess. Seed the prior wounds so it's a correct follow-up, stash the card wounds
+      // for a one-tap confirm (the reconcile banner + modal), and hold the orders until they're placed.
+      S['__wc_1']=priorList.map(pw=>pw.wid);
+      if(edu) _rcSetAP(S, 'Additional info / education: '+edu);
+      const _p=activePt(); if(_p) _p.rcPending={ cardWounds, props, priorList, edu };
+    } else {
+      rcApplyMapping(S, priorList, cardWounds, props.map(p=>p.priorWid), edu);
+    }
+  } else {
+    // First-timer (Initial), or a follow-up with no prior wounds: fresh wids per card wound.
+    const wids=[];
+    cardWounds.forEach(w=>{ const wid=mintWid(); woundNum(wid); wids.push(wid); _rcWriteWound(S, wid, w); });
+    if(wids.length) S['__wc_1']=wids;
+    const ord=cardWounds.map((w,i)=>{ const o=String(w.orders||'').trim(); return o?('Wound '+woundNum(wids[i])+(String(w.loc||'').trim()?' ('+String(w.loc).trim()+')':'')+': '+o):''; });
+    _rcSetAP(S, _rcComposeAP(ord, edu));
+  }
   { const _p=activePt(); if(_p) _p.srcRcKey=_rcKey(rec); }   // tag the source record so auto-pull never double-pulls it
   setMode(nt); persist(); renderPatientBar();
+}
+
+/* ===== RECONCILE UI — confirm which last-visit wound each ambiguous card wound is ================= */
+function rcPaintReconcileBanner(){
+  let b=document.getElementById('rcBanner');
+  const host=document.getElementById('form')||document.body;
+  if(!b){ b=document.createElement('div'); b.id='rcBanner'; b.className='wh-banner'; host.insertBefore(b, host.firstChild); }
+  const p=activePt();
+  if(!p || !p.rcPending || !(p.rcPending.cardWounds||[]).length){ b.style.display='none'; return; }
+  const n=p.rcPending.cardWounds.length;
+  b.className='wh-banner wh-warn';
+  b.innerHTML='⚠ <b>'+n+' Round Card wound'+(n===1?'':'s')+' to match to last visit.</b> Confirm which is which so this visit\'s numbers land on the right wound. '+
+    '<button onclick="openRcReconcile()" style="margin-left:8px;padding:4px 12px;border:1px solid var(--line);border-radius:8px;background:#fff;cursor:pointer;font:inherit;font-size:12.5px">Review wounds</button>';
+  b.style.display='';
+}
+function openRcReconcile(){
+  const p=activePt(); const pend=p&&p.rcPending; if(!pend){ return; }
+  let ov=document.getElementById('rcModal');
+  if(!ov){ ov=document.createElement('div'); ov.id='rcModal'; document.body.appendChild(ov); }
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;z-index:9999';
+  const priorList=pend.priorList||[];
+  const rows=(pend.cardWounds||[]).map((cw,ci)=>{
+    const pr=pend.props[ci]||{};
+    const opts=['<option value="__new__"'+((pr.priorWid==null)?' selected':'')+'>➕ New wound (not seen last visit)</option>']
+      .concat(priorList.map(pw=>'<option value="'+esc(String(pw.wid))+'"'+((String(pr.priorWid)===String(pw.wid))?' selected':'')+'>Wound '+esc(String(pw.num))+' — '+esc(pw.location||'(no location)')+'</option>'));
+    const dims=cw.l?(' &nbsp; '+esc(cw.l)+'×'+esc(cw.w||'')+'×'+esc(cw.d||'')+' cm'):'';
+    return '<div style="margin:10px 0;padding:10px;border:1px solid var(--line);border-radius:9px">'+
+      '<div style="font-size:13px;color:var(--muted);margin-bottom:5px">Round Card wound '+(ci+1)+': <b style="color:var(--ink)">'+esc(cw.loc||'(no location noted)')+'</b>'+dims+'</div>'+
+      '<select data-ci="'+ci+'" class="rc-map" style="width:100%;box-sizing:border-box;padding:9px;border:1px solid var(--line);border-radius:8px;font:inherit;background:#fff;color:var(--ink)">'+opts.join('')+'</select>'+
+      '</div>';
+  }).join('');
+  ov.innerHTML='<div style="background:var(--panel,#fff);max-width:560px;width:92%;max-height:85vh;overflow:auto;border-radius:14px;padding:18px 20px;box-shadow:0 12px 40px rgba(0,0,0,.3)">'+
+    '<div style="display:flex;align-items:center;justify-content:space-between"><b style="font-size:16px">Match Round Card wounds to last visit</b><button onclick="closeRcReconcile()" style="border:none;background:none;font-size:20px;cursor:pointer;color:var(--muted)">✕</button></div>'+
+    '<div style="font-size:13px;color:var(--muted);margin:6px 0 4px">Each card wound is pre-set to its best guess. Confirm or correct so this visit\'s numbers land on the right wound — the wound you pick keeps its permanent number and shows last visit above it.</div>'+
+    rows+
+    '<div style="display:flex;gap:8px;margin-top:14px"><button class="primary" style="flex:1;padding:11px;border-radius:9px;cursor:pointer" onclick="applyRcReconcile()">Apply</button></div>'+
+  '</div>';
+  ov.style.display='flex';
+}
+function closeRcReconcile(){ const ov=document.getElementById('rcModal'); if(ov) ov.style.display='none'; }
+function applyRcReconcile(){
+  const p=activePt(); const pend=p&&p.rcPending; if(!pend){ closeRcReconcile(); return; }
+  const sels=[...document.querySelectorAll('#rcModal select.rc-map')];
+  const mapping=[]; const used=new Set();
+  for(const s of sels){ const ci=+s.dataset.ci, v=s.value;
+    if(v==='__new__'){ mapping[ci]=null; continue; }
+    if(used.has(v)){ toast('Two card wounds point at the same last-visit wound — pick different ones.'); return; }
+    used.add(v); mapping[ci]=(isNaN(+v)?v:+v);
+  }
+  const S=STORE[MODE];
+  rcApplyMapping(S, pend.priorList, pend.cardWounds, mapping, pend.edu);
+  p.rcPending=null;
+  closeRcReconcile();
+  persist(); setMode(MODE);
+  toast('Round Card wounds matched to last visit.');
 }
 
 /* ===== AUTO-PULL — the composer brings Round Card patients in by itself =====================
@@ -3135,6 +3297,7 @@ function setMode(mode){
   // Follow-up mode pulls the previous committed visit. The load is async, so this may re-enter setMode
   // once the history is cached — whPriorReady() is the guard that stops it looping.
   if(typeof whApplyPrior==='function') whApplyPrior();
+  if(typeof rcPaintReconcileBanner==='function') rcPaintReconcileBanner();   // "match Round Card wounds to last visit" prompt
 }
 /* ============ SIGN-IN GATE — Microsoft Entra (LaVida M365 tenant) ============
    Users are @lavidaheal.com, so identity = the LaVida M365 tenant (same one that guards
