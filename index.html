@@ -372,6 +372,13 @@ window.addEventListener('message', async function(e){
   // The overlay card just saved patients to the vault — pull them in so closing the card lands them
   // in the note with no extra step.
   if(d && d.type==='rc-saved'){ if(typeof rcAutoPull==='function') rcAutoPull('overlay-save'); return; }
+  // The overlay card asks who's signed in so it can pre-fill its Provider box (Scott 2026-07-20).
+  if(d && d.type==='rc-provider-request'){
+    var pn='';
+    try{ var pcaP=await _getPca(); var aP=pcaP.getAllAccounts()[0]; if(aP) pn=aP.name||aP.username||''; }catch(err){}
+    try{ (e.source||window).postMessage({type:'rc-provider-response', id:d.id, name:pn}, location.origin); }catch(x){}
+    return;
+  }
   if(!d || d.type!=='rc-token-request') return;
   var resp={type:'rc-token-response', id:d.id};
   try{
