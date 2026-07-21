@@ -349,6 +349,9 @@
       <span style="font-size:12px;color:var(--muted)" class="rc-sub">bedside orders — saves to ClinicalVault</span>
       <button onclick="closeRoundCard()" style="margin-left:auto;background:var(--accent);color:#fff;border:none;border-radius:8px;padding:8px 15px;font:inherit;font-weight:650;cursor:pointer">✕ Close</button>
     </div>
+    <div id="rcLoading" style="display:none;flex:1;align-items:center;justify-content:center;padding:30px">
+      <div style="font-size:14px;color:var(--muted)">Loading the Round Card…</div>
+    </div>
     <div id="rcBlocked" style="display:none;flex:1;align-items:center;justify-content:center;padding:30px">
       <div style="max-width:520px;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:26px 28px;text-align:center">
         <div style="font-size:17px;font-weight:700;color:var(--ink);margin-bottom:8px">Chrome blocked the embedded card</div>
@@ -381,55 +384,62 @@ function _rcCardUrl(){ return 'round-card.html'+(_CSANDBOX?'?sandbox=1':''); }
 // its round in the tab's own memory, so opening a NEW tab every time looked like "my patients vanished"
 // — clicking Round Card again now returns to the SAME card with everything still there (Scott 2026-07-20).
 function rcOpenOwnTab(){ try{ const w=window.open(_rcCardUrl(),'lavidaRoundCard'); if(w) w.focus(); }catch(e){} }
-function _rcShowBlocked(b){
-  var p=document.getElementById('rcBlocked'), f=document.getElementById('rcFrame');
-  if(p) p.style.display=b?'flex':'none'; if(f) f.style.display=b?'none':'';
+// Three states: 'loading' (never show the iframe until proven healthy, so Chrome's raw grey block box
+// can never flash), 'ok' (reveal the card), 'blocked' (show the open-in-own-tab panel). Starting hidden
+// is the fix for Scott seeing Chrome's own block box before the detector swapped it out.
+function _rcShowState(state){
+  var L=document.getElementById('rcLoading'), P=document.getElementById('rcBlocked'), F=document.getElementById('rcFrame');
+  if(L) L.style.display = state==='loading' ? 'flex' : 'none';
+  if(P) P.style.display = state==='blocked' ? 'flex' : 'none';
+  if(F) F.style.display = state==='ok' ? '' : 'none';
 }
 var _rcEvalTries=0;
 function _rcEvalFrame(){
-  if(_rcFrameOK){ _rcShowBlocked(false); return; }
+  if(_rcFrameOK){ _rcShowState('ok'); return; }
   try{
     var f=document.getElementById('rcFrame');
     var w=f && f.contentWindow, d=w && w.document;
-    if(!d){ _rcShowBlocked(true); return; }
-    // Still on about:blank = the card hasn't loaded YET (slow network / throttled tab) — that's
-    // "wait", not "blocked". Re-check shortly; give up and show the panel after ~10s of nothing.
+    if(!d){ _rcShowState('blocked'); return; }
+    // about:blank = still loading (slow/throttled) — keep the loading state and re-check; give up to the
+    // panel after ~9s of nothing.
     if(w.location.href==='about:blank'){
-      if(++_rcEvalTries<5){ clearTimeout(_rcFrameTimer); _rcFrameTimer=setTimeout(_rcEvalFrame, 2000); return; }
-      _rcShowBlocked(true); return;
+      if(++_rcEvalTries<6){ _rcShowState('loading'); clearTimeout(_rcFrameTimer); _rcFrameTimer=setTimeout(_rcEvalFrame, 1500); return; }
+      _rcShowState('blocked'); return;
     }
-    if(d.querySelector && d.querySelector('script')){ _rcFrameOK=true; _rcShowBlocked(false); }
-    else _rcShowBlocked(true);                                        // a real doc with no scripts = an error page
-  }catch(e){ _rcShowBlocked(true); }                                  // unreadable same-origin frame = Chrome's block page
+    if(d.querySelector && d.querySelector('script')){ _rcFrameOK=true; _rcShowState('ok'); }
+    else _rcShowState('blocked');                                     // a real doc with no scripts = an error page
+  }catch(e){ _rcShowState('blocked'); }                               // unreadable same-origin frame = Chrome's block page
 }
 function rcRetryFrame(){
-  _rcFrameOK=false; _rcEvalTries=0; _rcShowBlocked(false);
+  _rcFrameOK=false; _rcEvalTries=0; _rcShowState('loading');
   var f=document.getElementById('rcFrame');
   f.setAttribute('src','');
   setTimeout(function(){ f.setAttribute('src',_rcCardUrl());
-    clearTimeout(_rcFrameTimer); _rcFrameTimer=setTimeout(_rcEvalFrame, 3500); }, 60);
+    clearTimeout(_rcFrameTimer); _rcFrameTimer=setTimeout(_rcEvalFrame, 3000); }, 60);
 }
-/* KILL-SWITCH (Scott 2026-07-20 night): while Google's false "dangerous site" flag is up, Chrome
-   blocks the overlay iframe outright in some sessions and the blocked-frame detector didn't reliably
-   replace Chrome's grey box on his machine. So the overlay is OFF — the button opens the card in its
-   OWN TAB (top-level, works after the one-time red-page bypass; saves still auto-pull into the
-   composer on refocus). Flip to false to restore the embedded overlay once the flag is cleared. */
-var RC_OVERLAY_DISABLED = true;
+/* OVERLAY back ON (Scott 2026-07-20, Option B): the card lives INSIDE the composer again — it shares the
+   composer's sign-in and sessionStorage, so a round persists and never needs a second sign-in (the
+   separate-tab mode lost the round on tab-close and was clunky to sign into). The blocked-frame detector
+   below is the safety net: it starts in a LOADING state and only reveals the iframe once the card is
+   confirmed healthy, so if Google's false flag ever lingers, the clean "open in its own tab" panel shows
+   — Chrome's raw grey block box never flashes. Set true to force tab-only mode again if ever needed. */
+var RC_OVERLAY_DISABLED = false;
 function openRoundCard(){
   if(RC_OVERLAY_DISABLED){
     rcOpenOwnTab();
-    toast('The Round Card opens in its own tab for now (Chrome is blocking embedded pages while the site warning is up). Saved cards still pull in here automatically.');
+    toast('The Round Card opens in its own tab for now. Saved cards still pull in here automatically.');
     return;
   }
+  document.getElementById('rcOverlay').style.display='block';
   var f=document.getElementById('rcFrame');
   // Pass sandbox mode INTO the overlay iframe so a sandboxed composer never lets the card touch the real vault.
   if(!f.getAttribute('src')){
-    _rcEvalTries=0;
-    f.addEventListener('load', function(){ setTimeout(_rcEvalFrame, 150); });   // error pages fire load too — probe decides
+    _rcEvalTries=0; _rcShowState('loading');
+    f.addEventListener('load', function(){ setTimeout(_rcEvalFrame, 120); });   // error pages fire load too — probe decides
     f.setAttribute('src',_rcCardUrl());
-    clearTimeout(_rcFrameTimer); _rcFrameTimer=setTimeout(_rcEvalFrame, 3500);  // backstop if load never fires
-  } else if(!_rcFrameOK){ _rcEvalTries=0; _rcEvalFrame(); }
-  document.getElementById('rcOverlay').style.display='block';
+    clearTimeout(_rcFrameTimer); _rcFrameTimer=setTimeout(_rcEvalFrame, 3000);  // backstop if load never fires
+  } else if(_rcFrameOK){ _rcShowState('ok'); }
+  else { _rcEvalTries=0; _rcShowState('loading'); _rcEvalFrame(); }
 }
 function closeRoundCard(){ document.getElementById('rcOverlay').style.display='none'; }
 document.addEventListener('keydown',function(e){ if(e.key==='Escape') closeRoundCard(); });
@@ -440,9 +450,9 @@ document.addEventListener('keydown',function(e){ if(e.key==='Escape') closeRound
 window.addEventListener('message', async function(e){
   if(e.origin!==location.origin) return;
   var d=e.data;
-  // Any message out of the frame proves the card loaded — clear a wrongly-shown "blocked" panel.
+  // Any message out of the frame proves the card loaded — reveal it (a strong healthy signal).
   if(d==='rc-activity' || (d && typeof d.type==='string' && d.type.indexOf('rc-')===0)){
-    if(!_rcFrameOK){ _rcFrameOK=true; _rcShowBlocked(false); } }
+    if(!_rcFrameOK){ _rcFrameOK=true; _rcShowState('ok'); } }
   // The overlay card just saved patients to the vault — pull them in so closing the card lands them
   // in the note with no extra step.
   if(d && d.type==='rc-saved'){ if(typeof rcAutoPull==='function') rcAutoPull('overlay-save'); return; }
