@@ -1493,9 +1493,22 @@ function downloadHandoff(gi){
 }
 function printHandoff(gi){
   const g=_groupAt(gi); if(!g) return;
-  const f=document.createElement('iframe'); f.style.cssText='position:fixed;right:0;bottom:0;width:0;height:0;border:0';
-  document.body.appendChild(f); const d=f.contentDocument; d.open(); d.write(handoffHTML(g.patients,g.fac)); d.close();
-  f.contentWindow.focus(); setTimeout(()=>{ f.contentWindow.print(); setTimeout(()=>f.remove(),600); },250);
+  const html=handoffHTML(g.patients,g.fac);
+  // Normal path: print from a hidden same-page iframe. While Chrome's (false) site flag is up it can
+  // refuse ANY frame on this site (contentDocument null / write throws) — fall back to printing from
+  // a fresh blank popup, which the flag doesn't touch.
+  try{
+    const f=document.createElement('iframe'); f.style.cssText='position:fixed;right:0;bottom:0;width:0;height:0;border:0';
+    document.body.appendChild(f); const d=f.contentDocument;
+    if(!d) throw new Error('frame blocked');
+    d.open(); d.write(html); d.close();
+    f.contentWindow.focus(); setTimeout(()=>{ f.contentWindow.print(); setTimeout(()=>f.remove(),600); },250);
+  }catch(e){
+    const w=window.open('','_blank');
+    if(!w){ toast('Chrome blocked the print window — allow pop-ups for this site and try again'); return; }
+    w.document.open(); w.document.write(html); w.document.close();
+    setTimeout(()=>{ try{ w.focus(); w.print(); }catch(x){} },250);
+  }
   if(!g.preview) facSavedSet(g.key,true), markGroupSaved(gi);
 }
 function emailHandoffSelected(gi){
@@ -1527,7 +1540,30 @@ function emailHandoffSelected(gi){
 }
 // Refresh every facility group's live preview iframe.
 function refreshHandoffPreview(){ if(!document.getElementById('handoffGroups')) return;   // no-op when the modal is closed
-  handoffGroups().forEach((g,gi)=>{ const f=document.getElementById('ho_preview_'+gi); if(f) f.srcdoc=handoffHTML(g.patients,g.fac); }); }
+  handoffGroups().forEach((g,gi)=>{ const f=document.getElementById('ho_preview_'+gi); if(f) _hoSetPreview(f, handoffHTML(g.patients,g.fac)); }); }
+/* While Chrome's (false) "dangerous site" flag is up, it can refuse to render ANY frame on this site —
+   including the srcdoc preview above ("This content is blocked. Contact the site owner…", Scott
+   2026-07-20 PM, seen when opening the send-handoff window). The handoff itself is fine (email/copy/
+   save don't use a frame) — only the PREVIEW box dies. Fallback: swap the dead iframe for an inline
+   div rendering the same HTML inside Shadow DOM (keeps the handoff's own styles from leaking out). */
+function _hoSetPreview(el, html){
+  if(el.tagName!=='IFRAME'){                      // already swapped to the inline fallback — just update it
+    if(el.shadowRoot) el.shadowRoot.innerHTML=html;
+    return;
+  }
+  el.srcdoc=html;
+  setTimeout(function(){
+    var ok=false;
+    try{ var d=el.contentDocument; ok=!!(d && d.body && d.body.childNodes.length); }catch(e){ ok=false; }
+    if(ok || !el.parentNode) return;              // healthy (or gone) — leave the iframe alone
+    var host=document.createElement('div');
+    host.className=el.className; host.id=el.id;   // keep class+id so refresh keeps finding it
+    host.style.overflow='auto'; host.style.background='#fff';
+    try{ host.attachShadow({mode:'open'}).innerHTML=html; }
+    catch(e){ host.textContent='Preview unavailable while Chrome’s site warning is active — the email, copy, and saved handoff still contain everything.'; }
+    el.replaceWith(host);
+  }, 400);
+}
 
 /* ===== Save to ClinicalVault — Microsoft Graph upload (folds in the old Handoff Builder) =====
    Egress is Microsoft-ONLY: login.microsoftonline.com (sign-in) + graph.microsoft.com (upload to
