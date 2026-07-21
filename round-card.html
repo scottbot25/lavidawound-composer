@@ -1013,7 +1013,7 @@ async function _vaultTokenSilent(){
     return (await pca.acquireTokenSilent({scopes:VAULT_CFG.scopes, account:acct})).accessToken;   // NO redirect fallback
   }catch(e){ return null; }
 }
-function scheduleRcAutoSave(){ clearTimeout(_rcAutoT); _rcAutoT=setTimeout(rcAutoSaveCloud, 4000); }
+function scheduleRcAutoSave(){ clearTimeout(_rcAutoT); _rcAutoT=setTimeout(rcAutoSaveCloud, 2000); }   // was 4s — snappier backup (Scott 2026-07-20)
 async function rcAutoSaveCloud(){
   if(_rcAutoBusy){ _rcAutoAgain=true; return; }
   const named=(S.pts||[]).filter(p=>(p.name||'').trim() && p.send!==false);

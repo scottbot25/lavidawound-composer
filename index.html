@@ -1038,7 +1038,7 @@ function removePatient(pid){ const p=WS.patients[pid]; if(!p) return;
   delete WS.patients[pid]; const ids=Object.keys(WS.patients);
   if(!ids.length){ WS.patients.p1={name:'',store:newStore(),updatedAt:Date.now(),facility:'',noteType:'new'}; WS.seq=2; activePid='p1'; WS.round=WS.round||{}; WS.round.facility=''; }  // removed the LAST patient -> truly reset to a blank "Start here" (don't re-inherit the sticky facility)
   else if(pid===activePid){ activePid=ids[0]; }
-  activateForm(); }
+  activateForm(); if(typeof draftSaveNow==='function') draftSaveNow(); }
 // Wipe the CURRENT patient (name, facility, note) back to a fresh blank — the "clear" affordance for
 // the single/blank slot, where there's no ✕ (nothing to group into a facility box yet).
 function clearCurrentPatient(){
@@ -1046,11 +1046,11 @@ function clearCurrentPatient(){
   if(!confirm('Clear this patient — name, facility, and note — and start fresh?')) return;
   WS.patients[pid]={ name:'', store:newStore(), updatedAt:Date.now(), facility:'', noteType:'new' };
   WS.round=WS.round||{}; WS.round.facility='';   // drop the sticky default too, so it's a real blank reset
-  activateForm(); }
+  activateForm(); if(typeof draftSaveNow==='function') draftSaveNow(); }
 function clearAll(){ if(!confirm('Clear the ENTIRE workspace — every patient and both notes — and wipe the in-browser session? This cannot be undone.')) return;
   WS={ seq:2, activePid:'p1', round:{}, patients:{ p1:{name:'',store:newStore(),updatedAt:Date.now(),facility:'',noteType:'new'} } }; activePid='p1';
   try{ sessionStorage.removeItem(WKEY); sessionStorage.removeItem(SKEY); sessionStorage.removeItem(PKEY); }catch(e){}
-  activateForm(); }
+  activateForm(); if(typeof draftSaveNow==='function') draftSaveNow(); }
 // The patient switcher strip under the header (built in renderPatientBar; called from setMode).
 function renderPatientBar(){
   const bar=document.getElementById('patientBar'); if(!bar) return;
@@ -1819,24 +1819,41 @@ async function _draftContext(){
 // overwrite today's real draft with the empty fresh workspace).
 function scheduleDraftSave(){ if(!DRAFTS_ENABLED() || !_draftRestoreDone) return;
   if(_draftHold) return;   // just viewing an opened/restored draft — don't write it under today's file until a real edit
-  clearTimeout(_draftT); _draftStatus('✎ saving soon…','busy'); _draftT=setTimeout(()=>saveDraft(false), 5000); }
+  clearTimeout(_draftT); _draftStatus('✎ saving soon…','busy'); _draftT=setTimeout(()=>saveDraft(false), 1500); }   // was 5s — the wait was most of the perceived lag (Scott 2026-07-20)
+// Structural changes (remove/clear a patient, a Round Card pull, a reassign) save IMMEDIATELY — no
+// debounce. These are exactly the edits that resurrect if the tab closes before a delayed save lands
+// ("I deleted it and it came back"). Also ends the view-only hold: a deliberate delete/clear IS an
+// edit, but it's click-driven, so the input/change unhold listeners never see it.
+function draftSaveNow(){ if(!DRAFTS_ENABLED() || !_draftRestoreDone) return;
+  _draftHold=false; clearTimeout(_draftT); saveDraft(false); }
 // The first real edit ends the view-only hold. Captured at the document level so every field counts;
 // a manual Save click and a Round Card pull also end it (see saveDraft / rcAutoPull).
 function _draftUnhold(){ if(_draftHold){ _draftHold=false; scheduleDraftSave(); } }
 document.addEventListener('input', _draftUnhold, true);
 document.addEventListener('change', _draftUnhold, true);
-async function saveDraft(manual){
+let _lastSavedSig=null;   // JSON of WS at the last successful cloud save — skip a PUT when nothing changed
+async function saveDraft(manual, finalFlush){
   if(!DRAFTS_ENABLED()){ if(manual) toast('Sign in to save to ClinicalVault'); return false; }
   if(!_draftRestoreDone){ if(manual) toast('Reload the page first — your latest draft hasn’t loaded yet'); return false; }  // never save over an un-restored draft
   if(_draftHold){ if(!manual) return false; _draftHold=false; }  // view-only hold: block flush/auto saves; a deliberate Save click ends the hold
   if(_draftBusy){ _draftDirty=true; return false; }
+  // Nothing changed since the last successful save → no upload (kills redundant "Syncing…" spinners;
+  // the hide/close flush becomes free when the debounced save already landed). Manual Save always sends.
+  const sig=(()=>{ try{ return JSON.stringify(WS); }catch(e){ return null; } })();
+  if(!manual && sig!==null && sig===_lastSavedSig){ return true; }
   clearTimeout(_draftT); _draftBusy=true; _draftStatus(manual?'Saving…':'Syncing…','busy');
   try{
     const ctx=await _draftContext();
     if(!ctx){ _draftStatus('⚠ not synced — sign in','warn'); if(manual) toast('Please sign in to sync'); return false; }
     await _vaultEnsureFolders(ctx.token, ctx.driveId, _draftSegs());
     const url='https://graph.microsoft.com/v1.0/drives/'+ctx.driveId+'/root:/'+_encPath(_draftSegs().join('/')+'/'+_draftFile())+':/content';
-    const r=await _gfetch(url, ctx.token, {method:'PUT', headers:{'Content-Type':'application/json'}, body:_draftPayload()});
+    const body=_draftPayload();
+    // finalFlush = the page is hiding/closing. keepalive lets the browser FINISH this upload after the
+    // tab is gone — closing mid-save was how "the vault restored old work" (the in-flight save died,
+    // so reopening loaded the stale cloud copy). Browsers cap keepalive bodies (~64KB); oversized
+    // payloads fall back to a normal fetch (best effort). Same Microsoft-only egress either way.
+    const kal=!!finalFlush && body.length<60000;
+    const r=await _gfetch(url, ctx.token, {method:'PUT', headers:{'Content-Type':'application/json'}, body:body, keepalive:kal});
     if(!r.ok){ if(r.status===401) _draftCtx=null; _ensuredFolders.clear(); _draftStatus('⚠ not synced','warn'); if(manual) toast('Sync failed (HTTP '+r.status+')'); return false; }
     // Keep the Resume banner honest: the PUT response is the fresh driveItem (name + new mtime) —
     // record what we JUST saved under that key and refresh the listing entry, so the chip for today
@@ -1853,11 +1870,12 @@ async function saveDraft(manual){
         }
       }
     }catch(e){}
+    _lastSavedSig=sig;
     _draftStatus('☁ Saved '+_hm(),'ok'); if(manual) toast('Saved to ClinicalVault'); return true;
   }catch(e){ _draftStatus('⚠ not synced','warn'); return false; }
   finally{ _draftBusy=false; if(_draftDirty){ _draftDirty=false; scheduleDraftSave(); } }
 }
-function flushDraftSave(){ if(DRAFTS_ENABLED() && _draftRestoreDone){ clearTimeout(_draftT); saveDraft(false); } }
+function flushDraftSave(){ if(DRAFTS_ENABLED() && _draftRestoreDone){ clearTimeout(_draftT); saveDraft(false, true); } }   // final-flush: keepalive so the upload survives the tab closing
 
 async function listDrafts(){
   const ctx=await _draftContext(); if(!ctx) return [];
@@ -2146,6 +2164,7 @@ function doReassign(){
   // If we moved the patient currently open in the form, refresh their carry-forward + sticky default.
   if(pid===activePid){ WS.round=WS.round||{}; WS.round.facility=nf; if(MODE==='fu'){ _whPrior=null; if(typeof whApplyPrior==='function') whApplyPrior(); } }
   saveWS(); markWorkspaceEdited(); renderPatientBar();
+  if(typeof draftSaveNow==='function') draftSaveNow();   // a reassign is structural — persist it immediately
   toast((p.name||'Patient')+' moved to '+nf);
   closeHandoff();
 }
@@ -2506,6 +2525,7 @@ async function rcAutoPull(reason){
     if(returnNamed && WS.patients[returnPid]) switchPatient(returnPid);
     _draftHold=false;   // pulled card patients are real new content — make sure autosave persists them
     saveWS(); renderPatientBar();
+    if(typeof draftSaveNow==='function') draftSaveNow();   // pulls persist IMMEDIATELY — no debounce window to lose them in
     const total=fresh.length, parts=Object.keys(byFac).map(f=>f+': '+byFac[f]).join(' · ');
     toast('Brought in '+total+' patient'+(total===1?'':'s')+' from Round Cards ('+parts+')');
   }catch(e){}
@@ -3737,6 +3757,9 @@ function _hardenPHIInput(el){
 // Best-effort flush of the ClinicalVault autosave when the tab is hidden (switched away / closing) —
 // so the pending debounced draft lands before the session can be torn down. No-op unless signed in.
 document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='hidden' && typeof flushDraftSave==='function') flushDraftSave(); });
+// pagehide is the event that reliably fires on tab CLOSE (visibilitychange alone can be skipped on a
+// fast close) — with the keepalive flush this is what stops "closed too soon, the vault kept old work".
+window.addEventListener('pagehide', ()=>{ if(typeof flushDraftSave==='function') flushDraftSave(); });
 // Coming BACK to the tab: check for Round Cards a nurse may have filed while we were away (throttled,
 // so switching tabs rapidly doesn't hammer the vault).
 document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='visible' && typeof rcAutoPull==='function' && Date.now()-_rcLastPull>45000) rcAutoPull('focus'); });
