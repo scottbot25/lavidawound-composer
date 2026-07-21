@@ -600,52 +600,65 @@ function statusBadge(w){
 /* The nurse's sheet — a real document, not a text dump: teal header band, one clean card per patient,
    and the orders called out so they can't be missed. Solid colors + real <table>s so it survives being
    saved as .doc and opened in Word (gradients/rounded corners degrade gracefully). */
+/* The nurse's sheet, rebuilt for WORD fidelity (Scott 2026-07-20: page breaks were broken in the .doc,
+   the chip banner rendered strangely, patient boundaries were unclear). Word's HTML importer is the
+   design constraint, and it is primitive:
+   - it IGNORES sibling CSS selectors (".pt + .pt") — the page-break rule must sit INLINE on the element;
+   - it ignores border-radius / page-break-inside; rounded "chips" degrade into odd bordered boxes;
+   - what it renders faithfully: TABLES with solid background colors, bold text, simple class CSS.
+   So: header = one solid table (title band + a facility/date/provider/patients strip); every patient
+   after the first starts with an INLINE page-break-before:always; each patient opens with a full-width
+   SOLID TEAL NAME BANNER ("PATIENT: name · Patient N of M · X wounds") so boundaries are unmissable. */
 function sheetHTML(list){
   const r=S.round;
   const pts = list || S.pts.filter(p=>(p.name||'').trim());
   const css =
     "body{font:12pt/1.45 'Segoe UI',Arial,Helvetica,sans-serif;color:#26241f;margin:0;padding:22px;background:#fff}"
-   +".banner{background:#0f8a7c;color:#fff;padding:15px 20px;border-radius:10px}"
-   +".banner h1{font-size:18pt;margin:0;letter-spacing:.3px;font-weight:700}"
-   +".chips{margin-top:10px}"
-   +".chip{display:inline-block;background:#0c7568;border:1px solid #3aa99b;border-radius:20px;padding:4px 13px;font-size:9.5pt;margin:0 6px 4px 0;color:#fff}"
-   +".chip .ck{color:#bfeee6;text-transform:uppercase;letter-spacing:.5px;font-size:8pt;margin-right:5px}"
-   +".pt{border:1px solid #e2ded4;border-radius:10px;margin-top:16px;page-break-inside:avoid;break-inside:avoid}"
-   // Print: EACH PATIENT ON THEIR OWN PAGE (Scott 2026-07-20) — a patient card split across a page
-   // boundary printed with broken boxes. First patient shares page 1 with the header banner.
-   +".pt + .pt{page-break-before:always;break-before:page}"
-   +".pt-hd{background:#eef4f2;border-bottom:1px solid #d7e5e1;padding:9px 15px;font-size:12.5pt;font-weight:700;color:#0c5f56;border-radius:10px 10px 0 0}"
-   +".pt-hd .n{color:#6a8a84;font-weight:600;font-size:9.5pt;margin-left:7px}"
-   +".pt-body{padding:4px 15px 13px}"
-   +".w{margin-top:11px;padding-top:11px;border-top:1px dashed #e6e2d8}"
+   +"table{border-collapse:collapse}"
+   +".hdr-t{background:#0f8a7c;color:#ffffff;font-size:17pt;font-weight:700;padding:12px 16px;letter-spacing:.3px}"
+   +".hdr-c{background:#e7f2f0;padding:7px 16px;font-size:10.5pt;color:#1b3a35;border-bottom:2px solid #0f8a7c}"
+   +".hk{font-size:8pt;color:#0c5f56;text-transform:uppercase;letter-spacing:.6px;font-weight:700}"
+   +".pt{margin-top:18px}"
+   +".pth-name{background:#0f8a7c;color:#ffffff;font-size:13.5pt;font-weight:700;padding:9px 14px}"
+   +".pth-meta{background:#0f8a7c;color:#d8f0ec;font-size:9.5pt;font-weight:600;padding:9px 14px;text-align:right;white-space:nowrap}"
+   +".pt-body{padding:2px 2px 10px;border-bottom:2px solid #0f8a7c}"
+   +".w{margin-top:11px;padding-top:11px;border-top:1px dashed #cfcabd}"
    +".w-first{border-top:0}"
    +".w-title{font-size:11.5pt;font-weight:700;color:#33312c;margin-bottom:5px}"
    +".w-title .loc{color:#0f8a7c}"
-   +"table{border-collapse:collapse;margin:2px 0 0}"
    +"td.k{color:#948f83;font-size:8.5pt;padding:2px 14px 2px 0;white-space:nowrap;vertical-align:top;text-transform:uppercase;letter-spacing:.4px}"
    +"td.val{font-size:10.5pt;padding:2px 0;vertical-align:top;color:#2a2925}"
-   +".val-muted{color:#a8a294}"
-   +".badge{display:inline-block;border-radius:5px;padding:1px 9px;font-size:9.5pt;font-weight:700}"
-   +".b-imp{background:#e3f5ea;color:#1a7f46}.b-stb{background:#eef0f2;color:#565656}.b-wor{background:#fde8e3;color:#c0492b}"
-   +".orders{margin-top:9px;background:#f2faf8;border-left:4px solid #0f8a7c;border-radius:0 7px 7px 0;padding:8px 13px}"
-   +".orders .lab{font-size:8pt;text-transform:uppercase;letter-spacing:.6px;color:#0c5f56;font-weight:700;margin-bottom:2px}"
-   +".orders .txt{font-size:11pt;font-weight:600;color:#1b1b1b;white-space:pre-wrap}"
-   +".edu{margin-top:10px;background:#faf7f0;border:1px solid #ece5d5;border-radius:8px;padding:8px 13px}"
-   +".edu .lab{font-size:8pt;text-transform:uppercase;letter-spacing:.6px;color:#8a7a52;font-weight:700;margin-bottom:2px}"
-   +".edu .txt{font-size:10.5pt;white-space:pre-wrap}"
+   +".b-imp{color:#1a7f46;font-weight:700}.b-stb{color:#565656;font-weight:700}.b-wor{color:#c0492b;font-weight:700}"
+   +".orders-cell{background:#eaf6f3;border-left:4px solid #0f8a7c;padding:8px 13px}"
+   +".orders-lab{font-size:8pt;text-transform:uppercase;letter-spacing:.6px;color:#0c5f56;font-weight:700}"
+   +".orders-txt{font-size:11pt;font-weight:600;color:#1b1b1b;white-space:pre-wrap}"
+   +".edu-cell{background:#faf6ec;border-left:4px solid #b09b5a;padding:8px 13px}"
+   +".edu-lab{font-size:8pt;text-transform:uppercase;letter-spacing:.6px;color:#8a7a52;font-weight:700}"
+   +".edu-txt{font-size:10.5pt;white-space:pre-wrap}"
    +".ft{margin-top:20px;border-top:1px solid #e2ded4;padding-top:9px;color:#948f83;font-size:8.5pt;line-height:1.4}";
   let b='<html><head><meta charset="utf-8"><title>Wound Care Orders</title><style>'+css+'</style></head><body>';
-  b += '<div class="banner"><h1>Wound Care Orders</h1><div class="chips">'
-     + '<span class="chip"><span class="ck">Facility</span>'+esc(v(r.fac))+'</span>'
-     + '<span class="chip"><span class="ck">Date</span>'+esc(v(r.date))+'</span>'
-     + '<span class="chip"><span class="ck">Provider</span>'+esc(v(r.prov))+'</span>'
-     + '<span class="chip"><span class="ck">Patients</span>'+pts.length+'</span>'
-     + '</div></div>';
-  pts.forEach(p=>{
-    b += '<div class="pt"><div class="pt-hd">'+esc(v(p.name))
-       + '<span class="n">'+p.wounds.length+' wound'+(p.wounds.length===1?'':'s')+'</span></div><div class="pt-body">';
+  // Document header: solid title band + one clean info strip (Word renders tables reliably; no chips).
+  b += '<table width="100%" cellpadding="0" cellspacing="0">'
+     + '<tr><td class="hdr-t" colspan="4">Wound Care Orders</td></tr>'
+     + '<tr>'
+     + '<td class="hdr-c" width="34%"><span class="hk">Facility</span><br><b>'+esc(v(r.fac))+'</b></td>'
+     + '<td class="hdr-c" width="22%"><span class="hk">Date</span><br><b>'+esc(v(r.date))+'</b></td>'
+     + '<td class="hdr-c" width="28%"><span class="hk">Provider</span><br><b>'+esc(v(r.prov))+'</b></td>'
+     + '<td class="hdr-c" width="16%"><span class="hk">Patients</span><br><b>'+pts.length+'</b></td>'
+     + '</tr></table>';
+  pts.forEach((p,pi)=>{
+    // INLINE page break (Word ignores stylesheet sibling selectors) — every patient after the first
+    // starts on a fresh page; the first shares page 1 with the document header.
+    const brk = pi>0 ? ' style="page-break-before:always"' : '';
+    b += '<div class="pt"'+brk+'>'
+       + '<table width="100%" cellpadding="0" cellspacing="0"><tr>'
+       + '<td class="pth-name">PATIENT: '+esc(v(p.name))+'</td>'
+       + '<td class="pth-meta">Patient '+(pi+1)+' of '+pts.length+' &nbsp;·&nbsp; '+p.wounds.length+' wound'+(p.wounds.length===1?'':'s')+'</td>'
+       + '</tr></table>'
+       + '<div class="pt-body">';
     p.wounds.forEach((w,i)=>{
-      const odor=disp(w,'odor');
+      const odor=disp(w,'odor'), status=disp(w,'status');
+      const stCls = status ? (String(status).toLowerCase().indexOf('improv')>=0?'b-imp':(String(status).toLowerCase().indexOf('wors')>=0?'b-wor':'b-stb')) : '';
       b += '<div class="w'+(i===0?' w-first':'')+'"><div class="w-title">Wound '+(i+1)+' — <span class="loc">'+esc(v(w.loc))+'</span></div>'
          + '<table>'
          + '<tr><td class="k">Type</td><td class="val">'+esc(v(disp(w,'type')))
@@ -653,18 +666,24 @@ function sheetHTML(list){
          + '<tr><td class="k">Size</td><td class="val">'+esc(v(sizeText(w)))+'</td></tr>'
          + '<tr><td class="k">Drainage</td><td class="val">'+esc(v(disp(w,'drain')))
          +   (odor && odor!=='None' ? ' &nbsp;·&nbsp; odor '+esc(odor) : '')+'</td></tr>'
-         + '<tr><td class="k">Status</td><td class="val">'+statusBadge(w)+'</td></tr>'
+         // Status prints ONLY when the provider chose one — an unset status (e.g. an initial visit,
+         // where improving/worsening has nothing to compare to) shows nothing, never a placeholder.
+         + (status ? '<tr><td class="k">Status</td><td class="val"><span class="'+stCls+'">'+esc(status)+'</span></td></tr>' : '')
          + (wbText(w) ? '<tr><td class="k">Wound bed</td><td class="val">'+esc(wbText(w))+'</td></tr>' : '')
          + (disp(w,'exposed')   ? '<tr><td class="k">Exposed</td><td class="val">'+esc(disp(w,'exposed'))+'</td></tr>' : '')
          + (disp(w,'periwound') ? '<tr><td class="k">Periwound</td><td class="val">'+esc(disp(w,'periwound'))+'</td></tr>' : '')
          + ((w.undermining||'').trim() ? '<tr><td class="k">Undermining</td><td class="val">'+esc(w.undermining.trim())+'</td></tr>' : '')
          + ((w.tunneling||'').trim()   ? '<tr><td class="k">Tunneling</td><td class="val">'+esc(w.tunneling.trim())+'</td></tr>' : '')
          + '</table>'
-         + '<div class="orders"><div class="lab">Orders for the nurse</div><div class="txt">'+esc(v(w.orders))+'</div></div>'
+         + '<table width="100%" cellpadding="0" cellspacing="0" style="margin-top:8px"><tr><td class="orders-cell">'
+         + '<span class="orders-lab">Orders for the nurse</span><br><span class="orders-txt">'+esc(v(w.orders))+'</span>'
+         + '</td></tr></table>'
          + '</div>';
     });
     if((p.edu||'').trim()){
-      b += '<div class="edu"><div class="lab">Additional info, plan &amp; education</div><div class="txt">'+esc(p.edu.trim())+'</div></div>';
+      b += '<table width="100%" cellpadding="0" cellspacing="0" style="margin-top:10px"><tr><td class="edu-cell">'
+         + '<span class="edu-lab">Additional info, plan &amp; education</span><br><span class="edu-txt">'+esc(p.edu.trim())+'</span>'
+         + '</td></tr></table>';
     }
     b += '</div></div>';
   });
@@ -700,7 +719,8 @@ function findGaps(){
       const tag = named+' · wound '+(i+1);
       if(!(w.orders||'').trim()) g.push(tag+': no orders — the nurse gets nothing to do');
       if(!(w.loc||'').trim())    g.push(tag+': no location');
-      if(!(w.status||'').trim()) g.push(tag+': no status (improving / stable / worsening)');
+      // NO nag for a blank status (Scott 2026-07-20): improving/stable/worsening is a COMPARISON —
+      // meaningless on an initial visit. Status is optional; unset prints nothing on the sheet.
       if(isPressure(w) && !(w.stage||'').trim()) g.push(tag+': pressure wound with no stage');
     });
   });
