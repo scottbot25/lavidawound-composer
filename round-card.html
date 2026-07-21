@@ -159,13 +159,14 @@
     <div id="gaps"></div>
     <div id="sendPick"></div>
     <div class="prev" id="prev"></div>
-    <label for="toSel">Send to</label>
-    <select id="toSel"></select>
-    <div class="muted" style="margin-top:6px">Fixed list on purpose — a typo can't send a patient's info to a stranger.</div>
+    <!-- Email button RETIRED (Scott 2026-07-20): the in-tool email kept breaking (mail-app length caps,
+         Safe Browsing interference). New flow: DOWNLOAD the sheet and attach it to an email yourself at
+         the end of rounds. The "Send to" recipient list went with it. -->
     <div class="row" style="margin-top:12px">
-      <button id="emailBtn" class="primary" style="flex:1" onclick="emailSheet()">Email it</button>
+      <button id="downloadBtn" class="primary" style="flex:1" onclick="downloadSheet()">⬇ Download (.doc)</button>
       <button id="printBtn" style="flex:1" onclick="printSheet()">Print it</button>
     </div>
+    <div class="muted" style="margin-top:6px">Download, then attach it to an email to the facility at the end of rounds.</div>
     <div class="row" style="margin-top:8px">
       <button id="vaultBtn" style="flex:1;border-color:var(--teal);color:var(--teal-dark);font-weight:650" onclick="saveVault()">☁ Save to ClinicalVault</button>
     </div>
@@ -202,9 +203,8 @@
    authenticated with the provider's own Entra token. Never Web Speech (Google).
    ========================================================================== */
 
-/* Approved facility contacts. PLACEHOLDER — points at Scott's admin inbox so testing
-   cannot email a real facility. At go-live, replace with the real approved nurse
-   contacts, kept in the private ops vault (this file is hosted publicly). */
+/* RETIRED with the email button (Scott 2026-07-20) — kept only so nothing dangling references it.
+   The send flow is now: Download the .doc sheet and attach it to an email at the end of rounds. */
 const FACILITY_CONTACTS = [
   { name: 'TEST — Abby (abbs2118@gmail.com)', email: 'abbs2118@gmail.com' },   // test recipient for the handoff email — SYNTHETIC data only (Gmail is not a BAA inbox)
   { name: 'TEST — admin inbox (not a real facility)', email: 'admin@lavidaheal.com' },
@@ -716,8 +716,7 @@ function openReview(){
       : 'Add a patient first');
     return;
   }
-  const sel=document.getElementById('toSel');
-  sel.innerHTML = FACILITY_CONTACTS.map((c,i)=>'<option value="'+i+'">'+esc(c.name)+' — '+esc(c.email)+'</option>').join('');
+  // (recipient dropdown retired with the email button — download + attach is the send flow now)
   paintReview();
   document.getElementById('review').classList.add('on');
 }
@@ -777,7 +776,7 @@ function paintReview(){
     prev.innerHTML='<div class="prev-empty">No patients selected to send.</div>';
   }
   const none=pts.length===0;
-  ['emailBtn','printBtn','vaultBtn'].forEach(id=>{ const b=document.getElementById(id); if(b) b.disabled=none; });
+  ['downloadBtn','printBtn','vaultBtn'].forEach(id=>{ const b=document.getElementById(id); if(b) b.disabled=none; });
 }
 
 /* ---------- deliver ---------- */
@@ -810,29 +809,23 @@ function printSheet(){
     setTimeout(()=>{ try{ w.focus(); w.print(); }catch(x){} },250);
   }
 }
-function emailSheet(){
-  const i=document.getElementById('toSel').value;
-  const c=FACILITY_CONTACTS[i];
-  if(!c){ toast('No facility contact set up yet'); return; }
+/* Email RETIRED (Scott 2026-07-20) — the in-tool mailto kept breaking (mail-app length caps, Safe
+   Browsing interference). Replaced by downloadSheet(): the provider downloads the styled orders sheet
+   (.doc, same file Save-to-ClinicalVault files under Daily Handoffs) and attaches it to an email at the
+   end of rounds. Note the download intentionally puts the sheet ON THE DEVICE — Scott's call, same
+   accepted posture as the composer's handoff download (BYOD policy; vault copy is still the record). */
+function downloadSheet(){
   const pts=sentNamed();
-  if(!pts.length){ toast('No patients selected to send'); return; }
-  const r=S.round, n=pts.length;
-  const subj='Wound care orders — '+(r.fac||'')+' — '+(r.date||'')+' ('+n+' patient'+(n===1?'':'s')+')';
-  const body=sheetText(pts);
-  /* Stage on the clipboard first: older mail apps silently truncate a long mailto body,
-     so the paste-fallback has to exist BEFORE the draft opens. */
-  try{ navigator.clipboard && navigator.clipboard.writeText(body); }catch(e){}
-  const url='mailto:'+encodeURIComponent(c.email)+'?subject='+encodeURIComponent(subj)
-    +'&body='+encodeURIComponent(body);
-  if(url.length > 1900){
-    const short='The orders are on your clipboard — tap in the message body and paste.';
-    location.href='mailto:'+encodeURIComponent(c.email)+'?subject='+encodeURIComponent(subj)
-      +'&body='+encodeURIComponent(short);
-    toast('Draft opened — paste the orders in, then check it and send');
-  } else {
-    location.href=url;
-    toast('Draft opened — check it, then send');
-  }
+  if(!pts.length){ toast('No patients selected'); return; }
+  const fac  = cleanSeg(S.round.fac) || 'Unfiled';
+  const date = /^\d{4}-\d{2}-\d{2}/.test(String(S.round.date||'')) ? S.round.date.slice(0,10) : 'undated';
+  const prov = cleanSeg(S.round.prov) || 'Provider unlisted';
+  const blob=new Blob(['﻿'+sheetHTML(pts)],{type:'application/msword'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+  a.download='Wound Orders — '+fac+' — '+date+' — '+prov+'.doc';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+  toast('Downloaded — attach it to your email to the facility');
 }
 
 /* ---------- Save to ClinicalVault — Microsoft Graph upload ----------
