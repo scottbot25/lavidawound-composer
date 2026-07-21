@@ -1021,6 +1021,17 @@ function _rcHm(){ const d=new Date(); let h=d.getHours(); const ap=h<12?'AM':'PM
    the Review modal (#rcSyncStatus2, which covers the header). Local sessionStorage save is always
    happening (survives refresh); this bar reports the CLOUD backup — the part a provider needs to trust. */
 let _rcSyncState='';
+let _rcSyncErr='';   // last failure's reason — shown in the error state so "can't reach the vault" is never a guessing game
+function _rcErrHint(){
+  const m=/HTTP (\d+)/.exec(_rcSyncErr||'');
+  if(m){
+    if(m[1]==='403') return ' (HTTP 403 — this account doesn’t have access to the vault site; ask the administrator to add you)';
+    if(m[1]==='401') return ' (HTTP 401 — sign-in expired; reload the page)';
+    if(m[1]==='404') return ' (HTTP 404 — vault folder not found)';
+    return ' (HTTP '+m[1]+')';
+  }
+  return _rcSyncErr ? ' ('+String(_rcSyncErr).slice(0,80)+')' : '';
+}
 function _rcPaintSync(state, when){
   if(state) _rcSyncState=state;
   let txt='', warn=false;
@@ -1029,7 +1040,7 @@ function _rcPaintSync(state, when){
     case 'saved':  txt='☁ Backed up to ClinicalVault · '+(when||_rcHm()); break;
     case 'ready':  txt='☁ Auto-saving to ClinicalVault as you go'; break;
     case 'local':  txt='● Saved on this device — sign in to back up to ClinicalVault'; warn=true; break;
-    case 'error':  txt='⚠ Couldn’t reach ClinicalVault — kept safe on this device, will retry'; warn=true; break;
+    case 'error':  txt='⚠ Couldn’t reach ClinicalVault — kept safe on this device, will retry'+_rcErrHint(); warn=true; break;
     default:       txt='';
   }
   const hdr=document.getElementById('rcSyncStatusHdr');   // white-on-teal header: light text, light-amber warn
@@ -1071,10 +1082,11 @@ async function rcAutoSaveCloud(){
       await _vaultUpload(token,driveId,recSegs,id+'.json',jb,'application/json');
       _rcCloudSig[id]=_rcSig(p); n++;
     }
+    _rcSyncErr='';
     _rcPaintSync('saved');
     // if we're inside the composer overlay, nudge it to pull the freshly-saved records
     try{ if(window.parent && window.parent!==window) window.parent.postMessage({type:'rc-saved'}, location.origin); }catch(e){}
-  }catch(e){ _ensuredFolders.clear(); _rcPaintSync('error'); }
+  }catch(e){ _ensuredFolders.clear(); _rcSyncErr=(e&&e.message)||''; _rcPaintSync('error'); }
   finally{ _rcAutoBusy=false; if(_rcAutoAgain){ _rcAutoAgain=false; scheduleRcAutoSave(); } }
 }
 /* Path hygiene — same sanitizer as the composer: no traversal, no illegal SharePoint chars. */
