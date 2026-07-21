@@ -1735,14 +1735,31 @@ function applyDraft(obj, dateKey){
   Object.keys(ws.patients).forEach(pid=>{ const p=ws.patients[pid]||{}; if(!p.store) p.store=newStore();
     if(!p.store.new) p.store.new={}; if(!p.store.fu) p.store.fu={}; ws.patients[pid]=p; });
   migrateFacility(ws);   // a draft saved before per-patient facility carried facility only on round
+  _pruneEmptyPatients(ws);   // drop phantom empty-named slots so a "0 patient" day resumes clean, not as "1 · New patient"
   if(!ws.patients[ws.activePid]) ws.activePid=Object.keys(ws.patients)[0];
   WS=ws; activePid=WS.activePid;
   WS.draftDay=(dateKey||_todayKey()); WS.dayBannerHidden=false;
   saveWS(); activateForm(); renderPatientBar(); paintDayBanner();
   return true;
 }
-function _wsHasContent(){ try{ return Object.keys(WS.patients).some(pid=>{ const p=WS.patients[pid]||{};
-  return (p.name&&p.name.trim()) || JSON.stringify(p.store||{}).length>24; }); }catch(e){ return false; } }
+function _patientHasContent(p){ try{ return !!((p&&p.name&&p.name.trim()) || (p&&JSON.stringify(p.store||{}).length>24)); }catch(e){ return false; } }
+function _wsHasContent(){ try{ return Object.keys(WS.patients).some(pid=>_patientHasContent(WS.patients[pid])); }catch(e){ return false; } }
+// Drop empty-named, empty-content placeholder slots from a workspace (keep the real ones). If a saved day
+// held only empty slots — e.g. a patient added to a facility but never named — they used to resume as a
+// phantom "<facility> · 1 · New patient" box. Collapse an all-empty day to one clean "Start here" slot.
+// (Scott 2026-07-20.) Applied on RESUME only, so adding-then-naming a patient live is untouched.
+function _pruneEmptyPatients(ws){
+  if(!ws||!ws.patients) return;
+  const ids=Object.keys(ws.patients);
+  const real=ids.filter(pid=>_patientHasContent(ws.patients[pid]));
+  if(real.length){
+    ids.forEach(pid=>{ if(!_patientHasContent(ws.patients[pid])) delete ws.patients[pid]; });
+    if(!ws.patients[ws.activePid]) ws.activePid=Object.keys(ws.patients)[0];
+  } else {
+    ws.patients={ p1:{ name:'', store:newStore(), updatedAt:0, facility:'', noteType:'new' } };
+    ws.activePid='p1';
+  }
+}
 
 // Called once after sign-in. Auto-restores today's draft into a FRESH/empty session (so it never
 // clobbers work in progress); otherwise offers a dated resume banner. Always ends with autosave armed.
@@ -1823,7 +1840,12 @@ function _draftFacSummary(ws){
   try{
     const counts={};
     Object.keys((ws&&ws.patients)||{}).forEach(pid=>{
-      const f=String((ws.patients[pid]||{}).facility||'').trim()||'Unassigned';
+      const p=ws.patients[pid]||{};
+      // Count only REAL (named) patients. The workspace always keeps one blank placeholder slot, so
+      // counting every entry made an empty/cleared day read as "1 patient" in the Resume chip and made a
+      // phantom patient seem to reappear on resume (Scott 2026-07-20).
+      if(!(p.name && p.name.trim())) return;
+      const f=String(p.facility||'').trim()||'Unassigned';
       counts[f]=(counts[f]||0)+1; });
     return Object.keys(counts).map(f=>f+' '+counts[f]).join(' · ');
   }catch(e){ return ''; }
