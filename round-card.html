@@ -7,7 +7,7 @@
 <!-- Egress is Microsoft-ONLY, same discipline as the Note Composer. Phase 1 makes NO network calls
      at all (everything is generated in the browser); the Speech/OpenAI hosts are pre-declared here
      for Phase 2 so the policy is reviewed once, not loosened later under deadline. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://graph.microsoft.com https://login.microsoftonline.com https://*.cognitiveservices.azure.com https://*.openai.azure.com wss://*.cognitiveservices.azure.com; form-action 'self' https://login.microsoftonline.com; frame-src https://login.microsoftonline.com; base-uri 'self'; object-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://graph.microsoft.com https://login.microsoftonline.com https://lavidah.sharepoint.com https://*.cognitiveservices.azure.com https://*.openai.azure.com wss://*.cognitiveservices.azure.com; form-action 'self' https://login.microsoftonline.com; frame-src https://login.microsoftonline.com; base-uri 'self'; object-src 'none'">
 <style>
   :root{
     --bg:#f7f5f1; --panel:#fff; --ink:#1d2b2a; --muted:#6b7a79; --line:#dfdcd6;
@@ -111,7 +111,7 @@
   </div>
   <div class="row" style="gap:8px;flex:0 0 auto">
     <a id="rcNotesLink" href="index.html" title="Back to the Note Composer" style="color:#fff;text-decoration:none;border:1px solid rgba(255,255,255,.55);border-radius:8px;padding:7px 11px;font-size:13px;font-weight:600">Notes</a>
-    <button class="tiny" onclick="clearAll()" title="Wipe this round from the phone">Clear</button>
+    <button class="tiny" id="clearBtn" onclick="clearAll(this)" title="Wipe this round from the phone">Clear</button>
   </div>
 </header>
 
@@ -989,6 +989,23 @@ async function _vaultUpload(token,driveId,segs,filename,blob,ctype){
   if(!r.ok) throw new Error('Upload failed (HTTP '+r.status+').');
   return await r.json();
 }
+// Read-side helpers (restore-on-open + Clear's cloud cleanup). Content is read via the item's
+// pre-authenticated downloadUrl (same pattern as the composer — Graph's /content endpoint 302s
+// cross-origin and drops the auth header; the downloadUrl is short-lived and needs none).
+async function _vaultList(token,driveId,rel){
+  const r=await _gfetch('https://graph.microsoft.com/v1.0/drives/'+driveId+'/root:/'+_encPath(rel)+':/children?$select=name,folder,lastModifiedDateTime&$top=200',token);
+  if(!r.ok) return []; return (await r.json()).value||[];
+}
+async function _vaultReadJson(token,driveId,rel){
+  const m=await _gfetch('https://graph.microsoft.com/v1.0/drives/'+driveId+'/root:/'+_encPath(rel),token);
+  if(!m.ok) return null; const meta=await m.json(); const dl=meta['@microsoft.graph.downloadUrl'];
+  if(!dl) return null; const r=await fetch(dl); if(!r.ok) return null;
+  try{ return JSON.parse(await r.text()); }catch(e){ return null; }
+}
+async function _vaultDelete(token,driveId,rel){
+  const r=await _gfetch('https://graph.microsoft.com/v1.0/drives/'+driveId+'/root:/'+_encPath(rel),token,{method:'DELETE'});
+  return r.ok || r.status===204 || r.status===404;   // SharePoint recycle bin, not a hard delete
+}
 /* ---------- AUTO-SAVE patient records to ClinicalVault as you go (Scott 2026-07-20) ----------
    The manual "☁ Save to ClinicalVault" button still does the full send (handoff sheet + every record +
    QC count). This ADDITIONALLY streams each patient's roundcard.v1 record to RoundCards/<fac>/<id>.json
@@ -1224,11 +1241,34 @@ function _hardenPHIInput(el){
   }catch(e){}
 })();
 
-/* ---------- clear ---------- */
-function clearAll(){
-  if(!confirm('Wipe today\'s round off this phone? This can\'t be undone.')) return;
+/* ---------- clear ----------
+   TWO-TAP confirm, not window.confirm (Scott 2026-07-21: "click Clear, nothing happens") — Chrome can
+   silently swallow native dialogs fired from inside the composer's overlay iframe, so the old confirm()
+   returned false without ever showing. First tap arms the button ("Really wipe?"), second tap within 4s
+   clears; it disarms itself otherwise.
+   Clear also DELETES today's auto-saved records from the vault (best-effort, recycle-bin delete) —
+   without that, the new restore-on-open would faithfully resurrect a round the provider just wiped. */
+let _clearArm=null;
+function clearAll(btn){
+  btn = btn || document.getElementById('clearBtn');
+  if(!_clearArm){
+    if(btn){ btn.textContent='Really wipe?'; btn.style.background='#c0492b'; btn.style.color='#fff'; }
+    _clearArm=setTimeout(()=>{ _clearArm=null; if(btn){ btn.textContent='Clear'; btn.style.background=''; btn.style.color=''; } }, 4000);
+    return;
+  }
+  clearTimeout(_clearArm); _clearArm=null;
+  const doomed=(S.pts||[]).filter(p=>p.id).map(p=>p.id);
+  const fac=cleanSeg(S.round.fac)||'Unfiled';
   S=blank(); try{ sessionStorage.removeItem(KEY); }catch(e){}
+  Object.keys(_rcCloudSig).forEach(k=>delete _rcCloudSig[k]);
   paintRound(); render(); toast('Cleared');
+  if(btn){ btn.textContent='Clear'; btn.style.background=''; btn.style.color=''; }
+  // best-effort cloud cleanup so restore-on-open doesn't resurrect a deliberately wiped round
+  (async()=>{ try{
+    const token=await _vaultTokenSilent(); if(!token) return;
+    const siteId=await _vaultSiteId(token), driveId=await _vaultDriveId(token,siteId);
+    for(const id of doomed){ try{ await _vaultDelete(token,driveId,'RoundCards/'+fac+'/'+id+'.json'); }catch(e){} }
+  }catch(e){} })();
 }
 
 /* ---------- boot ---------- */
@@ -1237,7 +1277,57 @@ paintRound(); render(); save();
 _autoFillProvider();   // pre-fill Provider from whoever's signed in (fire-and-forget; no-op if none / already set)
 /* When shown inside the composer's overlay (an iframe), the "Notes" link would load the
    composer INSIDE this frame — hide it; the overlay's ✕ Close is the way back. */
-if(window.self !== window.top){ const n=document.getElementById('rcNotesLink'); if(n) n.style.display='none'; }
+/* Inside the composer overlay the composer's own bar already says "Round Card" + Close — the card's
+   full teal header stacked under it read as a broken double banner (Scott 2026-07-21). Framed mode
+   keeps only a SLIM strip: the save-status line + the Clear button. Standalone keeps the full header. */
+if(window.self !== window.top){
+  const n=document.getElementById('rcNotesLink'); if(n) n.style.display='none';
+  document.querySelectorAll('header h1, header .sub').forEach(el=>{ el.style.display='none'; });
+  const h=document.querySelector('header'); if(h){ h.style.paddingTop='6px'; h.style.paddingBottom='6px'; }
+  const st=document.getElementById('rcSyncStatusHdr'); if(st) st.style.marginTop='0';
+}
+
+/* ---------- RESTORE TODAY'S ROUND FROM CLINICALVAULT ON OPEN (Scott 2026-07-21) ----------
+   "I exited the browser and came back and my round card was gone." The screen copy is deliberately
+   per-tab (PHI stays off the device), but auto-save has been streaming every named patient to
+   RoundCards/<fac>/<id>.json — so a fresh card can now REBUILD today's round from the vault:
+   silent token only (never prompts; skips quietly if signed out), only when the session is empty
+   (never clobbers work in progress), only TODAY's records, and only THIS provider's (records carry
+   provider + date). Restored patients seed the auto-save signature so nothing re-uploads. Clear
+   deletes today's records (above), so a deliberately wiped round stays wiped. */
+function _nameKey(s){ return String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim().split(' ').filter(Boolean).sort().join(' '); }
+async function rcRestoreFromVault(){
+  try{
+    if((S.pts||[]).some(p=>(p.name||'').trim())) return;            // session already has work — never clobber
+    const token=await _vaultTokenSilent(); if(!token) return;       // signed out — quietly do nothing
+    await _autoFillProvider();
+    let prov=(S.round.prov||'').trim();
+    if(!prov){ try{ const a=_pca&&_pca.getAllAccounts&&_pca.getAllAccounts()[0]; prov=(a&&(a.name||a.username))||''; }catch(e){} }
+    if(!prov) return;                                               // can't attribute records — skip
+    const siteId=await _vaultSiteId(token), driveId=await _vaultDriveId(token,siteId);
+    const today=todayISO(), cut=Date.now()-36*3600*1000, mine=[];
+    const facs=(await _vaultList(token,driveId,'RoundCards')).filter(it=>it.folder).map(it=>it.name);
+    for(const fac of facs){
+      const files=(await _vaultList(token,driveId,'RoundCards/'+fac))
+        .filter(f=>/\.json$/i.test(f.name))
+        .filter(f=>{ const t=Date.parse(f.lastModifiedDateTime||''); return !isNaN(t) && t>=cut; });  // only fresh files — the folder accumulates
+      for(const f of files){
+        const rec=await _vaultReadJson(token,driveId,'RoundCards/'+fac+'/'+f.name);
+        if(rec && rec.schema==='roundcard.v1' && String(rec.date||'').slice(0,10)===today
+           && _nameKey(rec.provider)===_nameKey(prov)) mine.push(rec);
+      }
+    }
+    if(!mine.length) return;
+    mine.sort((a,b)=>String(a.savedAt||'').localeCompare(String(b.savedAt||'')));
+    S.round.fac=mine[mine.length-1].facility||S.round.fac; S.round.date=today; S.round.prov=S.round.prov||prov;
+    S.pts=mine.map(r=>({ id:r.id||newId(), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], send:true }));
+    normalizePts(S); S.active=0;
+    S.pts.forEach(p=>{ try{ _rcCloudSig[p.id]=_rcSig(p); }catch(e){} });   // restored = already in the cloud; no re-upload
+    save(); paintRound(); render();
+    toast('Restored today’s round from ClinicalVault ('+S.pts.length+' patient'+(S.pts.length===1?'':'s')+')');
+  }catch(e){}
+}
+setTimeout(rcRestoreFromVault, 800);
 </script>
 </body>
 </html>
