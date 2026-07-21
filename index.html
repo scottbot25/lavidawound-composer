@@ -1636,7 +1636,13 @@ async function _vaultDriveId(token,siteId){
   if(!r.ok) throw new Error('Couldn’t open the document library (HTTP '+r.status+').');
   return (await r.json()).id;
 }
+// Folders are created once and never deleted (purge removes FILES, not the Drafts/<user> folder), so
+// re-checking them on every autosave was 2 wasted sequential round-trips per save on top of the upload
+// — a big chunk of the "syncing takes forever." Remember what we've already ensured this session and
+// skip the checks. Cleared if a save fails (the one case a folder might really be missing). Scott 2026-07-20.
+const _ensuredFolders=new Set();
 async function _vaultEnsureFolders(token,driveId,segs){
+  const ck=driveId+'|'+segs.join('/'); if(_ensuredFolders.has(ck)) return;
   let parent='';
   for(let i=0;i<segs.length;i++){
     const seg=segs[i], childRel=parent?parent+'/'+seg:seg;
@@ -1650,6 +1656,7 @@ async function _vaultEnsureFolders(token,driveId,segs){
     } else if(!c.ok){ throw new Error('Folder check failed (HTTP '+c.status+').'); }
     parent=childRel;
   }
+  _ensuredFolders.add(ck);   // all segments confirmed/created — skip the checks next time
 }
 async function _vaultUpload(token,driveId,segs,filename,blob){
   const url='https://graph.microsoft.com/v1.0/drives/'+driveId+'/root:/'+_encPath(segs.join('/')+'/'+filename)+':/content';
@@ -1817,7 +1824,7 @@ async function saveDraft(manual){
     await _vaultEnsureFolders(ctx.token, ctx.driveId, _draftSegs());
     const url='https://graph.microsoft.com/v1.0/drives/'+ctx.driveId+'/root:/'+_encPath(_draftSegs().join('/')+'/'+_draftFile())+':/content';
     const r=await _gfetch(url, ctx.token, {method:'PUT', headers:{'Content-Type':'application/json'}, body:_draftPayload()});
-    if(!r.ok){ if(r.status===401) _draftCtx=null; _draftStatus('⚠ not synced','warn'); if(manual) toast('Sync failed (HTTP '+r.status+')'); return false; }
+    if(!r.ok){ if(r.status===401) _draftCtx=null; _ensuredFolders.clear(); _draftStatus('⚠ not synced','warn'); if(manual) toast('Sync failed (HTTP '+r.status+')'); return false; }
     // Keep the Resume banner honest: the PUT response is the fresh driveItem (name + new mtime) —
     // record what we JUST saved under that key and refresh the listing entry, so the chip for today
     // can never keep claiming content from hours ago (2026-07-20 PM).
