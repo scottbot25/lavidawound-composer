@@ -377,7 +377,10 @@
    (Scott 2026-07-20 PM: "every time i open the round card i cant fill anything in".) */
 var _rcFrameOK=false, _rcFrameTimer=null;
 function _rcCardUrl(){ return 'round-card.html'+(_CSANDBOX?'?sandbox=1':''); }
-function rcOpenOwnTab(){ try{ window.open(_rcCardUrl(),'_blank'); }catch(e){} }
+// Reuse ONE card tab (named target) instead of spawning a fresh blank one each click. The card keeps
+// its round in the tab's own memory, so opening a NEW tab every time looked like "my patients vanished"
+// — clicking Round Card again now returns to the SAME card with everything still there (Scott 2026-07-20).
+function rcOpenOwnTab(){ try{ const w=window.open(_rcCardUrl(),'lavidaRoundCard'); if(w) w.focus(); }catch(e){} }
 function _rcShowBlocked(b){
   var p=document.getElementById('rcBlocked'), f=document.getElementById('rcFrame');
   if(p) p.style.display=b?'flex':'none'; if(f) f.style.display=b?'none':'';
