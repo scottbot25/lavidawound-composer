@@ -1885,16 +1885,26 @@ function applyDraft(obj, dateKey){
 // made day chips count phantoms (found 2026-07-20 PM). _storeHasContent ignores __internal keys.
 function _patientHasContent(p){ try{ return !!((p&&p.name&&p.name.trim()) || (p&&p.store&&(_storeHasContent(p.store.new)||_storeHasContent(p.store.fu)))); }catch(e){ return false; } }
 function _wsHasContent(){ try{ return Object.keys(WS.patients).some(pid=>_patientHasContent(WS.patients[pid])); }catch(e){ return false; } }
-// Drop empty-named, empty-content placeholder slots from a workspace (keep the real ones). If a saved day
-// held only empty slots — e.g. a patient added to a facility but never named — they used to resume as a
-// phantom "<facility> · 1 · New patient" box. Collapse an all-empty day to one clean "Start here" slot.
-// (Scott 2026-07-20.) Applied on RESUME only, so adding-then-naming a patient live is untouched.
+// A slot is a REAL PATIENT only if it's IDENTIFIABLE — has a name OR a building. Content alone is NOT
+// enough, and that's the whole fix for the "rogue 1s that come back": old drafts carry invisible
+// leftovers (auto-written exam normals from a since-removed build, __wc form stubs) that read as
+// "content" but describe NOBODY — no name, no building. The old prune test was content-based, so it
+// REFUSED to drop these ghosts; deleting one by hand didn't stick (opening a past day holds autosave),
+// so switching days reloaded it. This ONE test now drives BOTH pruning-on-load AND the resume-chip
+// counts, so a nameless/buildingless ghost is dropped the instant a draft loads — nothing to delete,
+// nothing to come back — and a chip can never claim a patient the opened day won't show.
+// (A real patient always has a building: the flow makes you pick one at "Start here" before charting,
+// and every added patient inherits it — so this never drops genuine work.) Scott 2026-07-20 night.
+function _patientReal(p){ try{ return !!(p && ((p.name&&p.name.trim()) || (p.facility&&String(p.facility).trim()))); }catch(e){ return false; } }
+// Drop unidentifiable placeholder/ghost slots from a workspace (keep the real ones). Applied on RESUME
+// only, so adding-then-naming a patient live is untouched. An all-ghost day collapses to one clean
+// "Start here" slot.
 function _pruneEmptyPatients(ws){
   if(!ws||!ws.patients) return;
   const ids=Object.keys(ws.patients);
-  const real=ids.filter(pid=>_patientHasContent(ws.patients[pid]));
+  const real=ids.filter(pid=>_patientReal(ws.patients[pid]));
   if(real.length){
-    ids.forEach(pid=>{ if(!_patientHasContent(ws.patients[pid])) delete ws.patients[pid]; });
+    ids.forEach(pid=>{ if(!_patientReal(ws.patients[pid])) delete ws.patients[pid]; });
     if(!ws.patients[ws.activePid]) ws.activePid=Object.keys(ws.patients)[0];
   } else {
     ws.patients={ p1:{ name:'', store:newStore(), updatedAt:0, facility:'', noteType:'new' } };
@@ -1984,13 +1994,8 @@ function _draftFacSummary(ws){
     const counts={};
     Object.keys((ws&&ws.patients)||{}).forEach(pid=>{
       const p=ws.patients[pid]||{};
-      // Count only IDENTIFIABLE patients: a name OR a building. Content alone is NOT enough — old
-      // drafts carry invisible leftovers from earlier builds (auto-written exam defaults, clobbered
-      // day files), so a "patient" nobody can see kept resurfacing as "Unassigned 1" no matter which
-      // counter we used (4th report, Scott 2026-07-20 night). A patient with no name and no building
-      // means nothing to a human — never show it in a chip or the day banner. (Pruning still keeps
-      // such a slot's data on open — nothing is deleted, it just isn't COUNTED.)
-      if(!((p.name&&p.name.trim()) || (p.facility&&String(p.facility).trim()))) return;
+      // Same _patientReal test pruning uses, so a chip never disagrees with what opening the day shows.
+      if(!_patientReal(p)) return;
       const f=String(p.facility||'').trim()||'Unassigned';
       counts[f]=(counts[f]||0)+1; });
     return Object.keys(counts).map(f=>f+' '+counts[f]).join(' · ');
