@@ -156,6 +156,7 @@
       <b>Check this, then send</b>
       <button class="tiny" onclick="closeReview()">Close</button>
     </div>
+    <div id="rcSyncStatus2" style="font-size:12px;color:var(--muted);margin-top:4px"></div>
     <div class="muted" style="margin-top:6px">This is exactly what the nurse gets. Anything blank shows as “—”.</div>
     <div id="gaps"></div>
     <div id="sendPick"></div>
@@ -983,7 +984,27 @@ async function _vaultUpload(token,driveId,segs,filename,blob,ctype){
 let _rcAutoT=null, _rcAutoBusy=false, _rcAutoAgain=false;
 const _rcCloudSig={};   // patient id -> last-uploaded content signature
 function _rcHm(){ const d=new Date(); let h=d.getHours(); const ap=h<12?'AM':'PM'; h=h%12||12; return h+':'+String(d.getMinutes()).padStart(2,'0')+' '+ap; }
-function _rcSyncStatus(t){ const el=document.getElementById('rcSyncStatus'); if(el) el.textContent=t||''; }
+/* Persistent save-status bar. Always shows a meaningful state (never blank), on BOTH the entry screen
+   (#rcSyncStatus, header) and the Review modal (#rcSyncStatus2), so "is this round backed up?" is
+   answerable at a glance anywhere. Local sessionStorage save is always happening (survives refresh);
+   this bar reports the CLOUD backup, which is the part a provider actually needs to trust. */
+let _rcSyncState='';
+function _rcPaintSync(state, when){
+  if(state) _rcSyncState=state;
+  let txt='', warn=false;
+  switch(_rcSyncState){
+    case 'saving': txt='☁ Saving to ClinicalVault…'; break;
+    case 'saved':  txt='☁ Backed up to ClinicalVault · '+(when||_rcHm()); break;
+    case 'ready':  txt='☁ Auto-saving to ClinicalVault as you go'; break;
+    case 'local':  txt='● Saved on this device — sign in to back up to ClinicalVault'; warn=true; break;
+    case 'error':  txt='⚠ Couldn’t reach ClinicalVault — kept safe on this device, will retry'; warn=true; break;
+    default:       txt='';
+  }
+  ['rcSyncStatus','rcSyncStatus2'].forEach(function(id){ const el=document.getElementById(id);
+    if(el){ el.textContent=txt; el.style.color=warn?'#b4690e':'var(--muted)'; el.style.fontWeight=warn?'600':'400'; } });
+}
+// On load, show whether we're backed-up-capable (signed in) or device-only. Silent — never prompts.
+(async function _rcSyncInit(){ try{ const t=await _vaultTokenSilent(); _rcPaintSync(t?'ready':'local'); }catch(e){ _rcPaintSync('local'); } })();
 function _rcSig(p){ return JSON.stringify({n:p.name||'', e:p.edu||'', w:p.wounds||[], f:S.round.fac||'', d:S.round.date||'', pr:S.round.prov||''}); }
 async function _vaultTokenSilent(){
   try{
@@ -998,8 +1019,8 @@ async function rcAutoSaveCloud(){
   const named=(S.pts||[]).filter(p=>(p.name||'').trim() && p.send!==false);
   const dirty=named.filter(p=>{ if(!p.id) p.id=newId(); return _rcCloudSig[p.id]!==_rcSig(p); });
   if(!dirty.length) return;
-  const token=await _vaultTokenSilent(); if(!token) return;   // not signed in yet — wait, no nagging
-  _rcAutoBusy=true; _rcSyncStatus('☁ saving…');
+  const token=await _vaultTokenSilent(); if(!token){ _rcPaintSync('local'); return; }   // not signed in — device-only, no nagging
+  _rcAutoBusy=true; _rcPaintSync('saving');
   try{
     const siteId=await _vaultSiteId(token), driveId=await _vaultDriveId(token,siteId);
     const fac=cleanSeg(S.round.fac)||'Unfiled';
@@ -1016,10 +1037,10 @@ async function rcAutoSaveCloud(){
       await _vaultUpload(token,driveId,recSegs,id+'.json',jb,'application/json');
       _rcCloudSig[id]=_rcSig(p); n++;
     }
-    _rcSyncStatus('☁ saved '+_rcHm());
+    _rcPaintSync('saved');
     // if we're inside the composer overlay, nudge it to pull the freshly-saved records
     try{ if(window.parent && window.parent!==window) window.parent.postMessage({type:'rc-saved'}, location.origin); }catch(e){}
-  }catch(e){ _ensuredFolders.clear(); _rcSyncStatus('⚠ not synced'); }
+  }catch(e){ _ensuredFolders.clear(); _rcPaintSync('error'); }
   finally{ _rcAutoBusy=false; if(_rcAutoAgain){ _rcAutoAgain=false; scheduleRcAutoSave(); } }
 }
 /* Path hygiene — same sanitizer as the composer: no traversal, no illegal SharePoint chars. */
@@ -1098,6 +1119,7 @@ async function saveVault(){
        filed — so the provider closes the card and they're already in the note, no extra step. */
     try{ if(window.parent && window.parent!==window) window.parent.postMessage({type:'rc-saved'}, location.origin); }catch(e){}
     _vaultResultShow(true,'Sheet + '+pts.length+' patient record'+(pts.length===1?'':'s')+' + QC count saved to ClinicalVault.',item&&item.webUrl);
+    _rcPaintSync('saved');
     setTimeout(()=>{ st('☁ Save to ClinicalVault'); btn.disabled=false; },2500);
   }catch(e){
     if(/redirecting/.test((e&&e.message)||'')){ st('Redirecting to sign-in…'); return; }   // page is navigating away
