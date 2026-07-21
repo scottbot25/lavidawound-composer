@@ -347,6 +347,20 @@
       <span style="font-size:12px;color:var(--muted)" class="rc-sub">bedside orders — saves to ClinicalVault</span>
       <button onclick="closeRoundCard()" style="margin-left:auto;background:var(--accent);color:#fff;border:none;border-radius:8px;padding:8px 15px;font:inherit;font-weight:650;cursor:pointer">✕ Close</button>
     </div>
+    <div id="rcBlocked" style="display:none;flex:1;align-items:center;justify-content:center;padding:30px">
+      <div style="max-width:520px;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:26px 28px;text-align:center">
+        <div style="font-size:17px;font-weight:700;color:var(--ink);margin-bottom:8px">Chrome blocked the embedded card</div>
+        <div style="font-size:13.5px;color:var(--muted);line-height:1.55;margin-bottom:16px">
+          Chrome has flagged this site (the "dangerous site" warning — a false alarm that's been reported),
+          and while that flag is up it refuses to show this page inside another page.
+          The Round Card works fine in its own tab.</div>
+        <button onclick="rcOpenOwnTab()" style="background:var(--accent);color:#fff;border:none;border-radius:10px;padding:12px 22px;font:inherit;font-weight:650;cursor:pointer">Open the Round Card in its own tab</button>
+        <div style="font-size:12.5px;color:var(--muted);line-height:1.5;margin-top:14px">
+          If a red warning page appears there: <b>Details → "visit this unsafe site."</b><br>
+          Cards you save still land in the composer automatically when you come back to this tab.</div>
+        <button onclick="rcRetryFrame()" style="margin-top:14px;background:none;border:1px solid var(--line);color:var(--muted);border-radius:8px;padding:7px 14px;font:inherit;font-size:12.5px;cursor:pointer">Try the embedded card again</button>
+      </div>
+    </div>
     <iframe id="rcFrame" title="Round Card" style="flex:1;width:100%;border:0"></iframe>
   </div>
 </div>
@@ -354,10 +368,51 @@
 /* Round Card overlay: same-origin iframe of round-card.html, opened OVER the composer (no new
    tab). Lazy-loads on first open. Because the provider is already signed in here, the card's
    Save-to-ClinicalVault reuses the same session (shared sessionStorage), no second sign-in. */
+/* Safe Browsing fallback: while Chrome's (false) "dangerous site" flag is up, it hard-blocks this very
+   site when loaded INSIDE an iframe — "This content is blocked. Contact the site owner…" — with no
+   bypass (only top-level pages get the bypassable red page). Detect a dead frame and offer the card in
+   its own tab: standalone it runs its own sign-in, and rcAutoPull picks its saves up on tab refocus.
+   (Scott 2026-07-20 PM: "every time i open the round card i cant fill anything in".) */
+var _rcFrameOK=false, _rcFrameTimer=null;
+function _rcCardUrl(){ return 'round-card.html'+(_CSANDBOX?'?sandbox=1':''); }
+function rcOpenOwnTab(){ try{ window.open(_rcCardUrl(),'_blank'); }catch(e){} }
+function _rcShowBlocked(b){
+  var p=document.getElementById('rcBlocked'), f=document.getElementById('rcFrame');
+  if(p) p.style.display=b?'flex':'none'; if(f) f.style.display=b?'none':'';
+}
+var _rcEvalTries=0;
+function _rcEvalFrame(){
+  if(_rcFrameOK){ _rcShowBlocked(false); return; }
+  try{
+    var f=document.getElementById('rcFrame');
+    var w=f && f.contentWindow, d=w && w.document;
+    if(!d){ _rcShowBlocked(true); return; }
+    // Still on about:blank = the card hasn't loaded YET (slow network / throttled tab) — that's
+    // "wait", not "blocked". Re-check shortly; give up and show the panel after ~10s of nothing.
+    if(w.location.href==='about:blank'){
+      if(++_rcEvalTries<5){ clearTimeout(_rcFrameTimer); _rcFrameTimer=setTimeout(_rcEvalFrame, 2000); return; }
+      _rcShowBlocked(true); return;
+    }
+    if(d.querySelector && d.querySelector('script')){ _rcFrameOK=true; _rcShowBlocked(false); }
+    else _rcShowBlocked(true);                                        // a real doc with no scripts = an error page
+  }catch(e){ _rcShowBlocked(true); }                                  // unreadable same-origin frame = Chrome's block page
+}
+function rcRetryFrame(){
+  _rcFrameOK=false; _rcEvalTries=0; _rcShowBlocked(false);
+  var f=document.getElementById('rcFrame');
+  f.setAttribute('src','');
+  setTimeout(function(){ f.setAttribute('src',_rcCardUrl());
+    clearTimeout(_rcFrameTimer); _rcFrameTimer=setTimeout(_rcEvalFrame, 3500); }, 60);
+}
 function openRoundCard(){
   var f=document.getElementById('rcFrame');
   // Pass sandbox mode INTO the overlay iframe so a sandboxed composer never lets the card touch the real vault.
-  if(!f.getAttribute('src')) f.setAttribute('src','round-card.html'+(_CSANDBOX?'?sandbox=1':''));
+  if(!f.getAttribute('src')){
+    _rcEvalTries=0;
+    f.addEventListener('load', function(){ setTimeout(_rcEvalFrame, 150); });   // error pages fire load too — probe decides
+    f.setAttribute('src',_rcCardUrl());
+    clearTimeout(_rcFrameTimer); _rcFrameTimer=setTimeout(_rcEvalFrame, 3500);  // backstop if load never fires
+  } else if(!_rcFrameOK){ _rcEvalTries=0; _rcEvalFrame(); }
   document.getElementById('rcOverlay').style.display='block';
 }
 function closeRoundCard(){ document.getElementById('rcOverlay').style.display='none'; }
@@ -369,6 +424,9 @@ document.addEventListener('keydown',function(e){ if(e.key==='Escape') closeRound
 window.addEventListener('message', async function(e){
   if(e.origin!==location.origin) return;
   var d=e.data;
+  // Any message out of the frame proves the card loaded — clear a wrongly-shown "blocked" panel.
+  if(d==='rc-activity' || (d && typeof d.type==='string' && d.type.indexOf('rc-')===0)){
+    if(!_rcFrameOK){ _rcFrameOK=true; _rcShowBlocked(false); } }
   // The overlay card just saved patients to the vault — pull them in so closing the card lands them
   // in the note with no extra step.
   if(d && d.type==='rc-saved'){ if(typeof rcAutoPull==='function') rcAutoPull('overlay-save'); return; }
@@ -1644,6 +1702,12 @@ async function saveAllToVault(){
 const DRAFTS_ENABLED = () => (typeof AUTH!=='undefined') && AUTH.enabled && !AUTH.demo;
 let _draftCtx=null;               // {token,siteId,driveId} cached per session so autosave stays cheap
 let _draftT=null, _draftBusy=false, _draftDirty=false, _draftRestoreDone=false;
+// _draftHold: TRUE right after a draft is opened/restored, until the provider actually EDITS something.
+// Autosave always writes under TODAY's file, so without this, merely OPENING an old day (applyDraft →
+// saveWS → scheduleDraftSave) silently overwrote today's cloud draft with that old day's content 5s
+// later — which is how today's chip could claim patients the draft no longer had (Scott 2026-07-20 PM).
+// Viewing is free; the first real edit (input/change, or a Round Card pull) re-arms saving.
+let _draftHold=false;
 function _two(n){ return String(n).padStart(2,'0'); }
 function _todayKey(){ const d=new Date(); return d.getFullYear()+'-'+_two(d.getMonth()+1)+'-'+_two(d.getDate()); }
 function _hm(){ const d=new Date(); let h=d.getHours(); const ap=h<12?'AM':'PM'; h=h%12||12; return h+':'+_two(d.getMinutes())+' '+ap; }
@@ -1685,10 +1749,17 @@ async function _draftContext(){
 // Debounced autosave. Guarded so it can NEVER fire before restore-on-load has finished (or it could
 // overwrite today's real draft with the empty fresh workspace).
 function scheduleDraftSave(){ if(!DRAFTS_ENABLED() || !_draftRestoreDone) return;
+  if(_draftHold) return;   // just viewing an opened/restored draft — don't write it under today's file until a real edit
   clearTimeout(_draftT); _draftStatus('✎ saving soon…','busy'); _draftT=setTimeout(()=>saveDraft(false), 5000); }
+// The first real edit ends the view-only hold. Captured at the document level so every field counts;
+// a manual Save click and a Round Card pull also end it (see saveDraft / rcAutoPull).
+function _draftUnhold(){ if(_draftHold){ _draftHold=false; scheduleDraftSave(); } }
+document.addEventListener('input', _draftUnhold, true);
+document.addEventListener('change', _draftUnhold, true);
 async function saveDraft(manual){
   if(!DRAFTS_ENABLED()){ if(manual) toast('Sign in to save to ClinicalVault'); return false; }
   if(!_draftRestoreDone){ if(manual) toast('Reload the page first — your latest draft hasn’t loaded yet'); return false; }  // never save over an un-restored draft
+  if(_draftHold){ if(!manual) return false; _draftHold=false; }  // view-only hold: block flush/auto saves; a deliberate Save click ends the hold
   if(_draftBusy){ _draftDirty=true; return false; }
   clearTimeout(_draftT); _draftBusy=true; _draftStatus(manual?'Saving…':'Syncing…','busy');
   try{
@@ -1698,6 +1769,21 @@ async function saveDraft(manual){
     const url='https://graph.microsoft.com/v1.0/drives/'+ctx.driveId+'/root:/'+_encPath(_draftSegs().join('/')+'/'+_draftFile())+':/content';
     const r=await _gfetch(url, ctx.token, {method:'PUT', headers:{'Content-Type':'application/json'}, body:_draftPayload()});
     if(!r.ok){ if(r.status===401) _draftCtx=null; _draftStatus('⚠ not synced','warn'); if(manual) toast('Sync failed (HTTP '+r.status+')'); return false; }
+    // Keep the Resume banner honest: the PUT response is the fresh driveItem (name + new mtime) —
+    // record what we JUST saved under that key and refresh the listing entry, so the chip for today
+    // can never keep claiming content from hours ago (2026-07-20 PM).
+    try{ const it=await r.json();
+      if(it && it.name){
+        _draftSumCache[it.name+'|'+(it.lastModifiedDateTime||'')]=_draftFacSummary(WS)||'';
+        if(_lastDraftList){
+          const ent={name:it.name, lastModifiedDateTime:it.lastModifiedDateTime||'', size:it.size||0};
+          const i=_lastDraftList.findIndex(d=>d.name===it.name);
+          if(i>=0) _lastDraftList[i]=ent; else _lastDraftList.unshift(ent);
+          const bel=document.getElementById('draftBanner');
+          if(bel && bel.style.display!=='none' && bel.innerHTML) showResumeBanner(null);
+        }
+      }
+    }catch(e){}
     _draftStatus('☁ Saved '+_hm(),'ok'); if(manual) toast('Saved to ClinicalVault'); return true;
   }catch(e){ _draftStatus('⚠ not synced','warn'); return false; }
   finally{ _draftBusy=false; if(_draftDirty){ _draftDirty=false; scheduleDraftSave(); } }
@@ -1739,10 +1825,18 @@ function applyDraft(obj, dateKey){
   if(!ws.patients[ws.activePid]) ws.activePid=Object.keys(ws.patients)[0];
   WS=ws; activePid=WS.activePid;
   WS.draftDay=(dateKey||_todayKey()); WS.dayBannerHidden=false;
+  // View-only until the provider edits: kill any pending debounced save (it would now write the
+  // JUST-OPENED content under today) and hold autosave. First input/change re-arms it.
+  _draftHold=true; clearTimeout(_draftT);
   saveWS(); activateForm(); renderPatientBar(); paintDayBanner();
   return true;
 }
-function _patientHasContent(p){ try{ return !!((p&&p.name&&p.name.trim()) || (p&&JSON.stringify(p.store||{}).length>24)); }catch(e){ return false; } }
+// A patient "has content" if they're named OR either store side holds real charted fields.
+// NOT a raw JSON-length test: activating the form writes internal defaults (__wc_1 wound list etc.)
+// into an untouched patient's store, so length>24 called every ACTIVE blank slot "content" — which
+// blocked today's auto-restore ("session already has work"), let ghost slots survive pruning, and
+// made day chips count phantoms (found 2026-07-20 PM). _storeHasContent ignores __internal keys.
+function _patientHasContent(p){ try{ return !!((p&&p.name&&p.name.trim()) || (p&&p.store&&(_storeHasContent(p.store.new)||_storeHasContent(p.store.fu)))); }catch(e){ return false; } }
 function _wsHasContent(){ try{ return Object.keys(WS.patients).some(pid=>_patientHasContent(WS.patients[pid])); }catch(e){ return false; } }
 // Drop empty-named, empty-content placeholder slots from a workspace (keep the real ones). If a saved day
 // held only empty slots — e.g. a patient added to a facility but never named — they used to resume as a
@@ -1807,7 +1901,9 @@ function showResumeBanner(drafts){
   const shown=recent.slice(0,8);
   const items=shown.map(d=>{ const day=d.name.replace(/\.json$/i,'');
     const on=(day===WS.draftDay);                       // the OPEN day stays toggled, not dismissed
-    const sum=_draftSumCache[d.name+'|'+(d.lastModifiedDateTime||'')];
+    // The OPEN day's chip labels what's actually ON SCREEN (the live workspace IS that day) — the
+    // cached cloud summary can lag behind edits/clears and claim patients that are gone (2026-07-20 PM).
+    const sum=on ? _draftFacSummary(WS) : _draftSumCache[d.name+'|'+(d.lastModifiedDateTime||'')];
     return '<button class="rb-item'+(on?' rb-on':'')+'" id="rbi_'+esc(day)+'" onclick="resumeDraft(\''+esc(d.name)+'\')">'
       + esc(day)+(on?' — open':'')+(sum?' · '+esc(sum):'')+'</button>'; }).join('');
   el.innerHTML='<div class="rb"><span class="rb-t">☁ Resume earlier work:</span>'+items+
@@ -1841,10 +1937,11 @@ function _draftFacSummary(ws){
     const counts={};
     Object.keys((ws&&ws.patients)||{}).forEach(pid=>{
       const p=ws.patients[pid]||{};
-      // Count only REAL (named) patients. The workspace always keeps one blank placeholder slot, so
-      // counting every entry made an empty/cleared day read as "1 patient" in the Resume chip and made a
-      // phantom patient seem to reappear on resume (Scott 2026-07-20).
-      if(!(p.name && p.name.trim())) return;
+      // Count patients with real CONTENT — the SAME test _pruneEmptyPatients uses, so the chip always
+      // matches what opening the draft will actually show. Counting every slot showed a phantom
+      // "1 patient" for empty days; counting only NAMED ones (the first fix) hid an unnamed patient
+      // that had findings — "1 patient inside but the chip shows no number" (Scott 2026-07-20 PM).
+      if(!_patientHasContent(p)) return;
       const f=String(p.facility||'').trim()||'Unassigned';
       counts[f]=(counts[f]||0)+1; });
     return Object.keys(counts).map(f=>f+' '+counts[f]).join(' · ');
@@ -1860,7 +1957,11 @@ async function resumeDraft(name){
   }
   _draftStatus('Opening…','busy');
   const obj=await loadDraft(name);
-  if(obj && applyDraft(obj, day)){ showResumeBanner(null); toast('Opened '+day); _draftStatus('☁ restored '+_hm(),'ok'); }
+  if(obj && applyDraft(obj, day)){ showResumeBanner(null); toast('Opened '+day); _draftStatus('☁ restored '+_hm(),'ok');
+    // Re-list in the background so every chip label reflects the drafts as they are NOW, not as they
+    // were at page load (an autosave since then changes what a chip should say — 2026-07-20 PM).
+    listDrafts().then(l=>{ if(l && l.length) showResumeBanner(l); }).catch(()=>{});
+  }
   else { toast('Could not open that draft'); _draftStatus('⚠ open failed','warn'); }
 }
 function openResume(){ if(!DRAFTS_ENABLED()){ toast('Sign in to see saved work'); return; } _draftStatus('☁ checking…','busy'); listDrafts().then(showResumeBanner).catch(()=>{}); }
@@ -2337,6 +2438,7 @@ async function rcAutoPull(reason){
     Object.keys(seen).forEach(id=>{ if(now-(seen[id]||0) > RC_SEEN_TTL_MS) delete seen[id]; });   // prune old ids
     _rcSeenSave(seen);
     if(returnNamed && WS.patients[returnPid]) switchPatient(returnPid);
+    _draftHold=false;   // pulled card patients are real new content — make sure autosave persists them
     saveWS(); renderPatientBar();
     const total=fresh.length, parts=Object.keys(byFac).map(f=>f+': '+byFac[f]).join(' · ');
     toast('Brought in '+total+' patient'+(total===1?'':'s')+' from Round Cards ('+parts+')');
