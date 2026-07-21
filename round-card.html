@@ -608,7 +608,10 @@ function sheetHTML(list){
    +".chips{margin-top:10px}"
    +".chip{display:inline-block;background:#0c7568;border:1px solid #3aa99b;border-radius:20px;padding:4px 13px;font-size:9.5pt;margin:0 6px 4px 0;color:#fff}"
    +".chip .ck{color:#bfeee6;text-transform:uppercase;letter-spacing:.5px;font-size:8pt;margin-right:5px}"
-   +".pt{border:1px solid #e2ded4;border-radius:10px;margin-top:16px;page-break-inside:avoid}"
+   +".pt{border:1px solid #e2ded4;border-radius:10px;margin-top:16px;page-break-inside:avoid;break-inside:avoid}"
+   // Print: EACH PATIENT ON THEIR OWN PAGE (Scott 2026-07-20) — a patient card split across a page
+   // boundary printed with broken boxes. First patient shares page 1 with the header banner.
+   +".pt + .pt{page-break-before:always;break-before:page}"
    +".pt-hd{background:#eef4f2;border-bottom:1px solid #d7e5e1;padding:9px 15px;font-size:12.5pt;font-weight:700;color:#0c5f56;border-radius:10px 10px 0 0}"
    +".pt-hd .n{color:#6a8a84;font-weight:600;font-size:9.5pt;margin-left:7px}"
    +".pt-body{padding:4px 15px 13px}"
