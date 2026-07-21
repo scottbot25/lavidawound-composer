@@ -1796,15 +1796,21 @@ function showResumeBanner(drafts){
    in-page inside the signed-in tenant, one by one, and never block the banner. */
 async function _enrichResumeChips(shown){
   if(!DRAFTS_ENABLED()) return;
+  let changed=false;
   for(const d of (shown||[])){
     const key=d.name+'|'+(d.lastModifiedDateTime||'');
     if(_draftSumCache[key]!==undefined) continue;
+    changed=true;
     try{
       const obj=await loadDraft(d.name);
       _draftSumCache[key]=_draftFacSummary(obj&&obj.ws)||'';
     }catch(e){ _draftSumCache[key]=''; }
   }
-  showResumeBanner(null);   // repaint with whatever got filled in (uses the cached list)
+  // Repaint ONLY if we actually filled a new chip. Repainting calls showResumeBanner, which calls this
+  // again — without this guard, once every chip is cached the two functions call each other forever
+  // (stack overflow). It surfaces only when signed in with drafts present (this is a no-op otherwise),
+  // which is why ?preview=1 testing never hit it. (Fix 2026-07-20 — was blocking auto-pull + saving.)
+  if(changed) showResumeBanner(null);
 }
 function _draftFacSummary(ws){
   try{
