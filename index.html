@@ -3779,12 +3779,12 @@ document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState=
    Default 15 min; ?idle=<seconds> overrides it (for testing). See [[BYOD & Mobile Device Policy]]. */
 (() => {
   const qs = new URLSearchParams(location.search);
-  // 2 HOURS (was 15 min — Scott 2026-07-20: "it needs to survive their rounds"; the phone sits in a
-  // pocket between rooms far longer than 15 min, and the wipe was eating in-progress rounds). The
-  // device's own lock screen is the PRIMARY safeguard (Handbook §8.3); this app-level wipe stays as
-  // defense-in-depth for a device left unlocked. Autosave/auto-save also back everything to the vault
-  // continuously now, so the residual exposure is display-only.
-  const IDLE_MS = (/^\d+$/.test(qs.get('idle')||'')) ? parseInt(qs.get('idle'))*1000 : 120*60*1000;
+  // 12 HOURS (Scott 2026-07-20: 2 h was still too short for a wound-round day — "set it for 12 hours
+  // for now"). In practice this covers a full working day; the wipe now mainly catches an overnight
+  // forgotten tab. The device's own lock screen is the PRIMARY safeguard (Handbook §8.3); this
+  // app-level wipe stays as defense-in-depth, and continuous vault autosave makes the on-device copy
+  // display-only. Risk analysis §5 records the raise + acceptance.
+  const IDLE_MS = (/^\d+$/.test(qs.get('idle')||'')) ? parseInt(qs.get('idle'))*1000 : 720*60*1000;
   let lastActivity = Date.now();
   const bump = () => { lastActivity = Date.now(); };
   ['mousemove','mousedown','keydown','touchstart','scroll','wheel','focus'].forEach(ev =>
