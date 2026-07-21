@@ -107,6 +107,7 @@
   <div>
     <h1>Round Card</h1>
     <div class="sub" id="hdrSub">orders for the nurse, before you leave</div>
+    <div id="rcSyncStatusHdr" style="font-size:12px;margin-top:2px;color:rgba(255,255,255,.9)"></div>
   </div>
   <div class="row" style="gap:8px;flex:0 0 auto">
     <a id="rcNotesLink" href="index.html" title="Back to the Note Composer" style="color:#fff;text-decoration:none;border:1px solid rgba(255,255,255,.55);border-radius:8px;padding:7px 11px;font-size:13px;font-weight:600">Notes</a>
@@ -119,10 +120,7 @@
   <div class="card">
     <div class="row" style="justify-content:space-between">
       <b style="font-size:15px">Today's round</b>
-      <span style="display:flex;align-items:center;gap:10px">
-        <span id="rcSyncStatus" style="font-size:12px;color:var(--muted)"></span>
-        <span class="pill" id="countPill">0 patients</span>
-      </span>
+      <span class="pill" id="countPill">0 patients</span>
     </div>
     <label for="r_fac">Facility</label>
     <select id="r_fac" onchange="onFacPick(this)"></select>
@@ -984,10 +982,10 @@ async function _vaultUpload(token,driveId,segs,filename,blob,ctype){
 let _rcAutoT=null, _rcAutoBusy=false, _rcAutoAgain=false;
 const _rcCloudSig={};   // patient id -> last-uploaded content signature
 function _rcHm(){ const d=new Date(); let h=d.getHours(); const ap=h<12?'AM':'PM'; h=h%12||12; return h+':'+String(d.getMinutes()).padStart(2,'0')+' '+ap; }
-/* Persistent save-status bar. Always shows a meaningful state (never blank), on BOTH the entry screen
-   (#rcSyncStatus, header) and the Review modal (#rcSyncStatus2), so "is this round backed up?" is
-   answerable at a glance anywhere. Local sessionStorage save is always happening (survives refresh);
-   this bar reports the CLOUD backup, which is the part a provider actually needs to trust. */
+/* Persistent save-status bar. Always shows a meaningful state (never blank), in the STICKY teal header
+   (#rcSyncStatusHdr — always visible no matter how far you scroll, Scott 2026-07-20) and mirrored in
+   the Review modal (#rcSyncStatus2, which covers the header). Local sessionStorage save is always
+   happening (survives refresh); this bar reports the CLOUD backup — the part a provider needs to trust. */
 let _rcSyncState='';
 function _rcPaintSync(state, when){
   if(state) _rcSyncState=state;
@@ -1000,8 +998,10 @@ function _rcPaintSync(state, when){
     case 'error':  txt='⚠ Couldn’t reach ClinicalVault — kept safe on this device, will retry'; warn=true; break;
     default:       txt='';
   }
-  ['rcSyncStatus','rcSyncStatus2'].forEach(function(id){ const el=document.getElementById(id);
-    if(el){ el.textContent=txt; el.style.color=warn?'#b4690e':'var(--muted)'; el.style.fontWeight=warn?'600':'400'; } });
+  const hdr=document.getElementById('rcSyncStatusHdr');   // white-on-teal header: light text, light-amber warn
+  if(hdr){ hdr.textContent=txt; hdr.style.color=warn?'#ffd9a0':'rgba(255,255,255,.9)'; hdr.style.fontWeight=warn?'600':'400'; }
+  const mod=document.getElementById('rcSyncStatus2');     // Review modal: normal palette
+  if(mod){ mod.textContent=txt; mod.style.color=warn?'#b4690e':'var(--muted)'; mod.style.fontWeight=warn?'600':'400'; }
 }
 // On load, show whether we're backed-up-capable (signed in) or device-only. Silent — never prompts.
 (async function _rcSyncInit(){ try{ const t=await _vaultTokenSilent(); _rcPaintSync(t?'ready':'local'); }catch(e){ _rcPaintSync('local'); } })();
