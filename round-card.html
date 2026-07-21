@@ -1149,7 +1149,11 @@ async function saveVault(){
     return;
   }
   const qs = new URLSearchParams(location.search);
-  const IDLE_MS = (/^\d+$/.test(qs.get('idle')||'')) ? parseInt(qs.get('idle'))*1000 : 15*60*1000;
+  // 2 HOURS (was 15 min — Scott 2026-07-20: the card "needs to survive their rounds"; a phone in a
+  // pocket between rooms idles well past 15 min and the wipe was eating in-progress rounds). Device
+  // lock screen = primary safeguard (Handbook §8.3); this stays as defense-in-depth, and auto-save
+  // now streams named patients to ClinicalVault anyway, so a wipe costs display only.
+  const IDLE_MS = (/^\d+$/.test(qs.get('idle')||'')) ? parseInt(qs.get('idle'))*1000 : 120*60*1000;
   let lastActivity = Date.now();
   const bump = () => { lastActivity = Date.now(); };
   ['mousemove','mousedown','keydown','touchstart','scroll','wheel','focus'].forEach(ev =>
