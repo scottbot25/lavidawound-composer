@@ -753,7 +753,21 @@ function paintReview(){
     // Show the ACTUAL styled sheet the nurse will get (isolated in an iframe so its own CSS applies),
     // not a plain-text dump — so "Review" looks like the real document.
     prev.innerHTML='<iframe class="prev-frame" title="Sheet preview"></iframe>';
-    prev.querySelector('iframe').srcdoc=sheetHTML(pts);
+    const pf=prev.querySelector('iframe'); pf.srcdoc=sheetHTML(pts);
+    // While Chrome's (false) "dangerous site" flag is up it can refuse ANY frame on this site —
+    // the preview then shows "This content is blocked. Contact the site owner…" (Scott 2026-07-20).
+    // Email/print/save don't depend on this frame; swap in an inline Shadow-DOM render so the
+    // provider still SEES the sheet before sending.
+    setTimeout(function(){
+      let ok=false;
+      try{ const d=pf.contentDocument; ok=!!(d && d.body && d.body.childNodes.length); }catch(e){ ok=false; }
+      if(ok || !pf.parentNode) return;
+      const host=document.createElement('div');
+      host.className='prev-frame'; host.style.overflow='auto'; host.style.background='#fff';
+      try{ host.attachShadow({mode:'open'}).innerHTML=sheetHTML(sentNamed()); }
+      catch(e){ host.textContent='Preview unavailable while Chrome’s site warning is active — Email, Print, and Save still send the full sheet.'; }
+      pf.replaceWith(host);
+    }, 400);
   } else {
     prev.innerHTML='<div class="prev-empty">No patients selected to send.</div>';
   }
@@ -763,21 +777,33 @@ function paintReview(){
 
 /* ---------- deliver ---------- */
 function printSheet(){
-  const f=document.createElement('iframe');
-  f.style.cssText='position:fixed;right:0;bottom:0;width:0;height:0;border:0';
-  document.body.appendChild(f);
-  const d=f.contentDocument; d.open(); d.write(sheetHTML(sentNamed())); d.close();
-  /* A document.write'n iframe may be ready BEFORE onload fires (mobile Safari) or only after
-     (Chrome) — so both paths have to be able to trigger the print. `done` makes sure exactly one
-     of them wins: without it the provider gets two print dialogs and prints the sheet twice. */
-  let done=false;
-  const go=()=>{
-    if(done) return; done=true;
-    try{ f.contentWindow.focus(); f.contentWindow.print(); }catch(e){ toast('Couldn’t open the print dialog'); }
-    setTimeout(()=>f.remove(), 1000);
-  };
-  f.onload=go;
-  setTimeout(go, 400);
+  const html=sheetHTML(sentNamed());
+  // Normal path: print from a hidden same-page iframe. While Chrome's (false) site flag is up it can
+  // refuse ANY frame on this site (contentDocument null / write throws) — fall back to a fresh blank
+  // popup, which the flag doesn't touch.
+  try{
+    const f=document.createElement('iframe');
+    f.style.cssText='position:fixed;right:0;bottom:0;width:0;height:0;border:0';
+    document.body.appendChild(f);
+    const d=f.contentDocument; if(!d) throw new Error('frame blocked');
+    d.open(); d.write(html); d.close();
+    /* A document.write'n iframe may be ready BEFORE onload fires (mobile Safari) or only after
+       (Chrome) — so both paths have to be able to trigger the print. `done` makes sure exactly one
+       of them wins: without it the provider gets two print dialogs and prints the sheet twice. */
+    let done=false;
+    const go=()=>{
+      if(done) return; done=true;
+      try{ f.contentWindow.focus(); f.contentWindow.print(); }catch(e){ toast('Couldn’t open the print dialog'); }
+      setTimeout(()=>f.remove(), 1000);
+    };
+    f.onload=go;
+    setTimeout(go, 400);
+  }catch(e){
+    const w=window.open('','_blank');
+    if(!w){ toast('Chrome blocked the print window — allow pop-ups for this site and try again'); return; }
+    w.document.open(); w.document.write(html); w.document.close();
+    setTimeout(()=>{ try{ w.focus(); w.print(); }catch(x){} },250);
+  }
 }
 function emailSheet(){
   const i=document.getElementById('toSel').value;
