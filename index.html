@@ -1990,31 +1990,35 @@ async function rcList(facility){
 // Write ONE card wound's fields into store S under the given wid (keyPrefix "1:w<wid>"). Field positions
 // (:0 loc, :1/:2/:3 L/W/D, :4 etiology, :5 stage, :7 status, :8 exposed, :9 drainage, :12 odor, :17
 // periwound) are verified empirically against the live Objective template (choice/select/checkbox tokens).
-function _rcWriteWound(S, wid, w){
-  const P='1:w'+wid;
-  if(String(w.loc||'').trim()) S[P+':0']=String(w.loc).trim();
-  if(String(w.l||'').trim())   S[P+':1']=String(w.l).trim();
-  if(String(w.w||'').trim())   S[P+':2']=String(w.w).trim();
-  if(String(w.d||'').trim())   S[P+':3']=String(w.d).trim();
+function _rcWriteWound(S, wid, w, opts){
+  const P='1:w'+wid; const onlyEmpty=!!(opts&&opts.onlyEmpty);
+  // onlyEmpty (merge into a note the provider already started): never overwrite a value she has already
+  // set — only fill a key that is currently empty/unset. Default = overwrite (a fresh pulled patient).
+  const isEmpty=v=>v==null || v==='' || (Array.isArray(v)&&!v.length);
+  const setK=(k,v)=>{ if(!onlyEmpty || isEmpty(S[k])) S[k]=v; };
+  if(String(w.loc||'').trim()) setK(P+':0',String(w.loc).trim());
+  if(String(w.l||'').trim())   setK(P+':1',String(w.l).trim());
+  if(String(w.w||'').trim())   setK(P+':2',String(w.w).trim());
+  if(String(w.d||'').trim())   setK(P+':3',String(w.d).trim());
   const types=Array.isArray(w.type)?w.type:(w.type?[w.type]:[]);
   const ets=types.map(t=>_RC_ETIO[t]).filter(Boolean);
-  if(ets.length){ S[P+':4']=ets; if(ets.indexOf('other')>=0 && String(w.typeOther||'').trim()) S[P+':4:fill']=String(w.typeOther).trim(); }
-  if(types.some(t=>/^Pressure/.test(t)) && _RC_STAGE[w.stage]) S[P+':5']=_RC_STAGE[w.stage];
-  if(_RC_STATUS[w.status]) S[P+':7']=_RC_STATUS[w.status];
-  if(_RC_DRAIN[w.drain])   S[P+':9']=_RC_DRAIN[w.drain];
-  if(_RC_ODOR[w.odor])     S[P+':12']=_RC_ODOR[w.odor];
-  const exps=(Array.isArray(w.exposed)?w.exposed:[]).map(x=>_RC_EXPOSED[x]).filter(Boolean); if(exps.length) S[P+':8']=exps;
-  const pws=(Array.isArray(w.periwound)?w.periwound:[]).map(x=>_RC_PERIWOUND[x]).filter(Boolean); if(pws.length) S[P+':17']=pws;
+  if(ets.length){ setK(P+':4',ets); if(ets.indexOf('other')>=0 && String(w.typeOther||'').trim()) setK(P+':4:fill',String(w.typeOther).trim()); }
+  if(types.some(t=>/^Pressure/.test(t)) && _RC_STAGE[w.stage]) setK(P+':5',_RC_STAGE[w.stage]);
+  if(_RC_STATUS[w.status]) setK(P+':7',_RC_STATUS[w.status]);
+  if(_RC_DRAIN[w.drain])   setK(P+':9',_RC_DRAIN[w.drain]);
+  if(_RC_ODOR[w.odor])     setK(P+':12',_RC_ODOR[w.odor]);
+  const exps=(Array.isArray(w.exposed)?w.exposed:[]).map(x=>_RC_EXPOSED[x]).filter(Boolean); if(exps.length) setK(P+':8',exps);
+  const pws=(Array.isArray(w.periwound)?w.periwound:[]).map(x=>_RC_PERIWOUND[x]).filter(Boolean); if(pws.length) setK(P+':17',pws);
   // Undermining/tunneling are free text on the Round Card -> the composer's "from" box (:13 undermining,
   // :15 tunneling; :14/:16 are the "to" boxes, left empty). Verified keys; the sink prints a lone value cleanly.
-  if(String(w.undermining||'').trim()) S[P+':13']=String(w.undermining).trim();
-  if(String(w.tunneling||'').trim())   S[P+':15']=String(w.tunneling).trim();
+  if(String(w.undermining||'').trim()) setK(P+':13',String(w.undermining).trim());
+  if(String(w.tunneling||'').trim())   setK(P+':15',String(w.tunneling).trim());
   // Wound bed: the card carries the same pieces as the composer's structured field -> :wb: keys directly.
-  if(String(w.wbGran||'').trim())   S[P+':wb:gran']=String(w.wbGran).trim();
-  if(String(w.wbSlough||'').trim()) S[P+':wb:slough']=String(w.wbSlough).trim();
-  if(String(w.wbFib||'').trim())    S[P+':wb:fib']=String(w.wbFib).trim();
-  if(String(w.wbEpi||'').trim())    S[P+':wb:epi']=String(w.wbEpi).trim();
-  if(w.wbEschar==='yes'||w.wbEschar==='no') S[P+':wb:eschar']=w.wbEschar;
+  if(String(w.wbGran||'').trim())   setK(P+':wb:gran',String(w.wbGran).trim());
+  if(String(w.wbSlough||'').trim()) setK(P+':wb:slough',String(w.wbSlough).trim());
+  if(String(w.wbFib||'').trim())    setK(P+':wb:fib',String(w.wbFib).trim());
+  if(String(w.wbEpi||'').trim())    setK(P+':wb:epi',String(w.wbEpi).trim());
+  if(w.wbEschar==='yes'||w.wbEschar==='no') setK(P+':wb:eschar',w.wbEschar);
 }
 // Compose the A&P free text (orders per wound + patient education) — used by every pull path.
 function _rcComposeAP(ordLines, edu){
@@ -2238,6 +2242,40 @@ async function rcListAllRecent(){
   return out;
 }
 
+// Does the workspace already hold a NAMED patient matching this card (same name + facility)? Returns its
+// pid, else null. Detects the "started the note by hand, then did the card for that patient" collision —
+// without this, auto-pull would create a duplicate instead of filling the note she started (Scott: warn).
+function _rcFindExistingPatient(rec){
+  const nm=whNameKey((rec&&rec.patient&&rec.patient.name)||''); if(!nm) return null;
+  const fac=whNameKey((rec&&rec.facility)||'');
+  return Object.keys(WS.patients).find(pid=>{ const p=WS.patients[pid];
+    return p && whNameKey(p.name||'')===nm && whNameKey(p.facility||'')===fac; }) || null;
+}
+// Merge a Round Card into a note the provider already started — FILL-EMPTY only (never overwrites what she
+// typed). Card wounds that CONFIDENTLY match an existing wound by location fill that wound's blanks; the
+// rest are appended as new wounds. Orders/education are appended to the A&P, never replaced.
+function rcMergeIntoPatient(pid, rec){
+  switchPatient(pid);                                  // activate + render; woundRegistry = this patient's wounds
+  const S=STATE;
+  const cardWounds=(rec.wounds||[]);
+  const existList=(woundRegistry||[]).map(w=>({wid:w.id, location:(S[w.keyPrefix+':0']||''), num:woundNum(w.id)}));
+  const props=rcMatchWounds(cardWounds, existList);
+  const wids=(Array.isArray(S['__wc_1'])?S['__wc_1'].slice():(woundRegistry||[]).map(w=>w.id));
+  const ordLines=[];
+  cardWounds.forEach((cw,ci)=>{
+    const m=props[ci]; let wid;
+    if(m && m.priorWid!=null && m.confident){ wid=m.priorWid; }                       // fill an existing wound's blanks
+    else { wid=mintWid(); woundNum(wid); if(wids.indexOf(wid)<0) wids.push(wid); }     // genuinely new wound -> append
+    _rcWriteWound(S, wid, cw, {onlyEmpty:true});
+    const o=String(cw.orders||'').trim();
+    if(o) ordLines.push('Wound '+woundNum(wid)+(String(cw.loc||'').trim()?' ('+String(cw.loc).trim()+')':'')+': '+o);
+  });
+  S['__wc_1']=wids;
+  const add=_rcComposeAP(ordLines, String(rec.edu||'').trim());
+  if(add){ const k=_rcApKey(); if(k){ const cur=String(S[k]||'').trim(); S[k]=cur ? (cur+'\n\n'+add) : add; } }   // append, never replace
+  { const _p=activePt(); if(_p) _p.srcRcKey=_rcKey(rec); }
+  persist(); setMode(MODE); renderPatientBar();
+}
 let _rcPulling=false, _rcLastPull=0;
 async function rcAutoPull(reason){
   if(!DRAFTS_ENABLED() || !_draftRestoreDone || _rcPulling) return;
@@ -2256,7 +2294,15 @@ async function rcAutoPull(reason){
     const now=Date.now(), byFac={};
     // rcPrefill is async now (it checks wound-history to decide Initial vs Follow-up), so await each in
     // turn — a for-of loop, not forEach, so the seen-marking and counts stay in step with each create.
-    for(const r of fresh){ await rcPrefill(r);
+    for(const r of fresh){
+      // Collision: this patient is already in the list (she started the note by hand, or an earlier card).
+      // Warn + let her pull the card INTO that note instead of silently creating a duplicate (Scott 2026-07-20).
+      const existPid=_rcFindExistingPatient(r);
+      if(existPid && confirm('“'+(((r.patient&&r.patient.name)||'This patient').trim())+'” is already in your '+(facLabel(r.facility||'')||'list')+'.\n\nPull the Round Card into that note?\n\nOK = fill in the note you already started (it won’t overwrite anything you typed).\nCancel = add as a separate patient.')){
+        rcMergeIntoPatient(existPid, r);
+      } else {
+        await rcPrefill(r);
+      }
       if(r&&r.id) seen[r.id]=now; else WS.rcPulled[_rcKey(r)]=true;
       const f=facLabel(r.facility||'')||'Unfiled'; byFac[f]=(byFac[f]||0)+1; }
     Object.keys(seen).forEach(id=>{ if(now-(seen[id]||0) > RC_SEEN_TTL_MS) delete seen[id]; });   // prune old ids
