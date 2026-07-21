@@ -862,6 +862,32 @@ function _tokenFromParent(){
     catch(e){ clearTimeout(to); window.removeEventListener('message',h); reject(e); }
   });
 }
+/* Pre-fill the Provider box from whoever's signed in (Scott 2026-07-20) — the rounding provider IS the
+   signed-in user, so making them pick from the dropdown is redundant. Standalone: read our own MSAL
+   account. Overlay (iframe): the card has no account of its own (it borrows the composer's token), so ask
+   the parent composer for the name. Never overrides a provider already chosen; it's a default, editable. */
+function _providerFromParent(){
+  return new Promise((resolve)=>{
+    const id='rp'+Date.now()+'_'+Math.floor(Math.random()*1e6);
+    const to=setTimeout(()=>{ window.removeEventListener('message',h); resolve(''); }, 8000);
+    function h(e){ if(e.origin!==location.origin) return; const d=e.data;
+      if(!d || d.type!=='rc-provider-response' || d.id!==id) return;
+      clearTimeout(to); window.removeEventListener('message',h); resolve(d.name||''); }
+    window.addEventListener('message',h);
+    try{ parent.postMessage({type:'rc-provider-request', id}, location.origin); }
+    catch(e){ clearTimeout(to); window.removeEventListener('message',h); resolve(''); }
+  });
+}
+async function _autoFillProvider(){
+  if((S.round.prov||'').trim()) return;                 // a chosen provider wins — never overwrite it
+  let nm='';
+  try{
+    if(window.self!==window.top){ nm=await _providerFromParent(); }
+    else { const pca=await _getPca(); const a=pca.getAllAccounts()[0]; nm=(a&&(a.name||a.username))||''; }
+  }catch(e){}
+  nm=String(nm||'').trim();
+  if(nm && !(S.round.prov||'').trim()){ S.round.prov=nm; save(); paintProvSel(); }
+}
 async function _vaultToken(){
   if(window.self!==window.top) return await _tokenFromParent();
   const pca=await _getPca(), req={scopes:VAULT_CFG.scopes};
@@ -1078,6 +1104,7 @@ function clearAll(){
 /* ---------- boot ---------- */
 if(!S.round.date) S.round.date=todayISO();
 paintRound(); render(); save();
+_autoFillProvider();   // pre-fill Provider from whoever's signed in (fire-and-forget; no-op if none / already set)
 /* When shown inside the composer's overlay (an iframe), the "Notes" link would load the
    composer INSIDE this frame — hide it; the overlay's ✕ Close is the way back. */
 if(window.self !== window.top){ const n=document.getElementById('rcNotesLink'); if(n) n.style.display='none'; }
