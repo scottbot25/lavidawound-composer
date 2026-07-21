@@ -267,7 +267,7 @@ function wbText(w){
    patients added in the same second can't collide; never derived from the name (two "Maria Garcia"
    stay distinct). */
 function newId(){ return 'rc-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,7); }
-function newPt(){ return { id:newId(), name:'', edu:'', wounds:[newWound()], send:true }; }
+function newPt(){ return { id:newId(), name:'', edu:'', wounds:[newWound()], send:true, visitType:'' }; }   // visitType: ''=Auto (history decides) | 'new' | 'fu'
 function activePt(){ return S.pts[S.active] || null; }
 
 /* Size prints only what was actually measured — a bare "cm" or a half-filled
@@ -386,15 +386,32 @@ function addPt(){
   if(!S.pts.length) S.round.facLock = (S.round.fac||'').trim();
   S.pts.push(newPt()); S.active = S.pts.length-1; save(); render();
   setTimeout(()=>{ const el=document.getElementById('p_name'); if(el) el.focus(); },50); }
-function delPt(i){
-  const nm = (S.pts[i]&&S.pts[i].name||'').trim();
-  if(!confirm('Remove '+(nm||'this patient')+' from today\'s card?')) return;
+/* Two-tap remove, not window.confirm — same swallowed-dialog problem as Clear had inside the
+   composer overlay iframe (Chrome can suppress native dialogs there, making the button feel dead). */
+let _delArm=null;
+function delPt(i,btn){
+  if(!_delArm || _delArm.i!==i){
+    if(_delArm && _delArm.t) clearTimeout(_delArm.t);
+    const nm=(S.pts[i]&&S.pts[i].name||'').trim();
+    if(btn){ btn.textContent='Really remove '+(nm||'this patient')+'?'; btn.style.background='#c0492b'; btn.style.color='#fff'; }
+    _delArm={i:i, t:setTimeout(()=>{ _delArm=null; if(btn){ btn.textContent='Remove patient'; btn.style.background=''; btn.style.color=''; } }, 4000)};
+    return;
+  }
+  clearTimeout(_delArm.t); _delArm=null;
+  const doomedId=(S.pts[i]&&S.pts[i].id)||null, fac=cleanSeg(S.round.fac)||'Unfiled';
   S.pts.splice(i,1);
   if(S.active >= S.pts.length) S.active = Math.max(0, S.pts.length-1);
   save(); render();
+  // clean up the removed patient's auto-saved vault record too, so restore-on-open can't resurrect them
+  if(doomedId){ (async()=>{ try{
+    const token=await _vaultTokenSilent(); if(!token) return;
+    const siteId=await _vaultSiteId(token), driveId=await _vaultDriveId(token,siteId);
+    await _vaultDelete(token,driveId,'RoundCards/'+fac+'/'+doomedId+'.json');
+  }catch(e){} })(); }
 }
 function pickPt(i){ S.active=i; save(); render(); }
 function setPt(f,val){ const p=activePt(); if(!p) return; p[f]=val; save(); paintTabs(); paintCount(); }
+function setVisitType(v){ const p=activePt(); if(!p) return; p.visitType=v; save(); render(); }
 
 /* ---------- wounds ---------- */
 function addWound(){ const p=activePt(); if(!p) return; p.wounds.push(newWound()); save(); render(); }
@@ -538,8 +555,21 @@ function render(){
     + '<label for="p_name">Patient</label>'
     + '<input id="p_name" value="'+esc(p.name)+'" placeholder="name or room number" '
     + 'oninput="setPt(\'name\',this.value)">'
+    /* Visit type (Scott 2026-07-21): last week's initials were charted OUTSIDE this system, so the
+       composer's history check would wrongly open those patients as Initials forever. Auto = the
+       composer decides from history (the default, unchanged); Initial/Follow-up force it. The
+       composer warns on a contradiction (e.g. forced Initial when a visit is already on file). */
+    + '<label style="margin-top:10px">Visit type</label>'
+    + '<div class="row no-print" style="gap:6px">'
+    +   [['','Auto'],['new','Initial'],['fu','Follow-up']].map(function(o){
+          const on=(p.visitType||'')===o[0];
+          return '<button class="tiny" style="'+(on?'background:#0f8a7c;color:#fff;border-color:#0f8a7c':'')+'" onclick="setVisitType(\''+o[0]+'\')">'+o[1]+'</button>';
+        }).join('')
+    + '</div>'
+    + ((p.visitType==='fu')?'<div class="muted" style="margin-top:4px">Opens as a Follow-up note. If no prior visit is on file (e.g. last week was charted outside this system), it starts without carry-forward — and this visit becomes the history for next time.</div>':'')
+    + ((p.visitType==='new')?'<div class="muted" style="margin-top:4px">Opens as an Initial note. The composer will warn if this patient already has a visit on file.</div>':'')
     + '<div class="row no-print" style="margin-top:10px">'
-    +   '<button class="tiny" onclick="delPt('+S.active+')">Remove patient</button></div>'
+    +   '<button class="tiny" onclick="delPt('+S.active+',this)">Remove patient</button></div>'
     + '</div>'
     + p.wounds.map(woundHTML).join('')
     + '<button class="ghost no-print" onclick="addWound()">+ Add another wound</button>'
@@ -1050,7 +1080,7 @@ function _rcPaintSync(state, when){
 }
 // On load, show whether we're backed-up-capable (signed in) or device-only. Silent — never prompts.
 (async function _rcSyncInit(){ try{ const t=await _vaultTokenSilent(); _rcPaintSync(t?'ready':'local'); }catch(e){ _rcPaintSync('local'); } })();
-function _rcSig(p){ return JSON.stringify({n:p.name||'', e:p.edu||'', w:p.wounds||[], f:S.round.fac||'', d:S.round.date||'', pr:S.round.prov||''}); }
+function _rcSig(p){ return JSON.stringify({n:p.name||'', e:p.edu||'', w:p.wounds||[], vt:p.visitType||'', f:S.round.fac||'', d:S.round.date||'', pr:S.round.prov||''}); }
 async function _vaultTokenSilent(){
   try{
     if(window.self!==window.top){ try{ return await _tokenFromParent(); }catch(e){ return null; } }
@@ -1077,6 +1107,7 @@ async function rcAutoSaveCloud(){
       const id=p.id||newId();
       const rec={ schema:'roundcard.v1', id:id, savedAt:new Date().toISOString(), key:ptSlug(p.name),
         facility:S.round.fac||'', date:date, provider:S.round.prov||'',
+        visitType:p.visitType||'',
         patient:{name:p.name}, edu:p.edu||'', wounds:p.wounds };
       const jb=new Blob([JSON.stringify(rec)],{type:'application/json'});
       await _vaultUpload(token,driveId,recSegs,id+'.json',jb,'application/json');
@@ -1144,6 +1175,7 @@ async function saveVault(){
       const id=p.id || newId();
       const rec={ schema:'roundcard.v1', id:id, savedAt:new Date().toISOString(), key:ptSlug(p.name),
         facility:S.round.fac||'', date:date, provider:S.round.prov||'',
+        visitType:p.visitType||'',
         patient:{name:p.name}, edu:p.edu||'', wounds:p.wounds };
       const jb=new Blob([JSON.stringify(rec)],{type:'application/json'});
       await _vaultUpload(token,driveId,recSegs,id+'.json',jb,'application/json');
@@ -1332,7 +1364,7 @@ async function rcRestoreFromVault(){
     if(!mine.length) return;
     mine.sort((a,b)=>String(a.savedAt||'').localeCompare(String(b.savedAt||'')));
     S.round.fac=mine[mine.length-1].facility||S.round.fac; S.round.date=today; S.round.prov=S.round.prov||prov;
-    S.pts=mine.map(r=>({ id:r.id||newId(), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], send:true }));
+    S.pts=mine.map(r=>({ id:r.id||newId(), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], send:true, visitType:r.visitType||'' }));
     normalizePts(S); S.active=0;
     S.pts.forEach(p=>{ try{ _rcCloudSig[p.id]=_rcSig(p); }catch(e){} });   // restored = already in the cloud; no re-upload
     save(); paintRound(); render();

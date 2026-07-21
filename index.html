@@ -2341,6 +2341,19 @@ async function rcPrefill(rec){
     pv = (_whPrior && _whPrior.key===_whKey()) ? _whPrior.visit : null;   // most recent committed visit
     if(pv && pv.wounds && Object.keys(pv.wounds).length) nt='fu';
   }
+  /* Card VISIT-TYPE override (Scott 2026-07-21): history can't know about visits charted OUTSIDE this
+     system (the first live week's initials), so the bedside card may force Initial/Follow-up. Auto ('')
+     = the history decision above, unchanged. Contradictions never pass silently:
+     - forced Initial but a visit IS on file -> confirm before ignoring the history;
+     - forced Follow-up with NO history -> allowed (that's exactly the missed-first-week case), with a
+       toast saying nothing carries forward yet; this visit's PCC copy then becomes the history. */
+  const vt=(rec.visitType==='new'||rec.visitType==='fu') ? rec.visitType : '';
+  if(vt==='new' && nt==='fu'){
+    if(confirm((nm||'This patient')+' already has a visit on file, but the Round Card marked this as an INITIAL visit.\n\nOK = open as Initial anyway.\nCancel = open as the Follow-up the history suggests.')) nt='new';
+  } else if(vt==='fu' && nt==='new'){
+    nt='fu';
+    toast((nm||'Patient')+': opened as Follow-up per the Round Card — no prior visit on file, so nothing carries forward yet. Copying this note to PCC starts the history.');
+  } else if(vt){ nt=vt; }   // choice agrees with history — take it
   { const _p=activePt(); if(_p) _p.noteType=nt; }
   MODE=nt;
   const S=STORE[nt];
