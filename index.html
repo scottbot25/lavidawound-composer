@@ -3125,10 +3125,14 @@ function dropDeadSentences(t){
     .replace(/[ \t]{2,}/g,' ')
     .replace(/ +([.,;)])/g,'$1');
 }
-// Sections a provider may skip entirely (e.g. no procedure performed). X-ing one greys the whole
-// section and drops it from the composed note AND the handoff (its resolver returns '').
-const REMOVABLE_SECTIONS = new Set(['Procedures']);   // MDM section deleted entirely (Abby, 7/16) — PCC's dot-phrase owns it now
-function sectionRemoved(name){ return STATE['__secoff:'+name]===true; }
+// Sections a provider may skip entirely. X-ing one greys the whole section and drops it from the
+// composed note AND the handoff (its resolver returns ''). EMPTY since 2026-07-20: Procedures got a
+// per-wound Yes/No gate, which made the section-level "✕ Not performed" a redundant second way to say
+// no (Scott: "Remove not performed. No does that already"). Machinery kept for any future section.
+const REMOVABLE_SECTIONS = new Set([]);   // MDM section deleted entirely (Abby, 7/16) — PCC's dot-phrase owns it now
+// Guarded by REMOVABLE_SECTIONS: a stale "__secoff:Procedures" flag saved before the button was
+// removed must not silently hide the section forever (the restore button is gone with it).
+function sectionRemoved(name){ return REMOVABLE_SECTIONS.has(name) && STATE['__secoff:'+name]===true; }
 function setupSectionToggle(wrap,h,name){
   const btn=document.createElement('button'); btn.className='sec-toggle'; btn.type='button';
   const key='__secoff:'+name;
