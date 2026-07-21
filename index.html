@@ -404,7 +404,18 @@ function rcRetryFrame(){
   setTimeout(function(){ f.setAttribute('src',_rcCardUrl());
     clearTimeout(_rcFrameTimer); _rcFrameTimer=setTimeout(_rcEvalFrame, 3500); }, 60);
 }
+/* KILL-SWITCH (Scott 2026-07-20 night): while Google's false "dangerous site" flag is up, Chrome
+   blocks the overlay iframe outright in some sessions and the blocked-frame detector didn't reliably
+   replace Chrome's grey box on his machine. So the overlay is OFF — the button opens the card in its
+   OWN TAB (top-level, works after the one-time red-page bypass; saves still auto-pull into the
+   composer on refocus). Flip to false to restore the embedded overlay once the flag is cleared. */
+var RC_OVERLAY_DISABLED = true;
 function openRoundCard(){
+  if(RC_OVERLAY_DISABLED){
+    rcOpenOwnTab();
+    toast('The Round Card opens in its own tab for now (Chrome is blocking embedded pages while the site warning is up). Saved cards still pull in here automatically.');
+    return;
+  }
   var f=document.getElementById('rcFrame');
   // Pass sandbox mode INTO the overlay iframe so a sandboxed composer never lets the card touch the real vault.
   if(!f.getAttribute('src')){
@@ -1973,11 +1984,13 @@ function _draftFacSummary(ws){
     const counts={};
     Object.keys((ws&&ws.patients)||{}).forEach(pid=>{
       const p=ws.patients[pid]||{};
-      // Count patients with real CONTENT — the SAME test _pruneEmptyPatients uses, so the chip always
-      // matches what opening the draft will actually show. Counting every slot showed a phantom
-      // "1 patient" for empty days; counting only NAMED ones (the first fix) hid an unnamed patient
-      // that had findings — "1 patient inside but the chip shows no number" (Scott 2026-07-20 PM).
-      if(!_patientHasContent(p)) return;
+      // Count only IDENTIFIABLE patients: a name OR a building. Content alone is NOT enough — old
+      // drafts carry invisible leftovers from earlier builds (auto-written exam defaults, clobbered
+      // day files), so a "patient" nobody can see kept resurfacing as "Unassigned 1" no matter which
+      // counter we used (4th report, Scott 2026-07-20 night). A patient with no name and no building
+      // means nothing to a human — never show it in a chip or the day banner. (Pruning still keeps
+      // such a slot's data on open — nothing is deleted, it just isn't COUNTED.)
+      if(!((p.name&&p.name.trim()) || (p.facility&&String(p.facility).trim()))) return;
       const f=String(p.facility||'').trim()||'Unassigned';
       counts[f]=(counts[f]||0)+1; });
     return Object.keys(counts).map(f=>f+' '+counts[f]).join(' · ');
