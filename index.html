@@ -311,15 +311,17 @@
   <button id="handoffBtn" onclick="openHandoff()" title="Move the current patient to a different building (and edit round date / provider). Facility handoffs are sent from the Round Card." style="cursor:pointer;padding:8px 15px;border:1px solid var(--line);border-radius:9px;color:var(--ink);font-weight:650;background:#fff;display:inline-flex;align-items:center;gap:8px">⇄ Reassign patient</button>
   <button id="roundCardBtn" onclick="openRoundCard()" title="Bedside Round Card — quick wound orders for the nurse, same tool as on the phone. Opens over the composer. Patients you send from it appear here automatically." style="cursor:pointer;padding:8px 15px;border:1px solid var(--accent);border-radius:9px;color:var(--accent);font-weight:650;display:inline-flex;align-items:center;gap:8px;background:#fff">🩹 Round Card</button>
   <span id="authUser" class="auth-user"></span>
-  <button id="resumeBtn" class="ghost" onclick="openResume()" title="Reopen a saved day's work from ClinicalVault" style="display:none;padding:7px 11px">☁ Resume</button>
+  <!-- Past-day "☁ Resume" bar removed 2026-07-20 (Scott, Option A): browsing/editing PRIOR days was the
+       source of the ghost-patient + doesn't-persist bugs (edits saved to today's file, not the day being
+       viewed). Today's work still auto-saves + auto-restores on reopen (crash safety). Carry-forward that
+       pulls from the past — follow-up WoundHistory + Round Card — is a SEPARATE store and is untouched. -->
   <span id="draftStatus" class="draft-status"></span>
   <span class="badge" id="localBadge">● Local · autosaves in this browser only <span id="saveflag" style="color:#0c6d61;margin-left:4px"></span></span>
 </header>
 
-<div id="draftBanner" class="draft-banner" style="display:none"></div>
-<!-- Which DAY is open. Quiet when it's today; LOUD (amber) when a resumed prior day
-     is on screen — working a back-date without noticing is how notes land on the
-     wrong day's handoff. Painted by paintDayBanner(). -->
+<!-- (past-day resume chip bar removed 2026-07-20 — Option A) -->
+<!-- Which DAY is open. With past-day resume gone this stays quiet (the workspace is always today),
+     kept as a backstop so a restored session can still label itself. Painted by paintDayBanner(). -->
 <div id="dayBanner" style="display:none"></div>
 <div id="patientBar" class="patient-bar"></div>
 
@@ -1916,8 +1918,8 @@ function _pruneEmptyPatients(ws){
 // clobbers work in progress); otherwise offers a dated resume banner. Always ends with autosave armed.
 async function maybeRestoreDraft(){
   if(!DRAFTS_ENABLED()){ _draftRestoreDone=true; return; }
-  const rb=document.getElementById('resumeBtn'), lb=document.getElementById('localBadge');
-  if(rb) rb.style.display=''; if(lb) lb.innerHTML='☁ Syncing to ClinicalVault <span id="saveflag" style="color:#0c6d61;margin-left:4px"></span>';
+  const lb=document.getElementById('localBadge');
+  if(lb) lb.innerHTML='☁ Syncing to ClinicalVault <span id="saveflag" style="color:#0c6d61;margin-left:4px"></span>';
   _draftStatus('☁ checking…','busy');
   // safeToSave gates ALL saving (auto + manual). It stays FALSE if a draft exists but we couldn't load
   // it — otherwise an empty fresh session would autosave over the real cloud draft and destroy the day's
@@ -1937,7 +1939,7 @@ async function maybeRestoreDraft(){
       toast('Couldn’t load your saved work — please reload the page before editing');
       return;
     }
-    if(drafts.length){ showResumeBanner(drafts); }
+    // (past-day resume bar removed — Option A; today's auto-restore above is the whole story now)
     _draftStatus('☁ ready','ok'); safeToSave=true;      // no draft for today (or session already has work) — safe
   }catch(e){ _draftStatus('⚠ couldn’t reach ClinicalVault — reload before editing','warn'); }
   finally{ _draftRestoreDone=safeToSave;
@@ -1946,27 +1948,17 @@ async function maybeRestoreDraft(){
     if(safeToSave) setTimeout(()=>{ if(typeof rcAutoPull==='function') rcAutoPull('load'); }, 0);
   }
 }
-let _lastDraftList=null;           // last listing, so the banner can repaint its toggled state
-const _draftSumCache={};           // name+mtime -> "Crestmoor 4 · UH 2" (facility labels for the chips)
+let _lastDraftList=null;           // last listing (kept for any residual caller; no longer rendered)
+const _draftSumCache={};           // name+mtime -> facility labels (unused now the chip bar is gone)
+// PAST-DAY RESUME REMOVED (Scott, Option A, 2026-07-20). Browsing/editing PRIOR days was the whole
+// bug family: edits saved to TODAY's file (never the day on screen), so cleanups never stuck and
+// re-login repopulated them, plus old drafts' invisible junk showed as ghost "Unassigned 1" chips.
+// This is now a hard no-op so no residual caller can bring the bar back. Today's work still autosaves
+// and auto-restores on reopen (crash safety, in maybeRestoreDraft); carry-forward that reads the past
+// (follow-up WoundHistory, Round Card pull) is a SEPARATE store and is untouched.
 function showResumeBanner(drafts){
-  const el=document.getElementById('draftBanner'); if(!el) return;
-  if(drafts) _lastDraftList=drafts; else drafts=_lastDraftList||[];
-  // Only this week's drafts are offered for resume — older work is done (handoffs saved separately) and
-  // its draft is on its way to being purged. Keeps the list to what a provider actually needs.
-  const recent=(drafts||[]).filter(d=>_draftAgeDays(d.name) <= DRAFT_RESUME_DAYS);
-  if(!recent.length){ el.style.display='none'; el.innerHTML=''; return; }
-  const shown=recent.slice(0,8);
-  const items=shown.map(d=>{ const day=d.name.replace(/\.json$/i,'');
-    const on=(day===WS.draftDay);                       // the OPEN day stays toggled, not dismissed
-    // The OPEN day's chip labels what's actually ON SCREEN (the live workspace IS that day) — the
-    // cached cloud summary can lag behind edits/clears and claim patients that are gone (2026-07-20 PM).
-    const sum=on ? _draftFacSummary(WS) : _draftSumCache[d.name+'|'+(d.lastModifiedDateTime||'')];
-    return '<button class="rb-item'+(on?' rb-on':'')+'" id="rbi_'+esc(day)+'" onclick="resumeDraft(\''+esc(d.name)+'\')">'
-      + esc(day)+(on?' — open':'')+(sum?' · '+esc(sum):'')+'</button>'; }).join('');
-  el.innerHTML='<div class="rb"><span class="rb-t">☁ Resume earlier work:</span>'+items+
-    '<button class="rb-x" onclick="dismissResume()" title="Dismiss">✕</button></div>';
-  el.style.display='';
-  _enrichResumeChips(shown);
+  if(drafts) _lastDraftList=drafts;
+  const el=document.getElementById('draftBanner'); if(el){ el.style.display='none'; el.innerHTML=''; }
 }
 /* Fill each chip with the facilities inside that day's draft ("07-15 · Crestmoor 4") so the
    right day is recognizable by BUILDING, not just by date. Lazy + cached: downloads happen
