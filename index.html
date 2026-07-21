@@ -1832,6 +1832,7 @@ function _draftUnhold(){ if(_draftHold){ _draftHold=false; scheduleDraftSave(); 
 document.addEventListener('input', _draftUnhold, true);
 document.addEventListener('change', _draftUnhold, true);
 let _lastSavedSig=null;   // JSON of WS at the last successful cloud save — skip a PUT when nothing changed
+let _lastSavedHm='';      // when that save happened — the skip path repaints the banner with it
 async function saveDraft(manual, finalFlush){
   if(!DRAFTS_ENABLED()){ if(manual) toast('Sign in to save to ClinicalVault'); return false; }
   if(!_draftRestoreDone){ if(manual) toast('Reload the page first — your latest draft hasn’t loaded yet'); return false; }  // never save over an un-restored draft
@@ -1839,8 +1840,12 @@ async function saveDraft(manual, finalFlush){
   if(_draftBusy){ _draftDirty=true; return false; }
   // Nothing changed since the last successful save → no upload (kills redundant "Syncing…" spinners;
   // the hide/close flush becomes free when the debounced save already landed). Manual Save always sends.
+  // MUST repaint the banner: scheduleDraftSave already showed "✎ saving soon…", and returning without
+  // resolving it left the banner stuck there forever on every no-change event (patient switch, banner
+  // dismiss…) — "the Saved banner takes an awfully long time" (Scott 2026-07-20; found by tracing the
+  // status element: a real edit resolved in 2.1s, a no-change event never resolved).
   const sig=(()=>{ try{ return JSON.stringify(WS); }catch(e){ return null; } })();
-  if(!manual && sig!==null && sig===_lastSavedSig){ return true; }
+  if(!manual && sig!==null && sig===_lastSavedSig){ _draftStatus('☁ Saved '+(_lastSavedHm||_hm()),'ok'); return true; }
   clearTimeout(_draftT); _draftBusy=true; _draftStatus(manual?'Saving…':'Syncing…','busy');
   try{
     const ctx=await _draftContext();
@@ -1870,8 +1875,8 @@ async function saveDraft(manual, finalFlush){
         }
       }
     }catch(e){}
-    _lastSavedSig=sig;
-    _draftStatus('☁ Saved '+_hm(),'ok'); if(manual) toast('Saved to ClinicalVault'); return true;
+    _lastSavedSig=sig; _lastSavedHm=_hm();
+    _draftStatus('☁ Saved '+_lastSavedHm,'ok'); if(manual) toast('Saved to ClinicalVault'); return true;
   }catch(e){ _draftStatus('⚠ not synced','warn'); return false; }
   finally{ _draftBusy=false; if(_draftDirty){ _draftDirty=false; scheduleDraftSave(); } }
 }
