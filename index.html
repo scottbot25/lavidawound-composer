@@ -2405,7 +2405,7 @@ async function rcPrefill(rec){
     const ord=cardWounds.map((w,i)=>{ const o=String(w.orders||'').trim(); return o?('Wound '+woundNum(wids[i])+(String(w.loc||'').trim()?' ('+String(w.loc).trim()+')':'')+': '+o):''; });
     _rcSetAP(S, _rcComposeAP(ord, edu));
   }
-  { const _p=activePt(); if(_p) _p.srcRcKey=_rcKey(rec); }   // tag the source record so auto-pull never double-pulls it
+  { const _p=activePt(); if(_p){ _p.srcRcKey=_rcKey(rec); _p.srcRcId=rec.id||null; } }   // tag the source record: dedup + lets a card UPDATE find its own patient
   setMode(nt); persist(); renderPatientBar();
 }
 
@@ -2523,8 +2523,10 @@ function rcMergeIntoPatient(pid, rec){
   });
   S['__wc_1']=wids;
   const add=_rcComposeAP(ordLines, String(rec.edu||'').trim());
-  if(add){ const k=_rcApKey(); if(k){ const cur=String(S[k]||'').trim(); S[k]=cur ? (cur+'\n\n'+add) : add; } }   // append, never replace
-  { const _p=activePt(); if(_p) _p.srcRcKey=_rcKey(rec); }
+  // Append, never replace — and IDEMPOTENT: repeated card-update merges of the same orders must not
+  // stack duplicates in the A&P (the update path can run on every card edit).
+  if(add){ const k=_rcApKey(); if(k){ const cur=String(S[k]||'').trim(); if(cur.indexOf(add)<0) S[k]=cur ? (cur+'\n\n'+add) : add; } }
+  { const _p=activePt(); if(_p){ _p.srcRcKey=_rcKey(rec); _p.srcRcId=rec.id||_p.srcRcId||null; } }
   persist(); setMode(MODE); renderPatientBar();
 }
 let _rcPulling=false, _rcLastPull=0;
@@ -2535,17 +2537,48 @@ async function rcAutoPull(reason){
     const recs=await rcListAllRecent();
     WS.rcPulled=WS.rcPulled||{};                                // session-only dedup for legacy records that predate stable ids
     const seen=_rcSeenLoad();
+    /* Version-aware dedup (Scott 2026-07-21: "the follow-up card is still not autofilling"). The card
+       re-saves a patient under the SAME id (by design, latest-wins) — but the old bare-id seen-set made
+       the composer ignore that id FOREVER after the first pull, so no card edit could ever reach the
+       note again. Seen entries now remember the record's savedAt at pull time:
+         - number (legacy entry)      -> not fresh; lazily upgraded with a savedAt baseline below
+         - {t, sa} and rec.savedAt>sa -> an UPDATE: silently fill-empty-merge into the patient this very
+           record created (never overwrites typing, never prompts); a DELETED patient is NOT resurrected.
+       Brand-new ids behave exactly as before (create, or collision-confirm for hand-started notes). */
+    const entryT =e=>(typeof e==='number')?e:((e&&e.t)||0);
+    const entrySa=e=>(typeof e==='object'&&e)?(e.sa==null?null:String(e.sa)):null;
+    const isUpdate=r=>{ const e=seen[r.id]; const sa=entrySa(e);
+      return !!(e && sa!==null && r.savedAt && String(r.savedAt)>sa); };
     const fresh=recs.filter(r=>{
-      if(r&&r.id) return !seen[r.id];                           // durable id dedup (the normal path)
+      if(r&&r.id) return !seen[r.id] || isUpdate(r);
       const k=_rcKey(r); return k && !WS.rcPulled[k];           // legacy no-id record: name-based, this session only
     });
-    if(!fresh.length) return;
+    // Lazily baseline legacy numeric entries so FUTURE card edits become detectable updates.
+    let baselined=false;
+    recs.forEach(r=>{ if(r&&r.id && typeof seen[r.id]==='number'){ seen[r.id]={t:seen[r.id], sa:String(r.savedAt||'')}; baselined=true; } });
+    if(!fresh.length){ if(baselined) _rcSeenSave(seen); return; }
     // Don't yank a provider off a note they're mid-way through: remember where they were, go back after.
     const returnPid=activePid, returnNamed=!!((((WS.patients[returnPid]||{}).name)||'').trim());
     const now=Date.now(), byFac={};
+    let pulled=0;
     // rcPrefill is async now (it checks wound-history to decide Initial vs Follow-up), so await each in
     // turn — a for-of loop, not forEach, so the seen-marking and counts stay in step with each create.
     for(const r of fresh){
+      if(r && r.id && isUpdate(r)){
+        // The card was RE-SAVED after we pulled it — refresh the patient it created, quietly.
+        const srcPid=Object.keys(WS.patients).find(pid=>{ const p=WS.patients[pid];
+          return p && (p.srcRcId===r.id || (!p.srcRcId && p.srcRcKey && p.srcRcKey===_rcKey(r))); });
+        if(srcPid){
+          rcMergeIntoPatient(srcPid, r); pulled++;
+          const nm=((r.patient&&r.patient.name)||'').trim()||'Patient';
+          toast('Updated '+nm+' from their Round Card');
+          const want=(r.visitType==='new'||r.visitType==='fu')?r.visitType:'';
+          const have=(WS.patients[srcPid]||{}).noteType;
+          if(want && have && want!==have) toast(nm+': the card marks this visit as '+(want==='fu'?'a Follow-Up':'an Initial')+' — switch with the note-type tab (your entries carry over).');
+        }
+        seen[r.id]={t:now, sa:String(r.savedAt||'')};
+        continue;   // never resurrects a patient the provider deleted
+      }
       // Collision: this patient is already in the list (she started the note by hand, or an earlier card).
       // Warn + let her pull the card INTO that note instead of silently creating a duplicate (Scott 2026-07-20).
       const existPid=_rcFindExistingPatient(r);
@@ -2554,16 +2587,21 @@ async function rcAutoPull(reason){
       } else {
         await rcPrefill(r);
       }
-      if(r&&r.id) seen[r.id]=now; else WS.rcPulled[_rcKey(r)]=true;
+      pulled++;
+      if(r&&r.id) seen[r.id]={t:now, sa:String(r.savedAt||'')}; else WS.rcPulled[_rcKey(r)]=true;
       const f=facLabel(r.facility||'')||'Unfiled'; byFac[f]=(byFac[f]||0)+1; }
-    Object.keys(seen).forEach(id=>{ if(now-(seen[id]||0) > RC_SEEN_TTL_MS) delete seen[id]; });   // prune old ids
+    Object.keys(seen).forEach(id=>{ if(now-entryT(seen[id]) > RC_SEEN_TTL_MS) delete seen[id]; });   // prune old ids
     _rcSeenSave(seen);
+    if(!pulled){ return; }
     if(returnNamed && WS.patients[returnPid]) switchPatient(returnPid);
     _draftHold=false;   // pulled card patients are real new content — make sure autosave persists them
     saveWS(); renderPatientBar();
     if(typeof draftSaveNow==='function') draftSaveNow();   // pulls persist IMMEDIATELY — no debounce window to lose them in
-    const total=fresh.length, parts=Object.keys(byFac).map(f=>f+': '+byFac[f]).join(' · ');
-    toast('Brought in '+total+' patient'+(total===1?'':'s')+' from Round Cards ('+parts+')');
+    // "Brought in" counts only NEW patients (byFac fills only on the create path); silent card-update
+    // merges already announced themselves individually above.
+    const total=Object.keys(byFac).reduce((a,f)=>a+byFac[f],0);
+    if(total){ const parts=Object.keys(byFac).map(f=>f+': '+byFac[f]).join(' · ');
+      toast('Brought in '+total+' patient'+(total===1?'':'s')+' from Round Cards ('+parts+')'); }
   }catch(e){}
   finally{ _rcPulling=false; _rcLastPull=Date.now(); }
 }
