@@ -2590,6 +2590,24 @@ function _rcKey(rec){ return (rec&&rec.id) || [_rcFacSeg(rec&&rec.facility), Str
 function _rcSeenLoad(){ try{ const o=JSON.parse(localStorage.getItem(RC_SEEN_KEY)||'{}'); return (o&&typeof o==='object')?o:{}; }catch(e){ return {}; } }
 function _rcSeenSave(o){ try{ localStorage.setItem(RC_SEEN_KEY, JSON.stringify(o)); }catch(e){} }
 
+/* THIS provider's records only (Scott 2026-07-22, first two-provider morning: "why am I seeing the
+   patients Abby is adding?" — the pull took EVERY provider's records). Same acceptance rule as the
+   card's restore-on-open: the record's provider must match the signed-in account, the note header's
+   provider, or this device's remembered card provider — and UNATTRIBUTED records (blank provider,
+   old saves) are accepted so nothing silently vanishes. */
+function _rcProvOk(rec){
+  try{
+    const nk=s=>String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim().split(' ').filter(Boolean).sort().join(' ');
+    const rp=nk(rec&&rec.provider); if(!rp) return true;
+    const ok=new Set();
+    try{ const a=_pca&&_pca.getAllAccounts&&_pca.getAllAccounts()[0]; if(a){ ok.add(nk(a.name)); ok.add(nk(a.username)); } }catch(e){}
+    try{ const c=JSON.parse(sessionStorage.getItem('id_claims')||'{}'); if(c.name) ok.add(nk(c.name)); }catch(e){}
+    try{ if(WS.round&&WS.round.provider) ok.add(nk(WS.round.provider)); }catch(e){}
+    try{ const lp=localStorage.getItem('rc_last_prov'); if(lp) ok.add(nk(lp)); }catch(e){}
+    ok.delete('');
+    return ok.size ? ok.has(rp) : true;   // no identity known at all -> don't filter (never strand a round)
+  }catch(e){ return true; }
+}
 /* Every recent roundcard.v1 record across all buildings. Auto-discovers buildings by listing the
    RoundCards/ folder's children — no roster needed, and it works for a provider covering 2–3 buildings. */
 async function rcListAllRecent(){
@@ -2601,7 +2619,7 @@ async function rcListAllRecent(){
   const cutoff=_rcRecentCutoff(); const out=[];
   // PERF: every building's folder is read IN PARALLEL (was one-by-one — the other half of the crawl).
   const perFac=await Promise.all(facs.map(fac=>rcList(fac).catch(()=>[])));
-  perFac.forEach(recs=>recs.forEach(r=>{ const d=String(r.date||'').slice(0,10); if(!d || d>=cutoff) out.push(r); }));
+  perFac.forEach(recs=>recs.forEach(r=>{ const d=String(r.date||'').slice(0,10); if(!d || d>=cutoff){ if(_rcProvOk(r)) out.push(r); } }));
   return out;
 }
 
