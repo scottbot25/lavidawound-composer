@@ -1833,6 +1833,11 @@ document.addEventListener('input', _draftUnhold, true);
 document.addEventListener('change', _draftUnhold, true);
 let _lastSavedSig=null;   // JSON of WS at the last successful cloud save — skip a PUT when nothing changed
 let _lastSavedHm='';      // when that save happened — the skip path repaints the banner with it
+// Deadline wrapper — the save pipeline had NO timeouts, so one stalled request (slow facility Wi-Fi,
+// a token refresh wedged by the Safe-Browsing flag) left "Syncing…" up forever AND wedged _draftBusy,
+// silently blocking every later autosave until a reload (Scott 2026-07-21). Races the step against a
+// timer; the orphaned promise resolving later is harmless (the next save re-PUTs — idempotent).
+function _netTmo(p, ms){ return Promise.race([p, new Promise((_,rej)=>setTimeout(()=>rej(new Error('vault-timeout')), ms))]); }
 async function saveDraft(manual, finalFlush){
   if(!DRAFTS_ENABLED()){ if(manual) toast('Sign in to save to ClinicalVault'); return false; }
   if(!_draftRestoreDone){ if(manual) toast('Reload the page first — your latest draft hasn’t loaded yet'); return false; }  // never save over an un-restored draft
@@ -1847,10 +1852,12 @@ async function saveDraft(manual, finalFlush){
   const sig=(()=>{ try{ return JSON.stringify(WS); }catch(e){ return null; } })();
   if(!manual && sig!==null && sig===_lastSavedSig){ _draftStatus('☁ Saved '+(_lastSavedHm||_hm()),'ok'); return true; }
   clearTimeout(_draftT); _draftBusy=true; _draftStatus(manual?'Saving…':'Syncing…','busy');
+  const _ac=(typeof AbortController!=='undefined')?new AbortController():null;
+  const _acT=setTimeout(()=>{ try{ _ac&&_ac.abort(); }catch(e){} }, 30000);   // kill a truly hung upload
   try{
-    const ctx=await _draftContext();
+    const ctx=await _netTmo(_draftContext(), 15000);
     if(!ctx){ _draftStatus('⚠ not synced — sign in','warn'); if(manual) toast('Please sign in to sync'); return false; }
-    await _vaultEnsureFolders(ctx.token, ctx.driveId, _draftSegs());
+    await _netTmo(_vaultEnsureFolders(ctx.token, ctx.driveId, _draftSegs()), 15000);
     const url='https://graph.microsoft.com/v1.0/drives/'+ctx.driveId+'/root:/'+_encPath(_draftSegs().join('/')+'/'+_draftFile())+':/content';
     const body=_draftPayload();
     // finalFlush = the page is hiding/closing. keepalive lets the browser FINISH this upload after the
@@ -1858,7 +1865,7 @@ async function saveDraft(manual, finalFlush){
     // so reopening loaded the stale cloud copy). Browsers cap keepalive bodies (~64KB); oversized
     // payloads fall back to a normal fetch (best effort). Same Microsoft-only egress either way.
     const kal=!!finalFlush && body.length<60000;
-    const r=await _gfetch(url, ctx.token, {method:'PUT', headers:{'Content-Type':'application/json'}, body:body, keepalive:kal});
+    const r=await _netTmo(_gfetch(url, ctx.token, {method:'PUT', headers:{'Content-Type':'application/json'}, body:body, keepalive:kal, signal:(_ac&&!kal)?_ac.signal:undefined}), 30000);
     if(!r.ok){ if(r.status===401) _draftCtx=null; _ensuredFolders.clear(); _draftStatus('⚠ not synced','warn'); if(manual) toast('Sync failed (HTTP '+r.status+')'); return false; }
     // Keep the Resume banner honest: the PUT response is the fresh driveItem (name + new mtime) —
     // record what we JUST saved under that key and refresh the listing entry, so the chip for today
@@ -1877,8 +1884,15 @@ async function saveDraft(manual, finalFlush){
     }catch(e){}
     _lastSavedSig=sig; _lastSavedHm=_hm();
     _draftStatus('☁ Saved '+_lastSavedHm,'ok'); if(manual) toast('Saved to ClinicalVault'); return true;
-  }catch(e){ _draftStatus('⚠ not synced','warn'); return false; }
-  finally{ _draftBusy=false; if(_draftDirty){ _draftDirty=false; scheduleDraftSave(); } }
+  }catch(e){
+    try{ _ac&&_ac.abort(); }catch(x){}                       // kill whatever's still hanging out there
+    const slow=/vault-timeout|abort/i.test((e&&e.message)||'')||((e&&e.name)==='AbortError');
+    _draftStatus(slow?'⚠ vault not responding — will retry':'⚠ not synced','warn');
+    // Self-heal: retry on its own instead of sitting broken until the next keystroke.
+    setTimeout(()=>{ if(DRAFTS_ENABLED() && _draftRestoreDone && !_draftHold) scheduleDraftSave(); }, 10000);
+    return false;
+  }
+  finally{ clearTimeout(_acT); _draftBusy=false; if(_draftDirty){ _draftDirty=false; scheduleDraftSave(); } }
 }
 function flushDraftSave(){ if(DRAFTS_ENABLED() && _draftRestoreDone){ clearTimeout(_draftT); saveDraft(false, true); } }   // final-flush: keepalive so the upload survives the tab closing
 
