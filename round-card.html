@@ -1138,13 +1138,19 @@ async function rcAutoSaveCloud(){
     let n=0;
     for(const p of dirty){
       const id=p.id||newId();
+      // Snapshot + signature captured in the SAME synchronous stretch, BEFORE the upload await. The
+      // provider keeps typing while an upload is in flight (slow facility Wi-Fi makes that window big),
+      // and stamping the sig from the LIVE patient afterwards marked those mid-upload edits as
+      // "already saved" — so they never uploaded at all (found by the 2026-07-21 sync-test campaign:
+      // wounds typed right as the name-only save fired were silently lost until the next edit).
+      const sigNow=_rcSig(p);
       const rec={ schema:'roundcard.v1', id:id, savedAt:new Date().toISOString(), key:ptSlug(p.name),
         facility:S.round.fac||'', date:date, provider:S.round.prov||'',
         visitType:p.visitType||'',
-        patient:{name:p.name}, edu:p.edu||'', wounds:p.wounds };
+        patient:{name:p.name}, edu:p.edu||'', wounds:JSON.parse(JSON.stringify(p.wounds||[])) };
       const jb=new Blob([JSON.stringify(rec)],{type:'application/json'});
       await _netTmo(_vaultUpload(token,driveId,recSegs,id+'.json',jb,'application/json'), 30000);
-      _rcCloudSig[id]=_rcSig(p); n++;
+      _rcCloudSig[id]=sigNow; n++;
     }
     _rcSyncErr='';
     _rcPaintSync('saved');
@@ -1211,13 +1217,16 @@ async function saveVault(){
        bedside capture wins) instead of duplicating. `key` keeps the old name-slug for readability. */
     for(const p of pts){
       const id=p.id || newId();
+      // Same snapshot-before-await rule as the auto-save: sig must describe the UPLOADED content, not
+      // whatever the patient looks like after the network round-trip (mid-upload edits must stay dirty).
+      const sigNow=_rcSig(p);
       const rec={ schema:'roundcard.v1', id:id, savedAt:new Date().toISOString(), key:ptSlug(p.name),
         facility:S.round.fac||'', date:date, provider:S.round.prov||'',
         visitType:p.visitType||'',
-        patient:{name:p.name}, edu:p.edu||'', wounds:p.wounds };
+        patient:{name:p.name}, edu:p.edu||'', wounds:JSON.parse(JSON.stringify(p.wounds||[])) };
       const jb=new Blob([JSON.stringify(rec)],{type:'application/json'});
       await _vaultUpload(token,driveId,recSegs,id+'.json',jb,'application/json');
-      try{ _rcCloudSig[id]=_rcSig(p); }catch(e){}   // keep auto-save in step so it won't re-upload these
+      try{ _rcCloudSig[id]=sigNow; }catch(e){}   // keep auto-save in step so it won't re-upload these
     }
     /* QC count feed (QC-COUNT-FEED-SPEC.md, Scott 2026-07-19): one COUNT-ONLY record per
        facility+provider+date so the QC program can catch visits that never became a PCC
