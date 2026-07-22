@@ -2263,6 +2263,28 @@ function _rcSetAP(S, ap){ const k=_rcApKey(); if(!k) return; if(ap) S[k]=ap; els
    template positions), so those keys map 1:1; only the A&P free-text LINE index differs, so remap it.
    The narrative sections that genuinely differ (HPI vs Subjective, section 0) are intentionally NOT
    carried. Only fills the destination where it's empty — never clobbers work already on the new side. */
+/* AUTO-SWITCH the note type to the card's Visit-type choice (Scott 2026-07-21: "can the tab auto
+   switch?" — same for Initial). Used by the pull/update paths so the card's choice DRIVES the note
+   instead of toasting a go-click-the-tab hint. Safe only when nothing would be lost: wounds, procedures
+   and A&P orders all migrate, so the switch is refused ONLY if the current side holds OTHER content
+   (typed narrative — HPI/Subjective don't transfer between templates); the caller then falls back to
+   the hint. Returns true if it switched. */
+function _rcAutoSwitchType(pid, want){
+  const p=WS.patients[pid]; if(!p || (want!=='new'&&want!=='fu')) return false;
+  const cur=ptNoteType(p); if(want===cur) return true;   // already right — nothing to do
+  const src=p.store[cur]||{};
+  const apk=_rcApKeyFor(cur);
+  const losable=Object.keys(src).some(k=>{
+    if(/^__/.test(k) || /^1:w/.test(k) || /^3:w/.test(k) || k===apk) return false;   // these all migrate
+    const v=src[k]; return !(v==null || v==='' || (Array.isArray(v)&&!v.length));
+  });
+  if(losable) return false;                              // typed narrative would be lost — don't switch silently
+  _migrateWoundData(p, cur, want);
+  p.store[cur]={};
+  p.noteType=want;
+  if(pid===activePid){ _whPrior=null; setMode(want); }
+  return true;
+}
 function _migrateWoundData(p, fromMode, toMode){
   try{
     const src=p.store[fromMode]||{}, dst=p.store[toMode]||(p.store[toMode]={});
@@ -2574,7 +2596,12 @@ async function rcAutoPull(reason){
           toast('Updated '+nm+' from their Round Card');
           const want=(r.visitType==='new'||r.visitType==='fu')?r.visitType:'';
           const have=(WS.patients[srcPid]||{}).noteType;
-          if(want && have && want!==have) toast(nm+': the card marks this visit as '+(want==='fu'?'a Follow-Up':'an Initial')+' — switch with the note-type tab (your entries carry over).');
+          if(want && have && want!==have){
+            // The card's Visit-type choice DRIVES the note (Scott 2026-07-21) — auto-switch when
+            // nothing would be lost; fall back to the hint only if typed narrative blocks it.
+            if(_rcAutoSwitchType(srcPid, want)) toast(nm+': switched to '+(want==='fu'?'Follow-Up':'Initial')+' per the Round Card — your entries carried over.');
+            else toast(nm+': the card marks this visit as '+(want==='fu'?'a Follow-Up':'an Initial')+' — switch with the note-type tab (your entries carry over).');
+          }
         }
         seen[r.id]={t:now, sa:String(r.savedAt||'')};
         continue;   // never resurrects a patient the provider deleted
@@ -2584,6 +2611,11 @@ async function rcAutoPull(reason){
       const existPid=_rcFindExistingPatient(r);
       if(existPid && confirm('“'+(((r.patient&&r.patient.name)||'This patient').trim())+'” is already in your '+(facLabel(r.facility||'')||'list')+'.\n\nPull the Round Card into that note?\n\nOK = fill in the note you already started (it won’t overwrite anything you typed).\nCancel = add as a separate patient.')){
         rcMergeIntoPatient(existPid, r);
+        // The card's Visit-type choice drives the merged note too (auto-switch when lossless).
+        const wantV=(r.visitType==='new'||r.visitType==='fu')?r.visitType:'';
+        if(wantV && (WS.patients[existPid]||{}).noteType!==wantV && _rcAutoSwitchType(existPid, wantV)){
+          toast((((r.patient&&r.patient.name)||'Patient').trim())+': switched to '+(wantV==='fu'?'Follow-Up':'Initial')+' per the Round Card.');
+        }
       } else {
         await rcPrefill(r);
       }
