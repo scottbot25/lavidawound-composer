@@ -2197,12 +2197,13 @@ async function rcList(facility){
   const r=await _gfetch(url, ctx.token);
   if(r.status===404) return [];                                   // no records for this building yet
   if(!r.ok) throw new Error('Couldn’t read Round Cards (HTTP '+r.status+').');
-  const items=(await r.json()).value||[]; const out=[];
-  for(const it of items){
-    if(it.folder || !/\.json$/i.test(it.name||'')) continue;
-    const dl=it['@microsoft.graph.downloadUrl']; if(!dl) continue;
-    try{ const c=await fetch(dl); if(c.ok){ const rec=await c.json(); if(rec && rec.schema==='roundcard.v1') out.push(rec); } }catch(e){}
-  }
+  const items=(await r.json()).value||[];
+  // PERF (Scott 2026-07-21): records now download IN PARALLEL — the one-by-one loop made the
+  // composer's patient pull crawl once a folder held more than a couple of records.
+  const files=items.filter(it=>!it.folder && /\.json$/i.test(it.name||'') && it['@microsoft.graph.downloadUrl']);
+  const got=await Promise.all(files.map(it=>
+    fetch(it['@microsoft.graph.downloadUrl']).then(c=>c.ok?c.json():null).catch(()=>null)));
+  const out=got.filter(rec=>rec && rec.schema==='roundcard.v1');
   out.sort((a,b)=>String(b.savedAt||'').localeCompare(String(a.savedAt||'')));   // newest first
   return out;
 }
@@ -2486,11 +2487,9 @@ async function rcListAllRecent(){
   if(!rr || !rr.ok) return [];                                  // 404 = no RoundCards folder yet -> nothing to pull
   const facs=((await rr.json()).value||[]).filter(it=>it.folder).map(it=>it.name);
   const cutoff=_rcRecentCutoff(); const out=[];
-  for(const fac of facs){
-    try{ const recs=await rcList(fac);
-      recs.forEach(r=>{ const d=String(r.date||'').slice(0,10); if(!d || d>=cutoff) out.push(r); });
-    }catch(e){}
-  }
+  // PERF: every building's folder is read IN PARALLEL (was one-by-one — the other half of the crawl).
+  const perFac=await Promise.all(facs.map(fac=>rcList(fac).catch(()=>[])));
+  perFac.forEach(recs=>recs.forEach(r=>{ const d=String(r.date||'').slice(0,10); if(!d || d>=cutoff) out.push(r); }));
   return out;
 }
 
