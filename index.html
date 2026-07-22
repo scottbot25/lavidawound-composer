@@ -1976,7 +1976,10 @@ function _pruneEmptyPatients(ws){
 async function maybeRestoreDraft(){
   if(!DRAFTS_ENABLED()){ _draftRestoreDone=true; return; }
   const lb=document.getElementById('localBadge');
-  if(lb) lb.innerHTML='☁ Syncing to ClinicalVault <span id="saveflag" style="color:#0c6d61;margin-left:4px"></span>';
+  // MODE CAPTION, not a live status (Scott 2026-07-21: '"Syncing to ClinicalVault" is still hung' —
+  // it wasn't hung, this static label was WORDED like an in-progress operation and never changes all
+  // session; the live state lives in #draftStatus right next to it). Reworded to read as the mode it is.
+  if(lb) lb.innerHTML='☁ Autosaves to ClinicalVault <span id="saveflag" style="color:#0c6d61;margin-left:4px"></span>';
   _draftStatus('☁ checking…','busy');
   // safeToSave gates ALL saving (auto + manual). It stays FALSE if a draft exists but we couldn't load
   // it — otherwise an empty fresh session would autosave over the real cloud draft and destroy the day's
