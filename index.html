@@ -441,7 +441,10 @@ function openRoundCard(){
   } else if(_rcFrameOK){ _rcShowState('ok'); }
   else { _rcEvalTries=0; _rcShowState('loading'); _rcEvalFrame(); }
 }
-function closeRoundCard(){ document.getElementById('rcOverlay').style.display='none'; }
+function closeRoundCard(){ document.getElementById('rcOverlay').style.display='none';
+  // Run the pulls we deferred while the card was open (see the rc-saved handler) — this is the moment
+  // the provider actually looks at the composer, so the patients land right on cue.
+  if(window._rcDeferredPull){ window._rcDeferredPull=false; try{ if(typeof rcAutoPull==='function') rcAutoPull('overlay-close'); }catch(e){} } }
 document.addEventListener('keydown',function(e){ if(e.key==='Escape') closeRoundCard(); });
 /* Token broker: the overlay card (same-origin iframe) must NEVER run its own interactive sign-in — a
    redirect would navigate the iframe. Instead it asks US (the composer, which owns the signed-in
@@ -453,9 +456,15 @@ window.addEventListener('message', async function(e){
   // Any message out of the frame proves the card loaded — reveal it (a strong healthy signal).
   if(d==='rc-activity' || (d && typeof d.type==='string' && d.type.indexOf('rc-')===0)){
     if(!_rcFrameOK){ _rcFrameOK=true; _rcShowState('ok'); } }
-  // The overlay card just saved patients to the vault — pull them in so closing the card lands them
-  // in the note with no extra step.
-  if(d && d.type==='rc-saved'){ if(typeof rcAutoPull==='function') rcAutoPull('overlay-save'); return; }
+  // The overlay card just saved patients to the vault. While the card is OPEN, only make a note to
+  // pull — the pull's merges + full note rebuilds run on this same main thread and were freezing the
+  // card mid-charting on phones (Abby, rounds morning 2026-07-22: "page unresponsive"). The provider
+  // can't see the composer behind the overlay anyway; closing the card runs the deferred pull, so the
+  // patients still land with no extra step.
+  if(d && d.type==='rc-saved'){
+    var ov=document.getElementById('rcOverlay');
+    if(ov && ov.style.display!=='none'){ window._rcDeferredPull=true; return; }
+    if(typeof rcAutoPull==='function') rcAutoPull('overlay-save'); return; }
   // The overlay card asks who's signed in so it can pre-fill its Provider box (Scott 2026-07-20).
   if(d && d.type==='rc-provider-request'){
     var pn='';
@@ -2584,6 +2593,12 @@ function applyRcReconcile(){
    and removed doesn't come back. All best-effort: a read hiccup never blocks the note. */
 const RC_PULL_DAYS=3;                        // how far back to look (a provider writing next-day notes still gets yesterday's)
 const RC_SEEN_KEY='rc_pulled_v1';            // durable set of already-pulled round-card IDs. IDs are random
+/* RECOVERY VALVE (2026-07-22, mid-rounds): opening notes.lavidaheal.com/?repull=1 forgets which card
+   records were already pulled, so the next pull brings EVERY recent record back — the escape hatch for
+   "I deleted patients during a cleanup and now their card updates never arrive" (the deliberate
+   no-resurrect rule has no UI to undo it). Same-name patients still in the list get the collision
+   prompt and merge instead of duplicating. One-shot: the flag does not persist past this load. */
+try{ if(new URLSearchParams(location.search).get('repull')==='1') localStorage.removeItem(RC_SEEN_KEY); }catch(e){}
 const RC_SEEN_TTL_MS=21*24*60*60*1000;       // tokens (no patient info), so this localStorage set is NOT PHI.
 function _rcRecentCutoff(){ const d=new Date(); d.setDate(d.getDate()-RC_PULL_DAYS); return d.toISOString().slice(0,10); }
 function _rcKey(rec){ return (rec&&rec.id) || [_rcFacSeg(rec&&rec.facility), String((rec&&rec.patient&&rec.patient.name)||'').toLowerCase().trim(), String((rec&&rec.date)||'').slice(0,10)].join('|'); }
@@ -2617,9 +2632,12 @@ async function rcListAllRecent(){
   if(!rr || !rr.ok) return [];                                  // 404 = no RoundCards folder yet -> nothing to pull
   const facs=((await rr.json()).value||[]).filter(it=>it.folder).map(it=>it.name);
   const cutoff=_rcRecentCutoff(); const out=[];
+  // A record this workspace has ALREADY pulled always passes — its updates must keep flowing even if
+  // the provider stamp drifts (box retyped, name variant); the provider filter gates NEW records only.
+  const seenIds=_rcSeenLoad();
   // PERF: every building's folder is read IN PARALLEL (was one-by-one — the other half of the crawl).
   const perFac=await Promise.all(facs.map(fac=>rcList(fac).catch(()=>[])));
-  perFac.forEach(recs=>recs.forEach(r=>{ const d=String(r.date||'').slice(0,10); if(!d || d>=cutoff){ if(_rcProvOk(r)) out.push(r); } }));
+  perFac.forEach(recs=>recs.forEach(r=>{ const d=String(r.date||'').slice(0,10); if(!d || d>=cutoff){ if((r&&r.id&&seenIds[r.id]) || _rcProvOk(r)) out.push(r); } }));
   return out;
 }
 
