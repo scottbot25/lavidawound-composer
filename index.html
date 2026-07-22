@@ -332,7 +332,7 @@
     <div class="out-scroll" id="output"></div>
     <div class="btnrow">
       <button class="ghost" onclick="clearAll()">Clear all</button>
-      <button class="ghost" onclick="copyAll()" title="Combines every section into ONE block — for review/printing/email only. Do not paste this into a single PCC field.">Copy entire note (review only — not for PCC)</button>
+      <button class="ghost" onclick="copyAll()" title="Every section in one block with the same formatting as the per-section copies (bold labels, underlined headers, per-section headings) — paste into PCC's single note box. Counts as the visit's official copy (history commits). The per-section Copy buttons still work if a box-by-box paste is ever needed.">Copy entire note (one PCC paste)</button>
     </div>
     <div class="foot"><b style="color:var(--warn)">Paste each box separately into PCC</b> — Subjective, Objective, A&amp;P, Procedures, MDM are separate EMR fields, so each needs its own Copy click. The "Copy entire note" button above combines everything into one block for review/printing only — pasting that into a single PCC field will put the whole note in the wrong place. Unfilled
       <span style="color:var(--warn)">[choices]</span> stay visible so nothing is missed. Reproduces the macro text exactly.
@@ -3926,9 +3926,33 @@ async function copyRich(plainText, msg){
   }catch(e){}
   copyText(clean, msg);   // fallback: plain text (still cleaned)
 }
-function copyAll(){
-  const all=sectionResolvers.filter(s=>!sectionRemoved(s.name)).map(s=>s.name.toUpperCase()+'\n'+cleanForCopy(s.resolve())).join('\n\n');
-  copyText(all,'Whole note copied');
+async function copyAll(){
+  // ONE-BOX PCC PASTE (PCC change, 2026-07-22: notes now accept a single total text box). This used to
+  // be a plain-text review-only dump; it now ships the SAME rich clipboard the per-section copies use
+  // (fmtLine bold labels + underlined group headers, <br> hard breaks PCC doesn't collapse), with each
+  // section's name as a bold-underlined heading and a blank row between sections — so the one big paste
+  // keeps the formatting the per-section pastes established.
+  const secs=sectionResolvers.filter(s=>!sectionRemoved(s.name));
+  // A section with nothing filled would paste as a bare heading over blank space — drop it (the
+  // per-section flow never copied empty sections either).
+  const parts=secs.map(s=>({name:s.name, clean:cleanForCopy(s.resolve())})).filter(p=>p.clean.trim());
+  const plain=parts.map(p=>p.name.toUpperCase()+'\n'+p.clean).join('\n\n');
+  const html=parts.map(p=>'<b><u>'+escH(p.name.toUpperCase())+'</u></b><br>\n'+richClipboard(p.clean)).join('<br>\n<br>\n');
+  // COMMIT POINT, same as copying the wound section by itself: a whole-note copy includes the wound
+  // measurements, so this snapshot becomes next visit's "last visit". Fire-and-forget — never blocks.
+  if(typeof whCommit==='function' && woundRegistry && woundRegistry.length && secs.some(s=>s.name===woundSectionName)){
+    whCommit().then(ok=>{ if(!ok && !WH_LOCAL()) toast('Copied — but last visit\'s history did not save'); });
+  }
+  try{
+    if(navigator.clipboard && window.ClipboardItem){
+      await navigator.clipboard.write([ new ClipboardItem({
+        'text/html': new Blob([html], {type:'text/html'}),
+        'text/plain': new Blob([plain], {type:'text/plain'})
+      })]);
+      toast('Whole note copied — paste into the PCC note box'); return;
+    }
+  }catch(e){}
+  copyText(plain,'Whole note copied');   // fallback: plain text (formatting needs the rich clipboard)
 }
 function copyRaw(t){
   const ta=document.createElement('textarea'); ta.value=t; document.body.appendChild(ta); ta.select();
