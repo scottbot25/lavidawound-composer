@@ -1056,6 +1056,9 @@ async function _vaultDelete(token,driveId,rel){
    yet it quietly waits. Only patients whose content actually changed upload (per-id signature). The
    handoff sheet + QC count stay on the manual button on purpose (those are "round is done" actions). */
 let _rcAutoT=null, _rcAutoBusy=false, _rcAutoAgain=false;
+// Deadline wrapper — same fix as the composer (Scott 2026-07-21): a stalled request left "Saving…"
+// up forever and wedged _rcAutoBusy, silently blocking every later auto-save until reload.
+function _netTmo(p, ms){ return Promise.race([p, new Promise((_,rej)=>setTimeout(()=>rej(new Error('vault-timeout')), ms))]); }
 const _rcCloudSig={};   // patient id -> last-uploaded content signature
 function _rcHm(){ const d=new Date(); let h=d.getHours(); const ap=h<12?'AM':'PM'; h=h%12||12; return h+':'+String(d.getMinutes()).padStart(2,'0')+' '+ap; }
 /* Persistent save-status bar. Always shows a meaningful state (never blank), in the STICKY teal header
@@ -1115,18 +1118,19 @@ async function rcAutoSaveCloud(){
   const named=(S.pts||[]).filter(p=>(p.name||'').trim() && p.send!==false);
   const dirty=named.filter(p=>{ if(!p.id) p.id=newId(); return _rcCloudSig[p.id]!==_rcSig(p); });
   if(!dirty.length) return;
-  const token=await _vaultTokenSilent(); if(!token){ _rcPaintSync('local'); return; }   // not signed in — device-only, no nagging
+  let token=null; try{ token=await _netTmo(_vaultTokenSilent(), 12000); }catch(e){ token=null; }
+  if(!token){ _rcPaintSync('local'); return; }   // not signed in (or the sign-in check stalled) — device-only, no nagging
   // Make sure the PROVIDER is stamped before any record is written (manual save always did this; the
   // auto-save didn't) — restore-on-open filters records BY provider, so a record filed with a blank
   // provider would never come back. Found in the pre-rounds check, Scott 2026-07-21.
   try{ await _autoFillProvider(); }catch(e){}
   _rcAutoBusy=true; _rcPaintSync('saving');
   try{
-    const {driveId}=await _vaultCtx(token);
+    const {driveId}=await _netTmo(_vaultCtx(token), 15000);
     const fac=cleanSeg(S.round.fac)||'Unfiled';
     const date=/^\d{4}-\d{2}-\d{2}/.test(String(S.round.date||''))?S.round.date.slice(0,10):'undated';
     const recSegs=['RoundCards',fac];
-    await _vaultEnsureFolders(token,driveId,recSegs);
+    await _netTmo(_vaultEnsureFolders(token,driveId,recSegs), 15000);
     // Remember the provider name on this device (workforce name only — NOT patient data), so a fresh
     // session after a browser exit can still recognize this round's records even when the signed-in
     // account isn't the named provider (admin signs in, sets the real rounding provider).
@@ -1139,14 +1143,20 @@ async function rcAutoSaveCloud(){
         visitType:p.visitType||'',
         patient:{name:p.name}, edu:p.edu||'', wounds:p.wounds };
       const jb=new Blob([JSON.stringify(rec)],{type:'application/json'});
-      await _vaultUpload(token,driveId,recSegs,id+'.json',jb,'application/json');
+      await _netTmo(_vaultUpload(token,driveId,recSegs,id+'.json',jb,'application/json'), 30000);
       _rcCloudSig[id]=_rcSig(p); n++;
     }
     _rcSyncErr='';
     _rcPaintSync('saved');
     // if we're inside the composer overlay, nudge it to pull the freshly-saved records
     try{ if(window.parent && window.parent!==window) window.parent.postMessage({type:'rc-saved'}, location.origin); }catch(e){}
-  }catch(e){ _ensuredFolders.clear(); _vaultCtxCache=null; _rcSyncErr=(e&&e.message)||''; _rcPaintSync('error'); }
+  }catch(e){
+    _ensuredFolders.clear(); _vaultCtxCache=null;
+    _rcSyncErr=/vault-timeout/i.test((e&&e.message)||'') ? 'slow connection — will retry' : ((e&&e.message)||'');
+    _rcPaintSync('error');
+    // Self-heal: retry on its own in 10s instead of waiting for the next edit.
+    clearTimeout(_rcAutoT); _rcAutoT=setTimeout(rcAutoSaveCloud, 10000);
+  }
   finally{ _rcAutoBusy=false; if(_rcAutoAgain){ _rcAutoAgain=false; scheduleRcAutoSave(); } }
 }
 /* Path hygiene — same sanitizer as the composer: no traversal, no illegal SharePoint chars. */
