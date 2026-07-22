@@ -2247,13 +2247,32 @@ function _rcComposeAP(ordLines, edu){
 // STATE key of the A&P free-text box for the CURRENT note type. A `***`-only line becomes a textarea
 // keyed "<sectionIdx>:ta:<lineIndex>" — and that line sits at index 1 in the Initial A&P but index 0 in
 // the Follow-up A&P, so the key differs by mode. Computed from the live template, never hard-coded.
-function _rcApKey(){
-  const secs=(TEMPLATES[MODE]||{}).sections||[];
+function _rcApKeyFor(mode){
+  const secs=(TEMPLATES[mode]||{}).sections||[];
   const si=secs.findIndex(s=>s[0]==='Assessment & Plan'); if(si<0) return null;
   const li=String(secs[si][1]).split('\n').findIndex(l=>l.trim()==='***'); if(li<0) return null;
   return si+':ta:'+li;
 }
+function _rcApKey(){ return _rcApKeyFor(MODE); }
 function _rcSetAP(S, ap){ const k=_rcApKey(); if(!k) return; if(ap) S[k]=ap; else delete S[k]; }
+/* Carry the WOUND data + orders across a note-type switch (Scott 2026-07-21: pulling a card fills the
+   note, but clicking the other note-type tab wiped it — a returning patient whose history isn't in the
+   system yet gets pulled as Initial, and switching to Follow-up lost everything). The wound cards use
+   IDENTICAL keys in both templates (exam/objective section = index 1, procedures = index 3, same wound
+   template positions), so those keys map 1:1; only the A&P free-text LINE index differs, so remap it.
+   The narrative sections that genuinely differ (HPI vs Subjective, section 0) are intentionally NOT
+   carried. Only fills the destination where it's empty — never clobbers work already on the new side. */
+function _migrateWoundData(p, fromMode, toMode){
+  try{
+    const src=p.store[fromMode]||{}, dst=p.store[toMode]||(p.store[toMode]={});
+    const isEmpty=v=>v==null||v===''||(Array.isArray(v)&&!v.length)||(typeof v==='object'&&!Array.isArray(v)&&!Object.keys(v).length);
+    Object.keys(src).forEach(k=>{
+      if(/^__wc_/.test(k) || /^1:w/.test(k) || /^3:w/.test(k)){ if(isEmpty(dst[k])) dst[k]=src[k]; }
+    });
+    const fk=_rcApKeyFor(fromMode), tk=_rcApKeyFor(toMode);
+    if(fk && tk && !isEmpty(src[fk]) && isEmpty(dst[tk])) dst[tk]=src[fk];
+  }catch(e){}
+}
 
 /* ===== Card→Follow-up WOUND MATCHING (Scott 2026-07-20) =========================================
    When a RETURNING patient is pulled, this visit's bedside wounds must land on the SAME wound the
@@ -3643,9 +3662,10 @@ function chooseNoteType(nt){
   const fromLabel = cur==='fu' ? 'Follow-Up' : 'Initial';
   const hadContent = _storeHasContent(p.store && p.store[cur]);
   const msg = hadContent
-    ? ('Change this patient from '+fromLabel+' to '+toLabel+'?\n\nThe '+fromLabel+' note you started will be cleared — a patient can only have one note type.')
+    ? ('Change this patient from '+fromLabel+' to '+toLabel+'?\n\nYour wounds and orders carry over; the '+fromLabel+'-only narrative (History) does not.')
     : ('Make this patient a '+toLabel+' note?');
   if(!confirm(msg)){ setMode(cur); return; }             // cancelled — leave everything as it was
+  _migrateWoundData(p, cur, nt);                          // carry the wounds + orders over BEFORE clearing (don't lose a pulled card)
   p.store[cur] = {};                                     // drop the abandoned side so there's no hidden second note
   p.noteType = nt;
   _whPrior = null;                                        // a new type re-evaluates carry-forward for this patient
