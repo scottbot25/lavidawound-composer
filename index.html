@@ -814,7 +814,8 @@ function releaseWoundNum(wid, p){ p=p||activePt(); const R=wreg(p); const k=Stri
     return null;
   }
   // The deleted wound's own A&P order line goes with it — left behind, it would misattribute its orders
-  // to whichever wound inherits the number in the compaction below.
+  // to whichever wound inherits the number in the compaction below. Its card-line memory goes too.
+  ['new','fu'].forEach(m=>{ try{ const st=p&&p.store&&p.store[m]; const W=st&&st['__rcw']; if(W) delete W['__ap:w'+wid]; }catch(e2){} });
   const stripped=_rcStripApLines(p, delNum);
   const ren=compactWoundNums(p);
   try{ persist(); }catch(e2){}
@@ -851,7 +852,11 @@ function compactWoundNums(p){ p=p||activePt(); const R=wreg(p);
     // Single-pass callback replace: chained shifts (3->2 while 2->1) can't collide.
     const fix=t=>String(t).replace(/\bWound (\d+)\b/g,(m,n)=>ren[+n]!=null?('Wound '+ren[+n]):m);
     ['new','fu'].forEach(m=>{ try{ const key=_rcApKeyFor(m); const st=p&&p.store&&p.store[m];
-      if(key && st && typeof st[key]==='string' && st[key]) st[key]=fix(st[key]); }catch(e2){} });
+      if(key && st && typeof st[key]==='string' && st[key]) st[key]=fix(st[key]);
+      // keep the card-owned A&P line memories (__rcw '__ap:*') in step, or a later card edit would
+      // fail to find its own line after a renumber and silently stop updating it
+      const W=st&&st['__rcw']; if(W) Object.keys(W).forEach(mk=>{ if(/^__ap:/.test(mk)&&typeof W[mk]==='string') W[mk]=fix(W[mk]); });
+    }catch(e2){} });
   }
   return ren;
 }
@@ -2281,10 +2286,18 @@ async function rcList(facility){
 // periwound) are verified empirically against the live Objective template (choice/select/checkbox tokens).
 function _rcWriteWound(S, wid, w, opts){
   const P='1:w'+wid; const onlyEmpty=!!(opts&&opts.onlyEmpty);
-  // onlyEmpty (merge into a note the provider already started): never overwrite a value she has already
-  // set — only fill a key that is currently empty/unset. Default = overwrite (a fresh pulled patient).
+  // onlyEmpty (merge into a note the provider already started): never overwrite a value SHE typed — but a
+  // value the CARD itself wrote on an earlier pull is still the card's to update (Scott 2026-07-21: fixing
+  // a typo'd measurement on the card must reach the note, not die against fill-empty). S['__rcw'] remembers
+  // exactly what the card wrote per key (a __ key: persisted with the store, invisible to content checks);
+  // a key whose current value still equals that remembered value is untouched by the provider, so a newer
+  // card save may overwrite it. Anything she edited no longer matches -> hers wins, forever.
+  // Default (no onlyEmpty) = overwrite: a fresh pulled patient. W stores COPIES (arrays sliced) so an
+  // in-place UI mutation of S[k] can't silently keep the two identical.
   const isEmpty=v=>v==null || v==='' || (Array.isArray(v)&&!v.length);
-  const setK=(k,v)=>{ if(!onlyEmpty || isEmpty(S[k])) S[k]=v; };
+  const W=S['__rcw']=(S['__rcw']&&typeof S['__rcw']==='object')?S['__rcw']:{};
+  const same=(a,b)=>{ try{ return JSON.stringify(a)===JSON.stringify(b); }catch(e){ return false; } };
+  const setK=(k,v)=>{ if(!onlyEmpty || isEmpty(S[k]) || ((k in W) && same(S[k],W[k]))){ S[k]=v; W[k]=Array.isArray(v)?v.slice():v; } };
   if(String(w.loc||'').trim()) setK(P+':0',String(w.loc).trim());
   if(String(w.l||'').trim())   setK(P+':1',String(w.l).trim());
   if(String(w.w||'').trim())   setK(P+':2',String(w.w).trim());
@@ -2421,14 +2434,17 @@ function rcMatchWounds(cardWounds, priorList){
 function rcApplyMapping(S, priorList, cardWounds, mapping, edu){
   const orderWids=priorList.map(pw=>pw.wid);
   const ordLines=[];
+  const W=S['__rcw']=(S['__rcw']&&typeof S['__rcw']==='object')?S['__rcw']:{};
   (cardWounds||[]).forEach((cw,ci)=>{
     let wid=mapping[ci];
     if(wid==null){ wid=mintWid(); woundNum(wid); orderWids.push(wid); } else { woundNum(wid); }
     _rcWriteWound(S, wid, cw);
     const o=String(cw.orders||'').trim();
-    if(o) ordLines.push('Wound '+woundNum(wid)+(String(cw.loc||'').trim()?' ('+String(cw.loc).trim()+')':'')+': '+o);
+    if(o){ const line='Wound '+woundNum(wid)+(String(cw.loc||'').trim()?' ('+String(cw.loc).trim()+')':'')+': '+o;
+      ordLines.push(line); W['__ap:w'+wid]=line; }   // card-owned line — a later card edit may replace it
   });
   S['__wc_1']=orderWids;
+  if(String(edu||'').trim()) W['__ap:edu']='Additional info / education: '+String(edu).trim();
   _rcSetAP(S, _rcComposeAP(ordLines, edu));
 }
 
@@ -2492,7 +2508,13 @@ async function rcPrefill(rec){
     const wids=[];
     cardWounds.forEach(w=>{ const wid=mintWid(); woundNum(wid); wids.push(wid); _rcWriteWound(S, wid, w); });
     if(wids.length) S['__wc_1']=wids;
-    const ord=cardWounds.map((w,i)=>{ const o=String(w.orders||'').trim(); return o?('Wound '+woundNum(wids[i])+(String(w.loc||'').trim()?' ('+String(w.loc).trim()+')':'')+': '+o):''; });
+    const W=S['__rcw']=(S['__rcw']&&typeof S['__rcw']==='object')?S['__rcw']:{};
+    const ord=cardWounds.map((w,i)=>{ const o=String(w.orders||'').trim();
+      if(!o) return '';
+      const line='Wound '+woundNum(wids[i])+(String(w.loc||'').trim()?' ('+String(w.loc).trim()+')':'')+': '+o;
+      W['__ap:w'+wids[i]]=line;   // card-owned line — a later card edit may replace it
+      return line; });
+    if(edu) W['__ap:edu']='Additional info / education: '+edu;
     _rcSetAP(S, _rcComposeAP(ord, edu));
   }
   { const _p=activePt(); if(_p){ _p.srcRcKey=_rcKey(rec); _p.srcRcId=rec.id||null; } }   // tag the source record: dedup + lets a card UPDATE find its own patient
@@ -2619,7 +2641,7 @@ function rcMergeIntoPatient(pid, rec){
       !Object.keys(S).some(k=>k.indexOf(e.keyPrefix+':')===0 && !/:priorSA$/.test(k) && String(S[k]==null?'':S[k]).trim()))
     .sort((a,b)=>(a.num||0)-(b.num||0)).map(e=>e.wid);
   const wids=(Array.isArray(S['__wc_1'])?S['__wc_1'].slice():(woundRegistry||[]).map(w=>w.id));
-  const ordLines=[];
+  const ordPairs=[];
   cardWounds.forEach((cw,ci)=>{
     const m=props[ci]; let wid;
     if(m && m.priorWid!=null && m.confident){ wid=m.priorWid; }                       // fill an existing wound's blanks
@@ -2627,22 +2649,36 @@ function rcMergeIntoPatient(pid, rec){
     else { wid=mintWid(); woundNum(wid); if(wids.indexOf(wid)<0) wids.push(wid); }     // genuinely new wound -> append
     _rcWriteWound(S, wid, cw, {onlyEmpty:true});
     const o=String(cw.orders||'').trim();
-    if(o) ordLines.push('Wound '+woundNum(wid)+(String(cw.loc||'').trim()?' ('+String(cw.loc).trim()+')':'')+': '+o);
+    if(o) ordPairs.push({wid, line:'Wound '+woundNum(wid)+(String(cw.loc||'').trim()?' ('+String(cw.loc).trim()+')':'')+': '+o});
   });
   S['__wc_1']=wids;
-  // Append, never replace — and IDEMPOTENT PER LINE: a card update that adds one wound must append only
-  // that wound's order line, not re-append lines already in the A&P (block-level matching did exactly
-  // that the moment an update changed the block's composition).
-  { const k=_rcApKey(); if(k){ const cur=String(S[k]||'');
+  // A&P sync, CARD-OWNED-LINE aware (same __rcw contract as the wound fields): the exact line the card
+  // wrote per wound is remembered; while it still sits in the A&P untouched, a card edit REPLACES it in
+  // place. A line the provider edited or removed is hers — never re-appended, never duplicated. Lines
+  // the card never wrote before append once (per-line idempotent). Same deal for the education line.
+  { const k=_rcApKey(); if(k){
+      let cur=String(S[k]||'');
+      const W=S['__rcw']=(S['__rcw']&&typeof S['__rcw']==='object')?S['__rcw']:{};
+      const pend=[];
+      const upsert=(mk,line)=>{ const prev=W[mk];
+        if(prev && cur.indexOf(prev)>=0){ if(line && line!==prev) cur=cur.replace(prev,line); if(line) W[mk]=line; }
+        else if(prev){ /* the card's line was edited or removed by the provider — hers wins */ }
+        else if(line && cur.indexOf(line)<0){ pend.push(line); W[mk]=line; }
+        else if(line){ W[mk]=line; } };
+      ordPairs.forEach(pr=>upsert('__ap:w'+pr.wid, pr.line));
       const eduS=String(rec.edu||'').trim();
-      const add=_rcComposeAP(ordLines.filter(l=>l && cur.indexOf(l)<0), (eduS && cur.indexOf(eduS)<0)?eduS:'');
-      if(add) S[k]=cur.trim() ? (cur.trim()+'\n\n'+add) : add; } }
+      upsert('__ap:edu', eduS?('Additional info / education: '+eduS):'');
+      if(pend.length) cur=cur.trim() ? (cur.trim()+'\n\n'+pend.join('\n')) : pend.join('\n');
+      S[k]=cur; } }
   { const _p=activePt(); if(_p){ _p.srcRcKey=_rcKey(rec); _p.srcRcId=rec.id||_p.srcRcId||null; } }
   persist(); setMode(MODE); renderPatientBar();
 }
-let _rcPulling=false, _rcLastPull=0;
+let _rcPulling=false, _rcLastPull=0, _rcPullAgain=false;
 async function rcAutoPull(reason){
-  if(!DRAFTS_ENABLED() || !_draftRestoreDone || _rcPulling) return;
+  if(!DRAFTS_ENABLED() || !_draftRestoreDone) return;
+  // A save-nudge landing while a pull is in flight must not vanish — queue exactly one re-pull for
+  // when this one finishes (the card fires rc-saved per upload; back-to-back saves raced this guard).
+  if(_rcPulling){ _rcPullAgain=true; return; }
   _rcPulling=true;
   try{
     const recs=await rcListAllRecent();
@@ -2666,7 +2702,7 @@ async function rcAutoPull(reason){
     });
     // Lazily baseline legacy numeric entries so FUTURE card edits become detectable updates.
     let baselined=false;
-    recs.forEach(r=>{ if(r&&r.id && typeof seen[r.id]==='number'){ seen[r.id]={t:seen[r.id], sa:String(r.savedAt||'')}; baselined=true; } });
+    recs.forEach(r=>{ if(r&&r.id && typeof seen[r.id]==='number'){ seen[r.id]={t:seen[r.id], sa:String(r.savedAt||''), k:String(r.key||'')}; baselined=true; } });
     if(!fresh.length){ if(baselined) _rcSeenSave(seen); return; }
     // Don't yank a provider off a note they're mid-way through: remember where they were, go back after.
     const returnPid=activePid, returnNamed=!!((((WS.patients[returnPid]||{}).name)||'').trim());
@@ -2691,9 +2727,21 @@ async function rcAutoPull(reason){
             if(_rcAutoSwitchType(srcPid, want)) toast(nm+': switched to '+(want==='fu'?'Follow-Up':'Initial')+' per the Round Card — your entries carried over.');
             else toast(nm+': the card marks this visit as '+(want==='fu'?'a Follow-Up':'an Initial')+' — switch with the note-type tab (your entries carry over).');
           }
+          seen[r.id]={t:now, sa:String(r.savedAt||''), k:String(r.key||'')};
+          continue;
         }
-        seen[r.id]={t:now, sa:String(r.savedAt||'')};
-        continue;   // never resurrects a patient the provider deleted
+        // No patient carries this record's tag — the provider deleted it. But a card SLOT keeps its id
+        // across a rename, so if the slot was since REUSED for a DIFFERENT patient (the "alpha" trap,
+        // Scott 2026-07-21), the record's name-slug no longer matches the one remembered at pull time:
+        // that's a NEW patient, not a resurrection — fall through and create them. Same slug (or no
+        // remembered slug, legacy entries) = genuinely the deleted patient -> stays deleted.
+        const oldK=(seen[r.id]&&typeof seen[r.id]==='object')?String(seen[r.id].k||''):'';
+        const newK=String(r.key||'');
+        if(!(oldK && newK && newK!==oldK)){
+          seen[r.id]={t:now, sa:String(r.savedAt||''), k:newK||oldK};
+          continue;   // never resurrects a patient the provider deleted
+        }
+        // fall through: the slot's new occupant is created via the normal collision/prefill path below
       }
       // Collision: this patient is already in the list (she started the note by hand, or an earlier card).
       // Warn + let her pull the card INTO that note instead of silently creating a duplicate (Scott 2026-07-20).
@@ -2709,7 +2757,7 @@ async function rcAutoPull(reason){
         await rcPrefill(r);
       }
       pulled++;
-      if(r&&r.id) seen[r.id]={t:now, sa:String(r.savedAt||'')}; else WS.rcPulled[_rcKey(r)]=true;
+      if(r&&r.id) seen[r.id]={t:now, sa:String(r.savedAt||''), k:String(r.key||'')}; else WS.rcPulled[_rcKey(r)]=true;
       const f=facLabel(r.facility||'')||'Unfiled'; byFac[f]=(byFac[f]||0)+1; }
     Object.keys(seen).forEach(id=>{ if(now-entryT(seen[id]) > RC_SEEN_TTL_MS) delete seen[id]; });   // prune old ids
     _rcSeenSave(seen);
@@ -2732,7 +2780,8 @@ async function rcAutoPull(reason){
     if(total){ const parts=Object.keys(byFac).map(f=>f+': '+byFac[f]).join(' · ');
       toast('Brought in '+total+' patient'+(total===1?'':'s')+' from Round Cards ('+parts+')'); }
   }catch(e){}
-  finally{ _rcPulling=false; _rcLastPull=Date.now(); }
+  finally{ _rcPulling=false; _rcLastPull=Date.now();
+    if(_rcPullAgain){ _rcPullAgain=false; setTimeout(()=>{ try{ rcAutoPull('queued'); }catch(e){} },0); } }
 }
 
 /* ============ PARSER: build inline fillable controls, keep exact text ============ */
