@@ -2598,24 +2598,45 @@ function _rcFindExistingPatient(rec){
 function rcMergeIntoPatient(pid, rec){
   switchPatient(pid);                                  // activate + render; woundRegistry = this patient's wounds
   const S=STATE;
+  // Fill-empty the IDENTITY too (Scott 2026-07-21: the card auto-saves fast, so the record's first
+  // version can precede the typed name — the later update then carried the wounds but never the name,
+  // leaving a "New patient" shell holding the data while "alpha" existed only on the card). A name or
+  // facility already in the note is never overwritten.
+  { const p0=WS.patients[pid];
+    const rnm=String((rec.patient&&rec.patient.name)||'').trim();
+    if(p0 && !(p0.name||'').trim() && rnm){ p0.name=rnm; setPatient(rnm); }
+    const rfac=String(rec.facility||'').trim();
+    if(p0 && !(p0.facility||'').trim() && rfac){ p0.facility=rfac; } }
   const cardWounds=(rec.wounds||[]);
-  const existList=(woundRegistry||[]).map(w=>({wid:w.id, location:(S[w.keyPrefix+':0']||''), num:woundNum(w.id)}));
+  const existList=(woundRegistry||[]).map(w=>({wid:w.id, location:(S[w.keyPrefix+':0']||''), num:woundNum(w.id), keyPrefix:w.keyPrefix}));
   const props=rcMatchWounds(cardWounds, existList);
+  // Completely-empty wound SHELLS (no location, no data — e.g. the default first wound of a patient
+  // created before the card had wounds typed) are CLAIMED by unmatched card wounds, lowest number
+  // first, instead of skipped — otherwise the merge strands an empty "Wound 1" and appends the real
+  // wounds as 2 and 3 (Scott hit this twice in pre-flight).
+  const takenW=new Set(props.filter(m=>m&&m.priorWid!=null&&m.confident).map(m=>String(m.priorWid)));
+  const shells=existList.filter(e=>!takenW.has(String(e.wid)) &&
+      !Object.keys(S).some(k=>k.indexOf(e.keyPrefix+':')===0 && !/:priorSA$/.test(k) && String(S[k]==null?'':S[k]).trim()))
+    .sort((a,b)=>(a.num||0)-(b.num||0)).map(e=>e.wid);
   const wids=(Array.isArray(S['__wc_1'])?S['__wc_1'].slice():(woundRegistry||[]).map(w=>w.id));
   const ordLines=[];
   cardWounds.forEach((cw,ci)=>{
     const m=props[ci]; let wid;
     if(m && m.priorWid!=null && m.confident){ wid=m.priorWid; }                       // fill an existing wound's blanks
+    else if(shells.length){ wid=shells.shift(); }                                      // claim an empty shell (keeps its number)
     else { wid=mintWid(); woundNum(wid); if(wids.indexOf(wid)<0) wids.push(wid); }     // genuinely new wound -> append
     _rcWriteWound(S, wid, cw, {onlyEmpty:true});
     const o=String(cw.orders||'').trim();
     if(o) ordLines.push('Wound '+woundNum(wid)+(String(cw.loc||'').trim()?' ('+String(cw.loc).trim()+')':'')+': '+o);
   });
   S['__wc_1']=wids;
-  const add=_rcComposeAP(ordLines, String(rec.edu||'').trim());
-  // Append, never replace — and IDEMPOTENT: repeated card-update merges of the same orders must not
-  // stack duplicates in the A&P (the update path can run on every card edit).
-  if(add){ const k=_rcApKey(); if(k){ const cur=String(S[k]||'').trim(); if(cur.indexOf(add)<0) S[k]=cur ? (cur+'\n\n'+add) : add; } }
+  // Append, never replace — and IDEMPOTENT PER LINE: a card update that adds one wound must append only
+  // that wound's order line, not re-append lines already in the A&P (block-level matching did exactly
+  // that the moment an update changed the block's composition).
+  { const k=_rcApKey(); if(k){ const cur=String(S[k]||'');
+      const eduS=String(rec.edu||'').trim();
+      const add=_rcComposeAP(ordLines.filter(l=>l && cur.indexOf(l)<0), (eduS && cur.indexOf(eduS)<0)?eduS:'');
+      if(add) S[k]=cur.trim() ? (cur.trim()+'\n\n'+add) : add; } }
   { const _p=activePt(); if(_p){ _p.srcRcKey=_rcKey(rec); _p.srcRcId=rec.id||_p.srcRcId||null; } }
   persist(); setMode(MODE); renderPatientBar();
 }
