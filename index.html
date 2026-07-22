@@ -791,20 +791,69 @@ function woundNum(wid, p){ p=p||activePt(); const R=wreg(p); const k=String(wid)
 }
 function woundMeta(wid, p){ p=p||activePt(); const R=wreg(p); woundNum(wid,p); return R.byId[String(wid)]; }
 // Free a wound's DISPLAY number when it's deleted before ever being committed (Scott, 2026-07-19: "a wound
-// shouldn't be stricken until it's committed"). A wound you add by mistake and delete should give its number
-// back, so the next add reuses it — instead of permanently burning it and skipping to the next. Only numbers
-// on COMMITTED wounds are permanent (they're a wound's identity across visits, so carry-forward stays right).
+// shouldn't be stricken until it's committed"). Refined 2026-07-21 (Scott): deleting a never-committed wound
+// also RENUMBERS the remaining never-committed wounds down to close the gap — before the first copy-to-PCC,
+// numbers are positions, not identities (delete Wound 1 of {1,2} and the survivor becomes Wound 1, not a
+// stranded Wound 2). Numbers that are part of the chart's history — committed in a prior visit (incl.
+// healed/retired) or copied this session — are identities and are NEVER reassigned; this-visit wounds
+// compact into the range ABOVE them.
 // The wid itself is NOT reclaimed (wids must stay unique so a reused number gets a fresh, empty store).
+// Returns the oldNum->newNum map when a renumber happened (the caller must re-render), else null.
 function releaseWoundNum(wid, p){ p=p||activePt(); const R=wreg(p); const k=String(wid); const e=R.byId[k];
-  // Free the number only if the wound was NOT committed IN THIS SESSION (committedHere). A carried-forward
-  // wound is `committed` (its number is a permanent cross-visit identity) but committedHere=false until it
-  // is re-copied this visit — so on a FOLLOW-UP, delete+re-add reuses the number instead of iterating up
-  // (Scott 2026-07-20: deleting/re-adding a wound on a follow-up "iterating up… will create a mess").
-  if(!e || e.committedHere) return;
+  // Committed IN THIS SESSION (committedHere): the number is already in today's chart — never freed or moved.
+  if(!e || e.committedHere) return null;
+  const wasCommitted=!!e.committed;
+  const delNum=e.num||0;
   delete R.byId[k];
-  let mx=0; Object.keys(R.byId).forEach(kk=>{ mx=Math.max(mx, R.byId[kk].num||0); });
-  R.seq=mx+1;                                          // next number = one past the highest still in use
-  try{ persist(); }catch(e){}
+  if(wasCommitted){
+    // Carried-forward wound: prior-visit identity. Its number is not handed to other wounds; delete+re-add
+    // may still reuse it via seq when it was the highest (unchanged 2026-07-20 behavior).
+    let mx=0; Object.keys(R.byId).forEach(kk=>{ mx=Math.max(mx, R.byId[kk].num||0); });
+    R.seq=mx+1;                                        // next number = one past the highest still in use
+    try{ persist(); }catch(e2){}
+    return null;
+  }
+  // The deleted wound's own A&P order line goes with it — left behind, it would misattribute its orders
+  // to whichever wound inherits the number in the compaction below.
+  const stripped=_rcStripApLines(p, delNum);
+  const ren=compactWoundNums(p);
+  try{ persist(); }catch(e2){}
+  return (Object.keys(ren).length || stripped) ? ren : null;
+}
+// Remove A&P lines that head with "Wound <num>" (the shape the card-pull writes: "Wound N (loc): orders").
+// Runs BEFORE compaction, while the deleted number is still unique. Returns true if any text changed.
+function _rcStripApLines(p, num){ if(!num) return false; let changed=false;
+  const re=new RegExp('^\\s*Wound '+num+'\\b');
+  ['new','fu'].forEach(m=>{ try{ const key=_rcApKeyFor(m); const st=p&&p.store&&p.store[m];
+    if(!key || !st || typeof st[key]!=='string' || !st[key]) return;
+    const kept=String(st[key]).split('\n').filter(l=>!re.test(l)).join('\n')
+      .replace(/\n{3,}/g,'\n\n').replace(/^\n+|\n+$/g,'');
+    if(kept!==st[key]){ st[key]=kept; changed=true; }
+  }catch(e2){} });
+  return changed;
+}
+// Renumber the never-committed wounds compactly above the committed high-water mark, preserving their
+// relative order — and rewrite the "Wound N" references the tool itself wrote into the A&P (card-pull
+// order lines) so the note can't disagree with its own numbering. committedMax (stamped at commit and at
+// history rehydrate) keeps a DELETED committed wound's number out of reach — the entry may be gone from
+// byId, but its number stays part of the chart's history.
+function compactWoundNums(p){ p=p||activePt(); const R=wreg(p);
+  let base=R.committedMax||0;
+  Object.keys(R.byId).forEach(k=>{ const e=R.byId[k]; if(e&&e.committed) base=Math.max(base, e.num||0); });
+  const un=Object.keys(R.byId).filter(k=>!(R.byId[k]&&R.byId[k].committed))
+    .sort((a,b)=>((R.byId[a].num||0)-(R.byId[b].num||0)));
+  const ren={};                                        // oldNum -> newNum
+  un.forEach((k,i)=>{ const e=R.byId[k]; const want=base+1+i;
+    if((e.num||0)!==want){ ren[e.num]=want; e.num=want; } });
+  let mx=base; Object.keys(R.byId).forEach(k=>{ mx=Math.max(mx, R.byId[k].num||0); });
+  R.seq=mx+1;
+  if(Object.keys(ren).length){
+    // Single-pass callback replace: chained shifts (3->2 while 2->1) can't collide.
+    const fix=t=>String(t).replace(/\bWound (\d+)\b/g,(m,n)=>ren[+n]!=null?('Wound '+ren[+n]):m);
+    ['new','fu'].forEach(m=>{ try{ const key=_rcApKeyFor(m); const st=p&&p.store&&p.store[m];
+      if(key && st && typeof st[key]==='string' && st[key]) st[key]=fix(st[key]); }catch(e2){} });
+  }
+  return ren;
 }
 
 /* ============ WOUND HISTORY — the carry-forward store ============
@@ -903,6 +952,7 @@ async function whCommit(){
     // These wounds are now COMMITTED — lock their numbers in permanently (a later delete won't reclaim them,
     // and next visit's carry-forward matches on them). Must run before the wreg snapshot so it's recorded.
     woundRegistry.forEach(w=>{ const e=wreg().byId[String(w.id)]; if(e){ e.committed=true; e.committedHere=true; } });   // finalized THIS visit -> number locked against reuse now
+    { const R=wreg(); Object.keys(R.byId).forEach(k=>{ const e=R.byId[k]; if(e&&e.committed) R.committedMax=Math.max(R.committedMax||0, e.num||0); }); }   // high-water mark: a committed number stays reserved even if its entry is later deleted
     const rec={ date, provider:hdr.provider||'', mode:MODE, savedAt:Date.now(), wounds:whSnapshotWounds(),
                 wreg:JSON.parse(JSON.stringify(wreg().byId||{})) };
     const i=h.visits.findIndex(v=>v.date===date);
@@ -942,6 +992,7 @@ async function whRefreshPrior(){
       Object.keys(visit.wreg).forEach(k=>{ if(!R.byId[k]) R.byId[k]=JSON.parse(JSON.stringify(visit.wreg[k]));
         R.byId[k].committed=true;                       // came from a committed visit -> its number is permanent
         R.byId[k].committedHere=false;                  // ...but NOT committed THIS session, so delete+re-add can reuse its number this visit (clears any stale flag stored in the prior visit's wreg)
+        R.committedMax=Math.max(R.committedMax||0, R.byId[k].num||0);   // reserve every historical number against renumbering, even if its entry is deleted later
         mx=Math.max(mx, (R.byId[k].num||0)+1); });
       R.seq=Math.max(R.seq, mx);
       try{ persist(); }catch(e){}
@@ -3413,8 +3464,9 @@ function buildSection(name,idx,text){
     const addBtn=document.createElement('button'); addBtn.className='add-wound'; addBtn.textContent='+ Add another wound'; body.appendChild(addBtn);
 
     const wounds=[]; woundRegistry=wounds; woundSectionName=name;
-    // Paints the wound headers. NOT a renumber — the number comes from the patient's permanent
-    // registry, so removing a wound leaves the others' numbers untouched (that is the whole point).
+    // Paints the wound headers from the patient's registry. Any renumbering happens in
+    // releaseWoundNum/compactWoundNums (uncommitted wounds close gaps; committed numbers never move) —
+    // this just repaints whatever the registry says.
     function paintWoundHeads(){
       wounds.forEach(w=> w.title.textContent='Wound '+woundNum(w.id));
       woundsWrap.querySelectorAll('.wound-rm').forEach(b=> b.style.display = wounds.length>1?'inline-block':'none');
@@ -3443,7 +3495,12 @@ function buildSection(name,idx,text){
       // wound object's own inputs — never a positional guess).
       const w={id, resolve:block.resolve, title, keyPrefix:idx+':w'+id, priorEl:prior, underFrom:block.underFrom, underTo:block.underTo, tunFrom:block.tunFrom, tunTo:block.tunTo,
         dims:()=>({ L:(block.Lfield&&block.Lfield.value)||'', W:(block.Wfield&&block.Wfield.value)||'', D:(block.Dfield&&block.Dfield.value)||'' })};
-      rm.onclick=()=>{ if(wounds.length<=1) return; const i=wounds.indexOf(w); if(i>=0){ wounds.splice(i,1); releaseWoundNum(w.id); card.remove(); saveWounds(); paintWoundHeads(); if(dressingsSync) dressingsSync(); if(procSync) procSync(); resolveAll(); } };
+      rm.onclick=()=>{ if(wounds.length<=1) return; const i=wounds.indexOf(w); if(i>=0){ wounds.splice(i,1); const ren=releaseWoundNum(w.id); card.remove(); saveWounds();
+        // A renumber changed other wounds' numbers AND may have rewritten the A&P text in STATE — a full
+        // re-render keeps the visible fields honest (a live textarea holding the old text would write it
+        // straight back over the fix on its next input event).
+        if(ren){ setMode(MODE); return; }
+        paintWoundHeads(); if(dressingsSync) dressingsSync(); if(procSync) procSync(); resolveAll(); } };
       wounds.push(w); woundsWrap.appendChild(card); paintWoundHeads(); if(dressingsSync) dressingsSync(); if(procSync) procSync();
     }
     addBtn.onclick=()=>{ addWound(); saveWounds(); resolveAll(); };
