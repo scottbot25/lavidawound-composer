@@ -2517,7 +2517,7 @@ async function rcPrefill(rec){
     if(edu) W['__ap:edu']='Additional info / education: '+edu;
     _rcSetAP(S, _rcComposeAP(ord, edu));
   }
-  { const _p=activePt(); if(_p){ _p.srcRcKey=_rcKey(rec); _p.srcRcId=rec.id||null; } }   // tag the source record: dedup + lets a card UPDATE find its own patient
+  { const _p=activePt(); if(_p){ _p.srcRcKey=_rcKey(rec); _p.srcRcId=rec.id||null; _p.rcName=nm; } }   // tag the source record: dedup + card updates find their patient; rcName = the card owns this name until the provider edits it
   setMode(nt); persist(); renderPatientBar();
 }
 
@@ -2614,19 +2614,50 @@ function _rcFindExistingPatient(rec){
   return Object.keys(WS.patients).find(pid=>{ const p=WS.patients[pid];
     return p && whNameKey(p.name||'')===nm && whNameKey(p.facility||'')===fac; }) || null;
 }
+// Is this note still a PURE MIRROR of its Round Card — i.e. every non-empty value in both stores is
+// exactly what the card wrote (per the __rcw memory)? True means nothing provider-typed exists, so a
+// card rename can safely follow; any typed value (or a pre-__rcw legacy store) returns false.
+function _noteAllCardOwned(p){ try{
+  const same=(a,b)=>{ try{ return JSON.stringify(a)===JSON.stringify(b); }catch(e){ return false; } };
+  const isEmpty=v=>v==null || v==='' || (Array.isArray(v)&&!v.length);
+  return ['new','fu'].every(m=>{ const st=(p&&p.store&&p.store[m])||{};
+    const W=(st['__rcw']&&typeof st['__rcw']==='object')?st['__rcw']:{};
+    const apKey=(typeof _rcApKeyFor==='function')?_rcApKeyFor(m):null;
+    const apLines=new Set(Object.keys(W).filter(k=>/^__ap:/.test(k)).map(k=>String(W[k]).trim()));
+    return Object.keys(st).every(k=>{
+      if(/^__/.test(k)) return true;                       // form internals + the __rcw map itself
+      if(isEmpty(st[k])) return true;
+      // The A&P text is card-owned when every non-blank line is one the card wrote (the __rcw memory
+      // stores it per LINE under __ap:*, not under the A&P's own store key).
+      if(k===apKey) return String(st[k]).split('\n').map(s=>s.trim()).filter(Boolean).every(l=>apLines.has(l));
+      return (k in W) && same(st[k], W[k]);
+    });
+  });
+}catch(e){ return false; } }
 // Merge a Round Card into a note the provider already started — FILL-EMPTY only (never overwrites what she
 // typed). Card wounds that CONFIDENTLY match an existing wound by location fill that wound's blanks; the
 // rest are appended as new wounds. Orders/education are appended to the A&P, never replaced.
 function rcMergeIntoPatient(pid, rec){
   switchPatient(pid);                                  // activate + render; woundRegistry = this patient's wounds
   const S=STATE;
-  // Fill-empty the IDENTITY too (Scott 2026-07-21: the card auto-saves fast, so the record's first
-  // version can precede the typed name — the later update then carried the wounds but never the name,
-  // leaving a "New patient" shell holding the data while "alpha" existed only on the card). A name or
-  // facility already in the note is never overwritten.
+  // IDENTITY sync (Scott 2026-07-21, two rounds): fill a BLANK name/facility from the record (the card
+  // auto-saves fast — the record's first version can precede the typed name), and let a card RENAME
+  // follow through when the card still owns the name (p.rcName = the name the card last wrote; if the
+  // note still carries exactly that, the provider never changed it — "Charliet3" stayed in the note
+  // after the card was fixed to "Charlie"). Safety catch: a rename only auto-applies while the note is
+  // still a pure mirror of the card (nothing provider-typed anywhere) — otherwise the slot might have
+  // been reused for a DIFFERENT patient, and renaming would paste one patient's chart onto another's
+  // name, so we toast a hint instead. A name the provider set in the note always wins silently.
   { const p0=WS.patients[pid];
     const rnm=String((rec.patient&&rec.patient.name)||'').trim();
-    if(p0 && !(p0.name||'').trim() && rnm){ p0.name=rnm; setPatient(rnm); }
+    if(p0 && rnm){
+      const cur=(p0.name||'').trim();
+      if(!cur){ p0.name=rnm; p0.rcName=rnm; setPatient(rnm); }
+      else if(cur===rnm){ p0.rcName=rnm; }
+      else if((p0.rcName||'')===cur){
+        if(_noteAllCardOwned(p0)){ p0.name=rnm; p0.rcName=rnm; setPatient(rnm); toast('Renamed to '+rnm+' per the Round Card'); }
+        else toast('The Round Card renamed this patient to “'+rnm+'” — update the name in the note if that’s right.');
+      } }
     const rfac=String(rec.facility||'').trim();
     if(p0 && !(p0.facility||'').trim() && rfac){ p0.facility=rfac; } }
   const cardWounds=(rec.wounds||[]);
