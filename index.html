@@ -2693,6 +2693,14 @@ async function rcAutoPull(reason){
     Object.keys(seen).forEach(id=>{ if(now-entryT(seen[id]) > RC_SEEN_TTL_MS) delete seen[id]; });   // prune old ids
     _rcSeenSave(seen);
     if(!pulled){ return; }
+    // A fresh session's empty "Start here" slot must not linger as a rogue "Unassigned · New patient 1"
+    // once the cards brought the real patients in (Scott 2026-07-21). STRICTER than the resume prune on
+    // purpose: only a slot with NO name, NO building AND NO charted content is dropped — an un-named note
+    // a provider is mid-way through has content, so live work can never be pruned here.
+    { const ids=Object.keys(WS.patients);
+      if(ids.length>1) ids.forEach(pid=>{ const p=WS.patients[pid];
+        if(!_patientReal(p) && !_patientHasContent(p)) delete WS.patients[pid]; });
+      if(!WS.patients[activePid]){ const first=Object.keys(WS.patients)[0]; if(first){ activePid=first; activateForm(); } } }
     if(returnNamed && WS.patients[returnPid]) switchPatient(returnPid);
     _draftHold=false;   // pulled card patients are real new content — make sure autosave persists them
     saveWS(); renderPatientBar();
