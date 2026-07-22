@@ -1015,7 +1015,10 @@ async function _vaultEnsureFolders(token,driveId,segs){
 }
 async function _vaultUpload(token,driveId,segs,filename,blob,ctype){
   const url='https://graph.microsoft.com/v1.0/drives/'+driveId+'/root:/'+_encPath(segs.join('/')+'/'+filename)+':/content';
-  const r=await _gfetch(url,token,{method:'PUT',headers:{'Content-Type':ctype||'application/msword'},body:blob});
+  // During a close-flush, keepalive lets the browser finish this upload after the tab is gone
+  // (keepalive caps bodies ~64KB — records are tiny; an oversized sheet just goes without it).
+  const kal = (typeof _rcKalFlush!=='undefined' && _rcKalFlush===true && blob && blob.size<60000);
+  const r=await _gfetch(url,token,{method:'PUT',headers:{'Content-Type':ctype||'application/msword'},body:blob,keepalive:kal});
   if(!r.ok) throw new Error('Upload failed (HTTP '+r.status+').');
   return await r.json();
 }
@@ -1089,12 +1092,25 @@ async function _vaultTokenSilent(){
   }catch(e){ return null; }
 }
 function scheduleRcAutoSave(){ clearTimeout(_rcAutoT); _rcAutoT=setTimeout(rcAutoSaveCloud, 2000); }   // was 4s — snappier backup (Scott 2026-07-20)
+/* CLOSE-FLUSH (pre-rounds hardening, Scott 2026-07-21): closing the tab — or on a phone just switching
+   apps — inside the 2s debounce silently dropped the last edit (the browser kills in-flight fetches on
+   unload). Flush immediately on hide/close with fetch keepalive, which lets the uploads FINISH after
+   the page is gone. Same fix the composer drafts already have. Records are tiny (<<64KB keepalive cap). */
+let _rcKalFlush=false;
+function rcFlushAutoSave(){ clearTimeout(_rcAutoT); _rcKalFlush=true;
+  Promise.resolve(rcAutoSaveCloud()).catch(()=>{}).finally(()=>{ _rcKalFlush=false; }); }
+window.addEventListener('pagehide', rcFlushAutoSave);
+document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='hidden') rcFlushAutoSave(); });
 async function rcAutoSaveCloud(){
   if(_rcAutoBusy){ _rcAutoAgain=true; return; }
   const named=(S.pts||[]).filter(p=>(p.name||'').trim() && p.send!==false);
   const dirty=named.filter(p=>{ if(!p.id) p.id=newId(); return _rcCloudSig[p.id]!==_rcSig(p); });
   if(!dirty.length) return;
   const token=await _vaultTokenSilent(); if(!token){ _rcPaintSync('local'); return; }   // not signed in — device-only, no nagging
+  // Make sure the PROVIDER is stamped before any record is written (manual save always did this; the
+  // auto-save didn't) — restore-on-open filters records BY provider, so a record filed with a blank
+  // provider would never come back. Found in the pre-rounds check, Scott 2026-07-21.
+  try{ await _autoFillProvider(); }catch(e){}
   _rcAutoBusy=true; _rcPaintSync('saving');
   try{
     const siteId=await _vaultSiteId(token), driveId=await _vaultDriveId(token,siteId);
@@ -1102,6 +1118,10 @@ async function rcAutoSaveCloud(){
     const date=/^\d{4}-\d{2}-\d{2}/.test(String(S.round.date||''))?S.round.date.slice(0,10):'undated';
     const recSegs=['RoundCards',fac];
     await _vaultEnsureFolders(token,driveId,recSegs);
+    // Remember the provider name on this device (workforce name only — NOT patient data), so a fresh
+    // session after a browser exit can still recognize this round's records even when the signed-in
+    // account isn't the named provider (admin signs in, sets the real rounding provider).
+    try{ if((S.round.prov||'').trim()) localStorage.setItem('rc_last_prov', S.round.prov.trim()); }catch(e){}
     let n=0;
     for(const p of dirty){
       const id=p.id||newId();
@@ -1345,9 +1365,15 @@ async function rcRestoreFromVault(){
     if((S.pts||[]).some(p=>(p.name||'').trim())) return;            // session already has work — never clobber
     const token=await _vaultTokenSilent(); if(!token) return;       // signed out — quietly do nothing
     await _autoFillProvider();
-    let prov=(S.round.prov||'').trim();
-    if(!prov){ try{ const a=_pca&&_pca.getAllAccounts&&_pca.getAllAccounts()[0]; prov=(a&&(a.name||a.username))||''; }catch(e){} }
-    if(!prov) return;                                               // can't attribute records — skip
+    // Accept a record if its provider matches the signed-in account OR the Provider box — and also
+    // accept UNATTRIBUTED records (older saves before the provider was stamped). Matching on the
+    // account name alone silently dropped rounds when the Provider box named someone else (e.g. an
+    // admin signs in but sets the actual rounding provider). Pre-rounds hardening, Scott 2026-07-21.
+    let acct=''; try{ const a=_pca&&_pca.getAllAccounts&&_pca.getAllAccounts()[0]; acct=(a&&(a.name||a.username))||''; }catch(e){}
+    const prov=(S.round.prov||'').trim();
+    let lastProv=''; try{ lastProv=localStorage.getItem('rc_last_prov')||''; }catch(e){}
+    if(!prov && !acct && !lastProv) return;                         // can't attribute anything — skip
+    const okProv=new Set([_nameKey(prov), _nameKey(acct), _nameKey(lastProv), ''].filter(x=>x!==undefined));
     const siteId=await _vaultSiteId(token), driveId=await _vaultDriveId(token,siteId);
     const today=todayISO(), cut=Date.now()-36*3600*1000, mine=[];
     const facs=(await _vaultList(token,driveId,'RoundCards')).filter(it=>it.folder).map(it=>it.name);
@@ -1358,7 +1384,7 @@ async function rcRestoreFromVault(){
       for(const f of files){
         const rec=await _vaultReadJson(token,driveId,'RoundCards/'+fac+'/'+f.name);
         if(rec && rec.schema==='roundcard.v1' && String(rec.date||'').slice(0,10)===today
-           && _nameKey(rec.provider)===_nameKey(prov)) mine.push(rec);
+           && okProv.has(_nameKey(rec.provider))) mine.push(rec);
       }
     }
     if(!mine.length) return;
