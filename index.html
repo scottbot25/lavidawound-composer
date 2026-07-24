@@ -579,14 +579,11 @@ Plans:
 -Encourage protein supplementation and dietitian evaluation as needed
 -Re-evaluation [in 1 week / in 2 weeks / PRN]. Notify LaVida MD or APP sooner for any concerns- conveyed to facility wound care RN and DON.`],
       ["Procedures", PROC()],
-      ["Total Time", TIME()]
-      /* Medical Decision-Making Summary DELETED — Abby, on the record (7/16 Zoom): "Claude record
-         that: MDM deleted." It was byte-identical boilerplate she hand-copied into PCC's separate MDM
-         box every single note ("I was cursing every time"), and Shevie already had a PCC dot-phrase
-         (.sktime) that fills it in six keystrokes. PCC requires the box; PCC fills it. Scott: "we're
-         over-complicating it by making Scott add." This also removes the `Total time: [***] minutes`
-         dangling-text leak by deletion rather than logic. See MDM() below — kept, unreferenced, so the
-         wording survives for whoever authors the Global Macro dot-phrase. */
+      ["Total Time", TIME()],
+      /* MDM: deleted 7/16 (separate PCC box, .sktime owned it) — REINSTATED 2026-07-23 for the
+         one-box-note flow per Shevie's email. Custom-built in buildSection: the attestation prints
+         only on no-procedure visits; the DON line always. See MDM_ATTEST()/MDM_DON(). */
+      ["MDM", ""]
     ]
   },
   fu: {
@@ -649,14 +646,9 @@ Periwound: [normal/macerated/erythematous/indurated/ecchymotic/callused/fluctuan
 -Encourage protein supplementation and dietitian evaluation as needed
 -Re-evaluation [in 1 week / in 2 weeks / PRN]. Notify LaVida MD or APP sooner for any concerns- conveyed to facility wound care RN and DON.`],
       ["Procedures", PROC()],
-      ["Total Time", TIME()]
-      /* Medical Decision-Making Summary DELETED — Abby, on the record (7/16 Zoom): "Claude record
-         that: MDM deleted." It was byte-identical boilerplate she hand-copied into PCC's separate MDM
-         box every single note ("I was cursing every time"), and Shevie already had a PCC dot-phrase
-         (.sktime) that fills it in six keystrokes. PCC requires the box; PCC fills it. Scott: "we're
-         over-complicating it by making Scott add." This also removes the `Total time: [***] minutes`
-         dangling-text leak by deletion rather than logic. See MDM() below — kept, unreferenced, so the
-         wording survives for whoever authors the Global Macro dot-phrase. */
+      ["Total Time", TIME()],
+      /* MDM reinstated 2026-07-23 — same as the Initial note above. */
+      ["MDM", ""]
     ]
   }
 };
@@ -677,10 +669,19 @@ Cleansing / prep: [wound cleanser / saline / other: ***]
 Endpoint: [debrided to healthy bleeding tissue / debrided to viable margins / hemostasis achieved]
 Procedure note: The wound was cleansed with wound cleaner. Topical anesthetic was applied. A curette was used to loosen the slough, exudate, and to remove underlying nonviable tissues over the entire surface of the wound. Once I reached pink, healthy, bleeding tissues, I stopped and applied pressure. There was no evidence of tunneling, purulent drainage, fluctuance or induration otherwise.
 Tolerance of Procedure: [tolerated well / tolerated with discomfort / procedure aborted]`;}
-function MDM(){return `I evaluated the patient, reviewed relevant facility records, medications, wound history, nursing documentation, and available labs/imaging. I assessed wound etiology, infection risk, perfusion, pressure/offloading, edema, nutrition, and barriers to healing. Orders and return precautions were communicated to facility staff.
-Total time: [***] minutes, excluding separately billable procedures.`;}
-/* Total-time line restored as its own bottom section (Scott, 2026-07-17) — the MDM boilerplate above
-   stays deleted (PCC .sktime fills it), but time-based billing still needs the minutes documented. */
+/* MDM REINSTATED as a live section (Shevie + Abby email 2026-07-22/23) — the 7/16 deletion was right
+   for its time (the boilerplate was hand-copied into PCC's SEPARATE MDM box; .sktime filled it there),
+   but the flow changed: PCC is moving to a ONE-BOX note the composer pastes whole, so the MDM content
+   has to ride in the note itself. Shevie's rules: (1) the E&M time/review attestation belongs ONLY on
+   visits with NO procedure ("when a procedure is done, time documentation is irrelevant… you bill for
+   THINKING"); (2) "Assessment and plan discussed with DON and staff" should always be there (Abby was
+   free-texting it every visit). The attestation below is the practice's own preserved wording — kept
+   unreferenced since 7/16 exactly so it could be reused; swap it for Shevie's full .sktime text when
+   she sends it. The minutes themselves stay in the Total Time section (drops when unfilled). */
+function MDM_ATTEST(){return `I evaluated the patient, reviewed relevant facility records, medications, wound history, nursing documentation, and available labs/imaging. I assessed wound etiology, infection risk, perfusion, pressure/offloading, edema, nutrition, and barriers to healing. Orders and return precautions were communicated to facility staff.`;}
+function MDM_DON(){return `Assessment and plan discussed with DON and staff.`;}
+/* Total-time line restored as its own bottom section (Scott, 2026-07-17) — time-based billing needs
+   the minutes documented; an unfilled [***] makes the whole sentence drop from the paste. */
 function TIME(){return `Total time: [***] minutes, excluding separately billable procedures.`;}
 
 /* ============ WORKSPACE STATE — MANY patients, each with their own full note.
@@ -3608,6 +3609,34 @@ function buildSection(name,idx,text){
     sectionResolvers.push({name,
       resolve:   ()=> sectionRemoved(name) ? '' : compose(false),
       resolveRaw:()=> sectionRemoved(name) ? '' : compose(true)
+    });
+    wrap.appendChild(body); return wrap;
+  }
+
+  /* MDM = two fixed lines with ONE rule (Shevie 2026-07-23): the E&M time/review attestation prints
+     ONLY when no wound had a procedure this visit (read straight off the per-wound "performed?"
+     answers — the same `:__done` keys the Procedures section prints from, so the two can never
+     disagree); the "discussed with DON and staff" line prints always. No inputs, nothing to fill —
+     the display greys the attestation the moment a procedure flips to Yes so the provider can SEE
+     it leave the note. */
+  if(name==='MDM'){
+    const anyProc=()=>{ try{ return Object.keys(STATE||{}).some(k=>/:w\d+:__done$/.test(k) && STATE[k]==='yes'); }catch(e){ return false; } };
+    const att=document.createElement('div'); att.className='lit'; att.textContent=MDM_ATTEST();
+    const hint=document.createElement('div'); hint.className='lit';
+    hint.style.cssText='font-size:11.5px;color:var(--muted);margin:4px 0 8px';
+    hint.textContent='↑ prints only on visits with NO procedure (time-based E&M language — a procedure visit bills the procedure instead)';
+    const don=document.createElement('div'); don.className='lit'; don.textContent=MDM_DON();
+    body.appendChild(att); body.appendChild(hint); body.appendChild(don);
+    const paint=()=>{ const off=anyProc();
+      att.style.opacity=off?'0.4':'1';
+      att.style.textDecoration=off?'line-through':'none';
+      hint.textContent=off?'↑ dropped from this note — a procedure was performed this visit'
+                          :'↑ prints only on visits with NO procedure (time-based E&M language — a procedure visit bills the procedure instead)';
+    };
+    const text=(raw)=> (anyProc() ? '' : MDM_ATTEST()+'\n') + MDM_DON();
+    sectionResolvers.push({name,
+      resolve:   ()=>{ paint(); return text(false); },
+      resolveRaw:()=>{ paint(); return text(true); }
     });
     wrap.appendChild(body); return wrap;
   }
