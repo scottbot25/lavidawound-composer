@@ -134,6 +134,11 @@
         <select id="r_prov" onchange="onProvPick(this)"></select>
       </div>
     </div>
+    <!-- Next-day access (Abby 2026-07-22: "an RN wants a change in the orders" after the round is off
+         the screen). Today's round already restores by itself on open; this reaches BACK — any round
+         saved in the last week can be reloaded, amended, and re-sent. A Cleared round is gone on
+         purpose (Clear wipes the cloud copy too); the PCC note + saved sheet remain the record. -->
+    <button class="tiny no-print" style="margin-top:8px" onclick="openRecentRounds()">↩ Load a recent round</button>
   </div>
 
   <!-- PATIENT TABS -->
@@ -146,6 +151,18 @@
 <footer class="no-print">
   <button class="primary" onclick="openReview()">Review &amp; send</button>
 </footer>
+
+<!-- RECENT ROUNDS — reload a past round (last 7 days) to amend orders after it left the screen -->
+<div class="modal" id="recentRounds">
+  <div class="sheet">
+    <div class="row" style="justify-content:space-between">
+      <b>Load a recent round</b>
+      <button class="tiny" onclick="closeRecentRounds()">Close</button>
+    </div>
+    <div class="muted" style="margin-top:6px">Rounds saved to ClinicalVault in the last 7 days. Loading one replaces what’s on screen; re-saving updates the same round.</div>
+    <div id="rrList" style="margin-top:10px"></div>
+  </div>
+</div>
 
 <!-- REVIEW = the confirmation screen. Nothing reaches a nurse unseen. -->
 <div class="modal" id="review">
@@ -439,11 +456,36 @@ function paintCount(){
   const n = S.pts.filter(p=>(p.name||'').trim()).length;
   document.getElementById('countPill').textContent = n+' patient'+(n===1?'':'s');
 }
+/* ABC ordering (Abby 2026-07-22: the card should line up with PCC's name-sorted patient list).
+   DISPLAY-only — S.pts keeps entry order (indices stay stable for pickPt/delPt/setW), and every
+   surface sorts a copy: tabs, the sheet (so "Patient N of M" counts alphabetically too), and the
+   Review send-picker. Named patients A→Z, case-insensitive; unnamed ones sink to the end in entry
+   order (a name being typed re-sorts per keystroke — only the tab strip repaints, focus stays put). */
+function _abcPairs(){
+  return S.pts.map((p,i)=>[p,i]).sort((a,b)=>{
+    const an=(a[0].name||'').trim().toLowerCase(), bn=(b[0].name||'').trim().toLowerCase();
+    if(!an && !bn) return a[1]-b[1];
+    if(!an) return 1;
+    if(!bn) return -1;
+    return an.localeCompare(bn) || (a[1]-b[1]);
+  });
+}
+function _abcSort(list){
+  return list.slice().sort((a,b)=>{
+    const an=(a.name||'').trim().toLowerCase(), bn=(b.name||'').trim().toLowerCase();
+    if(!an && !bn) return 0;
+    if(!an) return 1;
+    if(!bn) return -1;
+    return an.localeCompare(bn);
+  });
+}
 function paintTabs(){
   const t=document.getElementById('tabs');
-  t.innerHTML = S.pts.map((p,i)=>
-    '<button class="tab'+(i===S.active?' on':'')+'" onclick="pickPt('+i+')">'+
-    esc((p.name||'').trim() || 'Patient '+(i+1))+'</button>').join('')
+  t.innerHTML = _abcPairs().map(pair=>{
+    const p=pair[0], i=pair[1];
+    return '<button class="tab'+(i===S.active?' on':'')+'" onclick="pickPt('+i+')">'+
+      esc((p.name||'').trim() || 'Patient '+(i+1))+'</button>';
+  }).join('')
     + '<button class="tab" onclick="addPt()">+ Patient</button>';
 }
 /* A categorical dropdown that always offers an "Other" escape; picking "Other" reveals a
@@ -641,7 +683,7 @@ function statusBadge(w){
    SOLID TEAL NAME BANNER ("PATIENT: name · Patient N of M · X wounds") so boundaries are unmissable. */
 function sheetHTML(list){
   const r=S.round;
-  const pts = list || S.pts.filter(p=>(p.name||'').trim());
+  const pts = _abcSort(list || S.pts.filter(p=>(p.name||'').trim()));   // sheet prints A→Z, matching the tabs + PCC's list
   const css =
     "body{font:12pt/1.45 'Segoe UI',Arial,Helvetica,sans-serif;color:#26241f;margin:0;padding:22px;background:#fff}"
    +"table{border-collapse:collapse}"
@@ -786,7 +828,7 @@ function setAllSend(on){ S.pts.forEach(p=>{ if((p.name||'').trim()) p.send=on; }
    so no needless control (fewer taps for the provider). */
 function paintSendPick(){
   const el=document.getElementById('sendPick'); if(!el) return;
-  const named=S.pts.filter(p=>(p.name||'').trim());
+  const named=_abcSort(S.pts.filter(p=>(p.name||'').trim()));   // picker lists A→Z like the tabs + sheet
   if(named.length<=1){ el.innerHTML=''; return; }
   const sel=named.filter(p=>p.send!==false).length;
   el.innerHTML='<div class="sp-head"><b>Send which patients?</b> <span class="muted">'+sel+' of '+named.length+' selected</span>'
@@ -1434,6 +1476,73 @@ async function rcRestoreFromVault(){
     save(); paintRound(); render();
     toast('Restored today’s round from ClinicalVault ('+S.pts.length+' patient'+(S.pts.length===1?'':'s')+')');
   }catch(e){}
+}
+
+/* ---------- Load a recent round (Abby 2026-07-22) ----------
+   Reaches BACK where restore-on-open only covers today: any round saved in the last 7 days can be
+   reloaded to amend orders after the fact ("samira or an RN wants a change... the next day").
+   Click-driven, so interactive sign-in is fine (standalone redirects; in the overlay the token comes
+   from the composer via the broker). Loading keeps the round's ORIGINAL date — re-saving updates the
+   SAME records (same ids), so the composer's update path sees the amendments. A Cleared round will
+   not appear here: Clear deletes the cloud records on purpose. */
+const RR_DAYS=7;
+let _rrGroups=[];
+function closeRecentRounds(){ document.getElementById('recentRounds').classList.remove('on'); }
+async function openRecentRounds(){
+  const modal=document.getElementById('recentRounds'), list=document.getElementById('rrList');
+  modal.classList.add('on');
+  list.innerHTML='<div class="muted">Checking ClinicalVault…</div>';
+  try{
+    const token=await _vaultToken();
+    const {driveId}=await _vaultCtx(token);
+    const cut=Date.now()-RR_DAYS*24*3600*1000;
+    const facs=(await _vaultList(token,driveId,'RoundCards')).filter(it=>it.folder).map(it=>it.name);
+    const listings=await Promise.all(facs.map(fac=>
+      _vaultList(token,driveId,'RoundCards/'+fac).then(files=>({fac,files})).catch(()=>({fac,files:[]}))));
+    const fresh=[];
+    listings.forEach(({fac,files})=>files.forEach(f=>{
+      if(!/\.json$/i.test(f.name||'')) return;
+      const t=Date.parse(f.lastModifiedDateTime||''); if(isNaN(t)||t<cut) return;
+      fresh.push({fac,f});
+    }));
+    const recs=await Promise.all(fresh.map(({fac,f})=>{
+      const dl=f['@microsoft.graph.downloadUrl'];
+      if(dl) return fetch(dl).then(r=>r.ok?r.json():null).catch(()=>null);
+      return _vaultReadJson(token,driveId,'RoundCards/'+fac+'/'+f.name).catch(()=>null);
+    }));
+    const groups={};
+    recs.forEach(rec=>{
+      if(!rec || rec.schema!=='roundcard.v1') return;
+      const d=String(rec.date||'').slice(0,10); if(!d) return;
+      const k=d+'|'+(rec.facility||'');
+      (groups[k]=groups[k]||{date:d, facility:rec.facility||'', provider:rec.provider||'', recs:[]}).recs.push(rec);
+      if(rec.provider && !groups[k].provider) groups[k].provider=rec.provider;
+    });
+    _rrGroups=Object.keys(groups).map(k=>groups[k])
+      .sort((a,b)=>b.date.localeCompare(a.date) || String(a.facility).localeCompare(String(b.facility)));
+    if(!_rrGroups.length){ list.innerHTML='<div class="muted">No rounds saved in the last '+RR_DAYS+' days.</div>'; return; }
+    list.innerHTML=_rrGroups.map((g,i)=>
+      '<button class="rr-row" onclick="loadRecentRound('+i+')" style="display:block;width:100%;text-align:left;margin-top:6px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel);font:inherit;cursor:pointer">'
+      +'<b>'+esc(g.date)+'</b> · '+esc(g.facility||'Unfiled')+' · '+g.recs.length+' patient'+(g.recs.length===1?'':'s')
+      +(g.provider?' <span class="muted">('+esc(g.provider)+')</span>':'')
+      +'</button>').join('');
+  }catch(e){
+    list.innerHTML='<div class="muted">⚠ '+esc(e.message||'Couldn’t reach ClinicalVault')+'</div>';
+  }
+}
+function loadRecentRound(i){
+  const g=_rrGroups[i]; if(!g) return;
+  if(S.pts.some(p=>(p.name||'').trim())
+     && !confirm('Replace what’s on screen with the '+g.date+' round for '+(g.facility||'this facility')+'?\n\nThe current round is already backed up to ClinicalVault if it was named and saved.')) return;
+  const mine=g.recs.slice().sort((a,b)=>String(a.savedAt||'').localeCompare(String(b.savedAt||'')));
+  S.round.fac=g.facility||S.round.fac; S.round.date=g.date; S.round.prov=S.round.prov||g.provider||'';
+  S.round.facLock=(S.round.fac||'').trim();
+  S.pts=mine.map(r=>({ id:r.id||newId(), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], send:true, visitType:r.visitType||'' }));
+  normalizePts(S); S.active=0;
+  S.pts.forEach(p=>{ try{ _rcCloudSig[p.id]=_rcSig(p); }catch(e){} });   // loaded = already in the cloud; only edits re-upload
+  save(); paintRound(); render();
+  closeRecentRounds();
+  toast('Loaded the '+g.date+' round ('+S.pts.length+' patient'+(S.pts.length===1?'':'s')+') — edits update the same round');
 }
 setTimeout(rcRestoreFromVault, 150);   // was 800ms — an arbitrary pause the provider felt on every open
 </script>
