@@ -2604,6 +2604,39 @@ function _rcRecentCutoff(){ const d=new Date(); d.setDate(d.getDate()-RC_PULL_DA
 function _rcKey(rec){ return (rec&&rec.id) || [_rcFacSeg(rec&&rec.facility), String((rec&&rec.patient&&rec.patient.name)||'').toLowerCase().trim(), String((rec&&rec.date)||'').slice(0,10)].join('|'); }
 function _rcSeenLoad(){ try{ const o=JSON.parse(localStorage.getItem(RC_SEEN_KEY)||'{}'); return (o&&typeof o==='object')?o:{}; }catch(e){ return {}; } }
 function _rcSeenSave(o){ try{ localStorage.setItem(RC_SEEN_KEY, JSON.stringify(o)); }catch(e){} }
+/* ===== Slot reuse vs. name correction (Scott 2026-07-23) =====
+   A Round Card patient SLOT keeps its id for life, so two very different events look identical to us —
+   same record id, different name:
+     (a) the provider fixed a SPELLING on the same patient ("Jon" -> "John"),
+     (b) the provider RETYPED a finished slot to start a DIFFERENT patient (the "alpha" trap).
+   Guessing wrong is costly in both directions: treat (b) as (a) and one patient's wounds get folded into
+   another patient's note (silent, and clinically wrong); treat (a) as (b) and the provider gets a stray
+   duplicate. So we only call it the SAME patient when the names are near-identical, and we lean toward
+   "different" — a duplicate is visible and deletable, a merged note is not.
+   Near-identical = same slug, one contained in the other (a middle name/suffix added or dropped), or a
+   small edit distance (a typo fix). Anything else is a different person. */
+function _rcNameLev(a,b){                                  // Levenshtein; name slugs only, so O(n*m) is fine
+  a=String(a||''); b=String(b||'');
+  const m=a.length, n=b.length;
+  if(!m) return n;
+  if(!n) return m;
+  let prev=new Array(n+1), cur=new Array(n+1);
+  for(let j=0;j<=n;j++) prev[j]=j;
+  for(let i=1;i<=m;i++){
+    cur[0]=i;
+    for(let j=1;j<=n;j++) cur[j]=Math.min(prev[j]+1, cur[j-1]+1, prev[j-1]+(a.charAt(i-1)===b.charAt(j-1)?0:1));
+    const t=prev; prev=cur; cur=t;
+  }
+  return prev[n];
+}
+function _rcSameSlotPatient(oldK, newK){
+  oldK=String(oldK||'').trim(); newK=String(newK||'').trim();
+  if(!oldK || !newK) return true;                          // legacy entry with no remembered name — behave as before
+  if(oldK===newK) return true;
+  if(oldK.indexOf(newK)>=0 || newK.indexOf(oldK)>=0) return true;   // "john-smith" <-> "john-a-smith"
+  const L=Math.max(oldK.length, newK.length);
+  return L>0 && (1 - _rcNameLev(oldK,newK)/L) >= 0.8;      // a spelling fix, not a different person
+}
 
 /* THIS provider's records only (Scott 2026-07-22, first two-provider morning: "why am I seeing the
    patients Abby is adding?" — the pull took EVERY provider's records). Same acceptance rule as the
@@ -2782,7 +2815,18 @@ async function rcAutoPull(reason){
         // The card was RE-SAVED after we pulled it — refresh the patient it created, quietly.
         const srcPid=Object.keys(WS.patients).find(pid=>{ const p=WS.patients[pid];
           return p && (p.srcRcId===r.id || (!p.srcRcId && p.srcRcKey && p.srcRcKey===_rcKey(r))); });
-        if(srcPid){
+        // Is this still the SAME patient, or was the card slot retyped for a different one? (see
+        // _rcSameSlotPatient). Computed once here — both the update path and the deleted path use it.
+        const oldK=(seen[r.id]&&typeof seen[r.id]==='object')?String(seen[r.id].k||''):'';
+        const newK=String(r.key||'');
+        const sameSlotPatient=_rcSameSlotPatient(oldK, newK);
+        if(srcPid && !sameSlotPatient){
+          // SLOT REUSE with the first patient's note still open. Leave that note completely alone —
+          // its wounds are NOT this person's — and drop its card tag so no later update can land on it.
+          // The new occupant is created below via the normal collision/prefill path.
+          try{ const _op=WS.patients[srcPid]; if(_op){ _op.srcRcId=null; _op.srcRcKey=null; _op.rcName=null; } }catch(e2){}
+        }
+        if(srcPid && sameSlotPatient){
           rcMergeIntoPatient(srcPid, r); pulled++;
           const nm=((r.patient&&r.patient.name)||'').trim()||'Patient';
           toast('Updated '+nm+' from their Round Card');
@@ -2802,9 +2846,7 @@ async function rcAutoPull(reason){
         // Scott 2026-07-21), the record's name-slug no longer matches the one remembered at pull time:
         // that's a NEW patient, not a resurrection — fall through and create them. Same slug (or no
         // remembered slug, legacy entries) = genuinely the deleted patient -> stays deleted.
-        const oldK=(seen[r.id]&&typeof seen[r.id]==='object')?String(seen[r.id].k||''):'';
-        const newK=String(r.key||'');
-        if(!(oldK && newK && newK!==oldK)){
+        if(!srcPid && sameSlotPatient){
           seen[r.id]={t:now, sa:String(r.savedAt||''), k:newK||oldK};
           continue;   // never resurrects a patient the provider deleted
         }
