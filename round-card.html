@@ -1390,7 +1390,14 @@ function clearAll(btn){
     return;
   }
   clearTimeout(_clearArm); _clearArm=null;
-  const doomed=(S.pts||[]).filter(p=>p.id).map(p=>p.id);
+  /* The cloud cleanup below exists for ONE reason: stop restore-on-open from resurrecting a round the
+     provider deliberately wiped. Restore only ever looks at TODAY (rcRestoreFromVault), so for a round
+     that is NOT today's there is nothing to resurrect — deleting its records would be pure collateral
+     damage. That matters now that a past round can be LOADED and amended (openRecentRounds): tidying up
+     with Clear afterwards used to wipe that older round's records out of the vault. Clear still wipes
+     the screen either way; it just no longer reaches back into history. */
+  const isTodaysRound = String(S.round.date||'').slice(0,10)===todayISO();
+  const doomed=isTodaysRound ? (S.pts||[]).filter(p=>p.id).map(p=>p.id) : [];
   const fac=cleanSeg(S.round.fac)||'Unfiled';
   S=blank(); try{ sessionStorage.removeItem(KEY); }catch(e){}
   Object.keys(_rcCloudSig).forEach(k=>delete _rcCloudSig[k]);
@@ -1535,6 +1542,13 @@ function loadRecentRound(i){
   if(S.pts.some(p=>(p.name||'').trim())
      && !confirm('Replace what’s on screen with the '+g.date+' round for '+(g.facility||'this facility')+'?\n\nThe current round is already backed up to ClinicalVault if it was named and saved.')) return;
   const mine=g.recs.slice().sort((a,b)=>String(a.savedAt||'').localeCompare(String(b.savedAt||'')));
+  /* A half-finished two-tap action refers to a patient by INDEX, and we are about to replace the whole
+     list — the second tap would land on whoever now sits at that index and delete the wrong patient
+     (record and all). Disarm both before swapping. */
+  try{ if(_delArm){ if(_delArm.t) clearTimeout(_delArm.t); _delArm=null; } }catch(e){}   // its button is rebuilt by render() below
+  try{ if(_clearArm){ clearTimeout(_clearArm); _clearArm=null;
+    const cb=document.getElementById('clearBtn');                                        // header button — render() doesn't touch it
+    if(cb){ cb.textContent='Clear'; cb.style.background=''; cb.style.color=''; } } }catch(e){}
   S.round.fac=g.facility||S.round.fac; S.round.date=g.date; S.round.prov=S.round.prov||g.provider||'';
   S.round.facLock=(S.round.fac||'').trim();
   S.pts=mine.map(r=>({ id:r.id||newId(), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], send:true, visitType:r.visitType||'' }));
