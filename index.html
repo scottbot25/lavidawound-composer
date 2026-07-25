@@ -2895,6 +2895,14 @@ let woundSectionName = null; // name of the section that owns the wound cards �
 let dressingsSync = null;    // re-renders the per-wound dressings rows when wounds change
 let procSync = null;         // rebuilds the per-wound Procedures cards when the wound set changes (add/remove)
 let procHooks = [];          // live repaint fns for procedure blocks (inherited PRE-debridement dims + debrided SA); run on every resolveAll
+/* "Did any wound get a procedure this visit?" — owned by the Procedures section, which is the only
+   thing that knows which wounds actually EXIST right now. The MDM section asks THIS instead of
+   scanning STATE for `:__done` keys: deleting a wound leaves its answer behind in the store (nothing
+   prunes per-wound keys), so a store scan reported a procedure for a wound that is no longer in the
+   note — and MDM then dropped the E&M time attestation from a visit that documents no procedure at
+   all. That is a billing miss, and it fired on the ordinary delete-and-re-add. Null until the
+   Procedures section builds; null = no procedures = the attestation prints (the safe direction). */
+let procAnyDone = null;
 let peNormalFields = [];     // the 5 systemic PE lines (General/CV/Resp/Abd/Neuro) — the "Normal exam" macro button fills/clears these; NOT auto-prefilled (Scott 2026-07-20)
 function isFillOpt(o){ o=String(o).trim(); return /\*\*\*/.test(o) || /^other\b/i.test(o); }  // "***", "other: ***", or "other"
 // Exam fields documented per-leg (Right/Left) — extremities + vascular. See renderBilateral.
@@ -3596,6 +3604,10 @@ function buildSection(name,idx,text){
       });
     }
     build(); procSync=build;
+    // Publish the one true answer to "was a procedure performed this visit?" — a live read over the
+    // blocks that exist RIGHT NOW (see procAnyDone). MDM consumes this; a deleted wound's leftover
+    // answer can't reach it, because a deleted wound has no block.
+    procAnyDone = ()=> blocks.some(b=>b.on());
     // Only wounds with the toggle ON print; label each with its PERMANENT number when >1 wound exists,
     // so the chart never leaves it ambiguous which wound was debrided.
     const compose=(raw)=>{
@@ -3620,7 +3632,9 @@ function buildSection(name,idx,text){
      the display greys the attestation the moment a procedure flips to Yes so the provider can SEE
      it leave the note. */
   if(name==='MDM'){
-    const anyProc=()=>{ try{ return Object.keys(STATE||{}).some(k=>/:w\d+:__done$/.test(k) && STATE[k]==='yes'); }catch(e){ return false; } };
+    // Ask the Procedures section (procAnyDone), NEVER the store: a deleted wound's answer lingers in
+    // STATE and would silently strip the time attestation off a no-procedure visit.
+    const anyProc=()=>{ try{ return typeof procAnyDone==='function' ? !!procAnyDone() : false; }catch(e){ return false; } };
     const att=document.createElement('div'); att.className='lit'; att.textContent=MDM_ATTEST();
     const hint=document.createElement('div'); hint.className='lit';
     hint.style.cssText='font-size:11.5px;color:var(--muted);margin:4px 0 8px';
@@ -4053,7 +4067,7 @@ function setMode(mode){
   // own noteType (activateForm/chooseNoteType/init all pass it), so keep the two in lockstep; the backstop
   // stamp only fills a missing value (a brand-new patient), never flips an existing one.
   MODE=mode; { const _p=activePt(); if(_p && !_p.noteType) _p.noteType=mode; }
-  STATE=STORE[mode]; dressingsSync=null; procSync=null; procHooks=[]; peNormalFields=[];
+  STATE=STORE[mode]; dressingsSync=null; procSync=null; procHooks=[]; procAnyDone=null; peNormalFields=[];
   syncPatientField();
   document.getElementById('tab-new').classList.toggle('on',mode==='new');
   document.getElementById('tab-fu').classList.toggle('on',mode==='fu');
