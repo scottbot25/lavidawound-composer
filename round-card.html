@@ -159,7 +159,7 @@
       <b>Load a recent round</b>
       <button class="tiny" onclick="closeRecentRounds()">Close</button>
     </div>
-    <div class="muted" style="margin-top:6px">Rounds saved to ClinicalVault in the last 7 days. Loading one replaces what’s on screen; re-saving updates the same round.</div>
+    <div class="muted" style="margin-top:6px">Your most recent rounds saved to ClinicalVault. Loading one replaces what’s on screen; re-saving updates the same round.</div>
     <div id="rrList" style="margin-top:10px"></div>
   </div>
 </div>
@@ -1492,7 +1492,13 @@ async function rcRestoreFromVault(){
    from the composer via the broker). Loading keeps the round's ORIGINAL date — re-saving updates the
    SAME records (same ids), so the composer's update path sees the amendments. A Cleared round will
    not appear here: Clear deletes the cloud records on purpose. */
-const RR_DAYS=7;
+/* Show the LAST N ROUNDS, not "rounds in the last N days" (Scott 2026-07-24). A day window has a cliff:
+   miss a week and a day — or come back from two weeks off — and the list is empty exactly when reopening
+   an old round is what you need. A count never empties, and each row prints its own date so an old one is
+   obvious. RR_LOOKBACK_DAYS is only a perf bound on how much of the (never-purged) RoundCards folder we
+   download; it is deliberately far wider than any real round. */
+const RR_MAX_ROUNDS=10;
+const RR_LOOKBACK_DAYS=60;
 let _rrGroups=[];
 function closeRecentRounds(){ document.getElementById('recentRounds').classList.remove('on'); }
 async function openRecentRounds(){
@@ -1502,7 +1508,7 @@ async function openRecentRounds(){
   try{
     const token=await _vaultToken();
     const {driveId}=await _vaultCtx(token);
-    const cut=Date.now()-RR_DAYS*24*3600*1000;
+    const cut=Date.now()-RR_LOOKBACK_DAYS*24*3600*1000;
     const facs=(await _vaultList(token,driveId,'RoundCards')).filter(it=>it.folder).map(it=>it.name);
     const listings=await Promise.all(facs.map(fac=>
       _vaultList(token,driveId,'RoundCards/'+fac).then(files=>({fac,files})).catch(()=>({fac,files:[]}))));
@@ -1526,8 +1532,9 @@ async function openRecentRounds(){
       if(rec.provider && !groups[k].provider) groups[k].provider=rec.provider;
     });
     _rrGroups=Object.keys(groups).map(k=>groups[k])
-      .sort((a,b)=>b.date.localeCompare(a.date) || String(a.facility).localeCompare(String(b.facility)));
-    if(!_rrGroups.length){ list.innerHTML='<div class="muted">No rounds saved in the last '+RR_DAYS+' days.</div>'; return; }
+      .sort((a,b)=>b.date.localeCompare(a.date) || String(a.facility).localeCompare(String(b.facility)))
+      .slice(0, RR_MAX_ROUNDS);                    // the last N rounds, newest first — however old they are
+    if(!_rrGroups.length){ list.innerHTML='<div class="muted">No saved rounds found.</div>'; return; }
     list.innerHTML=_rrGroups.map((g,i)=>
       '<button class="rr-row" onclick="loadRecentRound('+i+')" style="display:block;width:100%;text-align:left;margin-top:6px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel);font:inherit;cursor:pointer">'
       +'<b>'+esc(g.date)+'</b> · '+esc(g.facility||'Unfiled')+' · '+g.recs.length+' patient'+(g.recs.length===1?'':'s')

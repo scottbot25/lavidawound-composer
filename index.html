@@ -2592,7 +2592,19 @@ function applyRcReconcile(){
    any it hasn't already handled — each under the building it was filed in, name + wounds carried over.
    Dedup is by stable id, remembered durably so re-opening never re-dumps and a patient you finished
    and removed doesn't come back. All best-effort: a read hiccup never blocks the note. */
-const RC_PULL_DAYS=3;                        // how far back to look (a provider writing next-day notes still gets yesterday's)
+/* NOT a single "how far back" window — the two things this does carry very different risk, so they get
+   different rules (Scott 2026-07-24: "rather than a day limit should it be last visit specific?" — yes).
+   AN EDIT TO A CARD WE ALREADY PULLED: no age test at all. That record is already tied to a patient in
+   the note, so a late order change simply belongs to them; a day limit there is an arbitrary cliff that
+   would silently drop the amendment (the whole point of being able to reopen an old round).
+   AN UNSEEN CARD CREATING A NEW PATIENT: still recency-gated, on purpose. The already-pulled set lives
+   in this browser's localStorage, so on a new device (or after clearing browsing data) it is EMPTY — with
+   no guard, first open would dump every patient of the last N weeks into the workspace, and each new
+   patient also costs a wound-history read.
+   RC_LIST_DAYS is neither of those: it is only a perf bound on how much of the (never-purged) RoundCards
+   folder we download per pull. Generous enough that no real amendment falls outside it. */
+const RC_LIST_DAYS=60;                       // perf bound on the listing — NOT a behavior window
+const RC_PULL_DAYS=3;                        // an UNSEEN card only auto-creates a patient this recently
 const RC_SEEN_KEY='rc_pulled_v1';            // durable set of already-pulled round-card IDs. IDs are random
 /* RECOVERY VALVE (2026-07-22, mid-rounds): opening notes.lavidaheal.com/?repull=1 forgets which card
    records were already pulled, so the next pull brings EVERY recent record back — the escape hatch for
@@ -2601,7 +2613,8 @@ const RC_SEEN_KEY='rc_pulled_v1';            // durable set of already-pulled ro
    prompt and merge instead of duplicating. One-shot: the flag does not persist past this load. */
 try{ if(new URLSearchParams(location.search).get('repull')==='1') localStorage.removeItem(RC_SEEN_KEY); }catch(e){}
 const RC_SEEN_TTL_MS=21*24*60*60*1000;       // tokens (no patient info), so this localStorage set is NOT PHI.
-function _rcRecentCutoff(){ const d=new Date(); d.setDate(d.getDate()-RC_PULL_DAYS); return d.toISOString().slice(0,10); }
+function _rcRecentCutoff(){ const d=new Date(); d.setDate(d.getDate()-RC_LIST_DAYS);  return d.toISOString().slice(0,10); }   // perf bound on what we LIST
+function _rcCreateCutoff(){ const d=new Date(); d.setDate(d.getDate()-RC_PULL_DAYS);  return d.toISOString().slice(0,10); }   // what may auto-CREATE a patient
 function _rcKey(rec){ return (rec&&rec.id) || [_rcFacSeg(rec&&rec.facility), String((rec&&rec.patient&&rec.patient.name)||'').toLowerCase().trim(), String((rec&&rec.date)||'').slice(0,10)].join('|'); }
 function _rcSeenLoad(){ try{ const o=JSON.parse(localStorage.getItem(RC_SEEN_KEY)||'{}'); return (o&&typeof o==='object')?o:{}; }catch(e){ return {}; } }
 function _rcSeenSave(o){ try{ localStorage.setItem(RC_SEEN_KEY, JSON.stringify(o)); }catch(e){} }
@@ -2784,8 +2797,15 @@ async function rcAutoPull(reason){
     const entrySa=e=>(typeof e==='object'&&e)?(e.sa==null?null:String(e.sa)):null;
     const isUpdate=r=>{ const e=seen[r.id]; const sa=entrySa(e);
       return !!(e && sa!==null && r.savedAt && String(r.savedAt)>sa); };
+    const createCut=_rcCreateCutoff();
     const fresh=recs.filter(r=>{
-      if(r&&r.id) return !seen[r.id] || isUpdate(r);
+      if(r&&r.id){
+        // Already pulled → an edit reaches the note regardless of the round's age (see RC_LIST_DAYS).
+        if(seen[r.id]) return isUpdate(r);
+        // Never seen → only auto-create from a recent round, so a fresh browser can't dump history.
+        const d=String(r.date||'').slice(0,10);
+        return !d || d>=createCut;
+      }
       const k=_rcKey(r); return k && !WS.rcPulled[k];           // legacy no-id record: name-based, this session only
     });
     // Lazily baseline legacy numeric entries so FUTURE card edits become detectable updates.
