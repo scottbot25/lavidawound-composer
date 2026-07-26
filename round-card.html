@@ -1597,9 +1597,10 @@ async function openRecentRounds(){
 }
 /* ---------- START FROM LAST VISIT (Abby 2026-07-22: "what will the rounding card pull from this week?
    ...there is some stuff that 100 percent shld pull forward so it keeps adding data") ----------
-   Rebuilds this week's panel for the CURRENT facility from each patient's OWN most recent earlier visit
-   (not "last week's round" — someone seen off-schedule still gets their history). What carries is settled
-   in the vault Decisions log, and the split is deliberate:
+   Rebuilds this week's panel for THIS PROVIDER at the CURRENT facility, from each patient's OWN most
+   recent earlier visit (not "last week's round" — someone seen off-schedule still gets their history),
+   limited to patients still active (see CF_ACTIVE_DAYS / okProv above).
+   What carries is settled in the vault Decisions log, and the split is deliberate:
      carried  : the patient, and each wound's LOCATION / TYPE / STAGE — the wound's identity
      reference: last visit's size, wound bed and status, shown beside the blank fields (w.prior)
      one tap  : orders and the education/plan text
@@ -1607,18 +1608,37 @@ async function openRecentRounds(){
    A wound marked Healed last visit is dropped; a patient the provider removed left no record behind, so
    they never come back. New ids are minted: this is a NEW round, not an edit of the old one. */
 function _cfNameKey(s){ return String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim(); }
+/* Only YOUR patients, and only ones you are actually still rounding on (Scott 2026-07-26: carrying
+   forward at Crestmoor returned "a whole load of patients"). Two separate causes, both fixed here:
+   (1) this listed the facility folder with NO provider filter, so it returned every patient ever carded
+       at that building by ANY provider — restore-on-open has always scoped by provider and this did not;
+   (2) the folder is never purged, so even your own long-discharged patients came back. A panel means who
+       you are seeing NOW, so carry-forward only reaches back CF_ACTIVE_DAYS (~4 weekly rounds). Someone
+       untouched for longer is re-added by hand, which is the honest default.
+   Unattributed (blank-provider) records are deliberately NOT accepted here: restore-on-open tolerates
+   them because it is same-day and almost certainly yours, but reaching back weeks across a shared
+   building is exactly how another provider's patients land on your card. */
+const CF_ACTIVE_DAYS=30;
 async function carryForward(){
   const facRaw=(S.round.fac||'').trim();
   if(!facRaw){ toast('Pick the facility first'); return; }
+  await _autoFillProvider();
+  let acct=''; try{ const a=_pca&&_pca.getAllAccounts&&_pca.getAllAccounts()[0]; acct=(a&&(a.name||a.username))||''; }catch(e){}
+  const prov=(S.round.prov||'').trim();
+  let lastProv=''; try{ lastProv=localStorage.getItem('rc_last_prov')||''; }catch(e){}
+  const okProv=new Set([prov,acct,lastProv].map(_nameKey).filter(Boolean));   // positive match required
+  if(!okProv.size){ toast('Set the Provider first so it knows whose patients to bring back'); return; }
+  const who=prov||acct||lastProv;
   if(S.pts.some(p=>(p.name||'').trim())
-     && !confirm('Replace what’s on screen with your panel from last visit at '+facRaw+'?')) return;
+     && !confirm('Replace what’s on screen with '+who+'’s patients from their last visit at '+facRaw+'?')) return;
   const btn=document.getElementById('cfBtn'); const lab=btn?btn.textContent:'';
   if(btn){ btn.disabled=true; btn.textContent='Checking…'; }
   try{
     const token=await _vaultToken();
     const {driveId}=await _vaultCtx(token);
     const today=todayISO();
-    const cut=Date.now()-RR_LOOKBACK_DAYS*24*3600*1000;
+    const cut=Date.now()-CF_ACTIVE_DAYS*24*3600*1000;
+    const activeFrom=(function(){ const d=new Date(); d.setDate(d.getDate()-CF_ACTIVE_DAYS); return d.toISOString().slice(0,10); })();
     const files=(await _vaultList(token,driveId,'RoundCards/'+cleanSeg(facRaw)))
       .filter(f=>/\.json$/i.test(f.name||''))
       .filter(f=>{ const t=Date.parse(f.lastModifiedDateTime||''); return !isNaN(t) && t>=cut; });
@@ -1627,19 +1647,28 @@ async function carryForward(){
       if(dl) return fetch(dl).then(r=>r.ok?r.json():null).catch(()=>null);
       return _vaultReadJson(token,driveId,'RoundCards/'+cleanSeg(facRaw)+'/'+f.name).catch(()=>null);
     }))).filter(Boolean);
-    // each patient's OWN latest visit strictly BEFORE today
+    // MY patients only, still active, each at their OWN latest visit strictly BEFORE today
     const byPatient={};
+    let skippedOtherProvider=0;
     recs.forEach(rec=>{
       if(!rec || rec.schema!=='roundcard.v1') return;
       const nm=((rec.patient&&rec.patient.name)||'').trim(); if(!nm) return;
-      const d=String(rec.date||'').slice(0,10); if(!d || d>=today) return;
+      const d=String(rec.date||'').slice(0,10);
+      if(!d || d>=today) return;                       // today's own round is not a "last visit"
+      if(d<activeFrom) return;                         // dormant — not on the panel any more
+      if(!okProv.has(_nameKey(rec.provider))){ skippedOtherProvider++; return; }   // someone else's patient
       const k=_cfNameKey(nm);
       if(!byPatient[k] || d>String(byPatient[k].date||'').slice(0,10)) byPatient[k]=rec;
     });
     const chosen=Object.keys(byPatient).map(k=>byPatient[k])
       .sort((a,b)=>String((a.patient&&a.patient.name)||'').toLowerCase()
                    .localeCompare(String((b.patient&&b.patient.name)||'').toLowerCase()));
-    if(!chosen.length){ toast('No earlier visits found at '+facRaw); return; }
+    if(!chosen.length){
+      toast(skippedOtherProvider
+        ? 'No recent visits for '+who+' at '+facRaw+' (the ones on file are another provider’s)'
+        : 'No visits for '+who+' at '+facRaw+' in the last '+CF_ACTIVE_DAYS+' days');
+      return;
+    }
     let healedDropped=0;
     const pts=chosen.map(rec=>{
       const src=Array.isArray(rec.wounds)?rec.wounds:[];
@@ -1672,7 +1701,7 @@ async function carryForward(){
     S.round.date=today; S.round.facLock=facRaw;
     S.pts=pts; normalizePts(S); S.active=0;
     save(); paintRound(); render();
-    toast('Brought forward '+pts.length+' patient'+(pts.length===1?'':'s')+' from their last visit'
+    toast('Brought forward '+pts.length+' of '+who+'’s patient'+(pts.length===1?'':'s')+' from their last visit'
       +(healedDropped?' · '+healedDropped+' healed wound'+(healedDropped===1?'':'s')+' left off':'')
       +' — measurements start blank');
   }catch(e){
