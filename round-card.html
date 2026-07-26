@@ -282,7 +282,9 @@ function normalizePts(o){
   if(!o || !Array.isArray(o.pts)) return;
   o.pts.forEach(p=>{ if(!p.id) p.id=newId(); if(typeof p.send!=='boolean') p.send=true; });
 }
-function save(){ try{ sessionStorage.setItem(KEY, JSON.stringify(S)); }catch(e){} if(typeof scheduleRcAutoSave==='function') scheduleRcAutoSave(); }
+function save(){ try{ sessionStorage.setItem(KEY, JSON.stringify(S)); }catch(e){}
+  if(typeof scheduleRcAutoSave==='function') scheduleRcAutoSave();
+  if(typeof scheduleSheetSave==='function') scheduleSheetSave(); }
 function todayISO(){ const d=new Date(), p=n=>String(n).padStart(2,'0');
   return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()); }
 
@@ -418,7 +420,13 @@ function applyFacChange(nf){
     + 'A sheet can only carry one facility\'s residents. Send '+lock+'\'s sheet first if you '
     + 'haven\'t.\n\nOK = clear them and start ' + (nf||'the new facility')
     + '\nCancel = stay on '+lock);
-  if(ok){ S.pts=[]; S.active=0; S.round.facLock=nf; S.round.fac=nf; save(); paintFacSel(); render(); toast('Started '+(nf||'a new facility')); }
+  if(ok){
+    // Moving to the next building IS the end of this one's round — the closest thing to a real signal
+    // we get. File the sheet before the patients are cleared. sheetAutoSave() captures the facility,
+    // date and patients synchronously, so this lands under the OLD building even though we change it
+    // on the next line.
+    clearTimeout(_sheetAutoT); sheetAutoSave();
+    S.pts=[]; S.active=0; S.round.facLock=nf; S.round.fac=nf; _sheetLastSig=''; save(); paintFacSel(); render(); toast('Started '+(nf||'a new facility')); }
   else  { S.round.fac=lock; save(); paintFacSel(); }
 }
 
@@ -751,8 +759,11 @@ function statusBadge(w){
    So: header = one solid table (title band + a facility/date/provider/patients strip); every patient
    after the first starts with an INLINE page-break-before:always; each patient opens with a full-width
    SOLID TEAL NAME BANNER ("PATIENT: name · Patient N of M · X wounds") so boundaries are unmissable. */
-function sheetHTML(list){
-  const r=S.round;
+/* roundOverride lets a caller pin the header to a round captured earlier — the auto-save needs it so a
+   flush triggered by switching facility can't stamp the previous building's patients with the new
+   building's name. Everything else passes nothing and gets the live round, exactly as before. */
+function sheetHTML(list, roundOverride){
+  const r=roundOverride||S.round;
   const pts = _abcSort(list || S.pts.filter(p=>(p.name||'').trim()));   // sheet prints A→Z, matching the tabs + PCC's list
   const css =
     "body{font:12pt/1.45 'Segoe UI',Arial,Helvetica,sans-serif;color:#26241f;margin:0;padding:22px;background:#fff}"
@@ -920,7 +931,7 @@ function paintSendPick(){
    _sheetOnFile: null = not checked yet, true/false = answer for the round currently on screen. */
 let _sheetOnFile=null, _sheetCheckKey='';
 function _sheetKey(){ return (cleanSeg(S.round.fac)||'Unfiled')+'|'+(String(S.round.date||'').slice(0,10)||'undated'); }
-function _sheetInvalidate(){ _sheetOnFile=null; _sheetCheckKey=''; }
+function _sheetInvalidate(){ _sheetOnFile=null; _sheetCheckKey=''; _sheetLastSig=''; }   // new round ⇒ re-check AND re-file
 async function _checkSheetOnFile(){
   const key=_sheetKey();
   if(_sheetCheckKey===key && _sheetOnFile!==null) return _sheetOnFile;   // already answered for this round
@@ -1256,9 +1267,64 @@ function scheduleRcAutoSave(){ clearTimeout(_rcAutoT); _rcAutoT=setTimeout(rcAut
    the page is gone. Same fix the composer drafts already have. Records are tiny (<<64KB keepalive cap). */
 let _rcKalFlush=false;
 function rcFlushAutoSave(){ clearTimeout(_rcAutoT); _rcKalFlush=true;
-  Promise.resolve(rcAutoSaveCloud()).catch(()=>{}).finally(()=>{ _rcKalFlush=false; }); }
+  Promise.resolve(rcAutoSaveCloud()).catch(()=>{}).finally(()=>{ _rcKalFlush=false; });
+  sheetAutoSave(); }
 window.addEventListener('pagehide', rcFlushAutoSave);
 document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='hidden') rcFlushAutoSave(); });
+
+/* ---------- THE HANDOFF SHEET SAVES ITSELF ----------
+   Scott 2026-07-26: "make the sheet save automatic at end of round. But what determines end of round?"
+   Nothing does, reliably. A timer fires before the last patient is seen; tab-close is unreliable and can
+   mean "back in a minute"; "every patient has orders" is true halfway through. Guessing wrong writes a
+   sheet that is missing people.
+
+   So we don't guess. The sheet is written to ONE filename per facility + date + provider, which means
+   re-saving overwrites — exactly like the patient records. Keep it CURRENT instead of trying to catch the
+   end, and whatever is there when the provider stops IS the finished sheet. Same idea that already makes
+   record auto-save safe, applied one level up.
+
+   Slower debounce than the records (a whole document, not one patient), skipped entirely when nothing
+   that appears on the sheet has changed, silent token only so it never interrupts a round, and it never
+   writes an empty sheet. The manual "Save to ClinicalVault" is untouched and still the deliberate
+   round-is-done action — it also files the QC count, which this does NOT (see the vault note). */
+const SHEET_AUTOSAVE_MS=20000;
+let _sheetAutoT=null, _sheetAutoBusy=false, _sheetLastSig='';
+function _sheetSig(pts){
+  try{ return JSON.stringify({p:pts, f:S.round.fac||'', d:S.round.date||'', pr:S.round.prov||''}); }
+  catch(e){ return String(Math.random()); }            // unserialisable -> treat as changed
+}
+function scheduleSheetSave(){ clearTimeout(_sheetAutoT); _sheetAutoT=setTimeout(sheetAutoSave, SHEET_AUTOSAVE_MS); }
+async function sheetAutoSave(){
+  if(_sheetAutoBusy) return;
+  /* EVERYTHING the filename and the document depend on is captured synchronously, before the first
+     await. Otherwise a flush triggered BY a facility switch would resolve after S.round.fac had already
+     moved on and file the old building's patients under the new building's name — a wrong-facility
+     disclosure, which is the one mistake this tool must never make. */
+  const pts=sentNamed().map(p=>JSON.parse(JSON.stringify(p)));
+  if(!pts.length) return;                              // never file an empty sheet
+  const facRaw=(S.round.fac||'').trim(); if(!facRaw) return;
+  const fac  = cleanSeg(facRaw) || 'Unfiled';
+  const date = /^\d{4}-\d{2}-\d{2}/.test(String(S.round.date||'')) ? S.round.date.slice(0,10) : 'undated';
+  const sig=_sheetSig(pts);
+  if(sig===_sheetLastSig) return;                      // nothing on the sheet changed
+  let token=null;
+  try{ token=await _vaultTokenSilent(); }catch(e){}
+  if(!token) return;                                   // signed out — stay quiet, the warning covers it
+  _sheetAutoBusy=true;
+  try{
+    await _autoFillProvider();                         // so the filename names who rounded
+    const prov = cleanSeg(S.round.prov) || 'Provider unlisted';
+    const {driveId}=await _vaultCtx(token);
+    const segs=['Daily Handoffs',fac,date];
+    await _vaultEnsureFolders(token,driveId,segs);
+    const blob=new Blob(['﻿'+sheetHTML(pts,{fac:facRaw, date:date, prov:S.round.prov||''})],{type:'application/msword'});
+    await _vaultUpload(token,driveId,segs,'Wound Orders — '+fac+' — '+date+' — '+prov+'.doc',blob,'application/msword');
+    _sheetLastSig=sig;
+    _sheetOnFile=true; _sheetCheckKey=_sheetKey();      // the round now HAS a sheet
+    _paintSheetWarn();
+  }catch(e){ /* leave _sheetLastSig unset so the next edit retries */ }
+  finally{ _sheetAutoBusy=false; }
+}
 async function rcAutoSaveCloud(){
   if(_rcAutoBusy){ _rcAutoAgain=true; return; }
   const named=(S.pts||[]).filter(p=>(p.name||'').trim() && p.send!==false);
