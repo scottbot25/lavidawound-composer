@@ -1487,6 +1487,32 @@ if(window.self !== window.top){
    provider + date). Restored patients seed the auto-save signature so nothing re-uploads. Clear
    deletes today's records (above), so a deliberately wiped round stays wiped. */
 function _nameKey(s){ return String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim().split(' ').filter(Boolean).sort().join(' '); }
+
+/* ============ THE ONE PROVIDER TEST — every read of RoundCards/ goes through this ============
+   `RoundCards/<facility>/` is SHARED by everyone who rounds that building and is never purged, so any
+   feature that reads it has to answer "whose record is this?". Four features grew their own answer:
+   restore-on-open and the composer's auto-pull got it right, "load a recent round" had none at all, and
+   carry-forward had none until it returned the whole of Crestmoor to Scott (2026-07-26). Same bug, four
+   chances to make it — so there is now exactly one implementation and no feature may hand-roll another.
+   A record is MINE if its provider matches the Provider box, the signed-in account, or the last provider
+   used on this device (spelling-insensitive via _nameKey, so "Dr. Kassai" == "kassai dr").
+   allowBlank = accept records with NO provider stamped. TRUE where the user still eyeballs the result or
+   it is same-day and almost certainly theirs (restore, the picker's labelled list); FALSE where records
+   are turned into patients unreviewed (carry-forward) — that is how someone else's patient would land on
+   your card. Legacy records saved before provider stamping are exactly the blank case, which is why this
+   is a parameter and not a hard rule: no existing data becomes unreachable. */
+function _cardProvSet(){
+  let acct=''; try{ const a=_pca&&_pca.getAllAccounts&&_pca.getAllAccounts()[0]; acct=(a&&(a.name||a.username))||''; }catch(e){}
+  let lastProv=''; try{ lastProv=localStorage.getItem('rc_last_prov')||''; }catch(e){}
+  const prov=(S.round.prov||'').trim();
+  const set=new Set([prov,acct,lastProv].map(_nameKey).filter(Boolean));
+  return { set, who: prov||acct||lastProv||'' };
+}
+function _cardProvOk(rec, okSet, allowBlank){
+  const p=_nameKey(rec && rec.provider);
+  if(!p) return !!allowBlank;
+  return okSet.has(p);
+}
 async function rcRestoreFromVault(){
   try{
     if((S.pts||[]).some(p=>(p.name||'').trim())) return;            // session already has work — never clobber
@@ -1496,11 +1522,8 @@ async function rcRestoreFromVault(){
     // accept UNATTRIBUTED records (older saves before the provider was stamped). Matching on the
     // account name alone silently dropped rounds when the Provider box named someone else (e.g. an
     // admin signs in but sets the actual rounding provider). Pre-rounds hardening, Scott 2026-07-21.
-    let acct=''; try{ const a=_pca&&_pca.getAllAccounts&&_pca.getAllAccounts()[0]; acct=(a&&(a.name||a.username))||''; }catch(e){}
-    const prov=(S.round.prov||'').trim();
-    let lastProv=''; try{ lastProv=localStorage.getItem('rc_last_prov')||''; }catch(e){}
-    if(!prov && !acct && !lastProv) return;                         // can't attribute anything — skip
-    const okProv=new Set([_nameKey(prov), _nameKey(acct), _nameKey(lastProv), ''].filter(x=>x!==undefined));
+    const _pv=_cardProvSet(); const okProv=_pv.set; const prov=(S.round.prov||'').trim();
+    if(!okProv.size) return;                                        // can't attribute anything — skip
     const {driveId}=await _vaultCtx(token);
     const today=todayISO(), cut=Date.now()-36*3600*1000, mine=[];
     // PERF (Scott 2026-07-21: "takes a little long to load in patients"): the old loop was fully
@@ -1523,7 +1546,7 @@ async function rcRestoreFromVault(){
     }));
     recs.forEach(rec=>{
       if(rec && rec.schema==='roundcard.v1' && String(rec.date||'').slice(0,10)===today
-         && okProv.has(_nameKey(rec.provider))) mine.push(rec);
+         && _cardProvOk(rec, okProv, true)) mine.push(rec);        // same-day: unattributed legacy records still count
     });
     if(!mine.length) return;
     mine.sort((a,b)=>String(a.savedAt||'').localeCompare(String(b.savedAt||'')));
@@ -1574,10 +1597,17 @@ async function openRecentRounds(){
       if(dl) return fetch(dl).then(r=>r.ok?r.json():null).catch(()=>null);
       return _vaultReadJson(token,driveId,'RoundCards/'+fac+'/'+f.name).catch(()=>null);
     }));
+    // WHOSE? — this list had no provider test at all until 2026-07-26, so it offered up every provider's
+    // rounds at a shared building. Unattributed legacy records are still shown (and labelled), because
+    // the provider reads each row before choosing one.
+    const _pv=_cardProvSet();
+    if(!_pv.set.size){ list.innerHTML='<div class="muted">Set the Provider first so it knows whose rounds to show.</div>'; return; }
+    let skippedOther=0;
     const groups={};
     recs.forEach(rec=>{
       if(!rec || rec.schema!=='roundcard.v1') return;
       const d=String(rec.date||'').slice(0,10); if(!d) return;
+      if(!_cardProvOk(rec, _pv.set, true)){ skippedOther++; return; }
       const k=d+'|'+(rec.facility||'');
       (groups[k]=groups[k]||{date:d, facility:rec.facility||'', provider:rec.provider||'', recs:[]}).recs.push(rec);
       if(rec.provider && !groups[k].provider) groups[k].provider=rec.provider;
@@ -1585,11 +1615,16 @@ async function openRecentRounds(){
     _rrGroups=Object.keys(groups).map(k=>groups[k])
       .sort((a,b)=>b.date.localeCompare(a.date) || String(a.facility).localeCompare(String(b.facility)))
       .slice(0, RR_MAX_ROUNDS);                    // the last N rounds, newest first — however old they are
-    if(!_rrGroups.length){ list.innerHTML='<div class="muted">No saved rounds found.</div>'; return; }
+    if(!_rrGroups.length){
+      list.innerHTML='<div class="muted">'+(skippedOther
+        ? 'No saved rounds for '+esc(_pv.who)+' — the ones on file belong to another provider.'
+        : 'No saved rounds found.')+'</div>';
+      return;
+    }
     list.innerHTML=_rrGroups.map((g,i)=>
       '<button class="rr-row" onclick="loadRecentRound('+i+')" style="display:block;width:100%;text-align:left;margin-top:6px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel);font:inherit;cursor:pointer">'
       +'<b>'+esc(g.date)+'</b> · '+esc(g.facility||'Unfiled')+' · '+g.recs.length+' patient'+(g.recs.length===1?'':'s')
-      +(g.provider?' <span class="muted">('+esc(g.provider)+')</span>':'')
+      +(g.provider?' <span class="muted">('+esc(g.provider)+')</span>':' <span class="muted">(no provider on file)</span>')
       +'</button>').join('');
   }catch(e){
     list.innerHTML='<div class="muted">⚠ '+esc(e.message||'Couldn’t reach ClinicalVault')+'</div>';
@@ -1623,12 +1658,8 @@ async function carryForward(){
   const facRaw=(S.round.fac||'').trim();
   if(!facRaw){ toast('Pick the facility first'); return; }
   await _autoFillProvider();
-  let acct=''; try{ const a=_pca&&_pca.getAllAccounts&&_pca.getAllAccounts()[0]; acct=(a&&(a.name||a.username))||''; }catch(e){}
-  const prov=(S.round.prov||'').trim();
-  let lastProv=''; try{ lastProv=localStorage.getItem('rc_last_prov')||''; }catch(e){}
-  const okProv=new Set([prov,acct,lastProv].map(_nameKey).filter(Boolean));   // positive match required
+  const _pv=_cardProvSet(); const okProv=_pv.set; const who=_pv.who;
   if(!okProv.size){ toast('Set the Provider first so it knows whose patients to bring back'); return; }
-  const who=prov||acct||lastProv;
   if(S.pts.some(p=>(p.name||'').trim())
      && !confirm('Replace what’s on screen with '+who+'’s patients from their last visit at '+facRaw+'?')) return;
   const btn=document.getElementById('cfBtn'); const lab=btn?btn.textContent:'';
@@ -1656,7 +1687,8 @@ async function carryForward(){
       const d=String(rec.date||'').slice(0,10);
       if(!d || d>=today) return;                       // today's own round is not a "last visit"
       if(d<activeFrom) return;                         // dormant — not on the panel any more
-      if(!okProv.has(_nameKey(rec.provider))){ skippedOtherProvider++; return; }   // someone else's patient
+      // allowBlank FALSE here: these become patients on the card without review (see _cardProvOk)
+      if(!_cardProvOk(rec, okProv, false)){ skippedOtherProvider++; return; }
       const k=_cfNameKey(nm);
       if(!byPatient[k] || d>String(byPatient[k].date||'').slice(0,10)) byPatient[k]=rec;
     });
