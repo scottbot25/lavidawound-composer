@@ -425,8 +425,8 @@ function applyFacChange(nf){
     // we get. File the sheet before the patients are cleared. sheetAutoSave() captures the facility,
     // date and patients synchronously, so this lands under the OLD building even though we change it
     // on the next line.
-    clearTimeout(_sheetAutoT); sheetAutoSave();
-    S.pts=[]; S.active=0; S.round.facLock=nf; S.round.fac=nf; _sheetLastSig=''; save(); paintFacSel(); render(); toast('Started '+(nf||'a new facility')); }
+    clearTimeout(_sheetAutoT); sheetAutoSave(); qcAutoSave(true);
+    S.pts=[]; S.active=0; S.round.facLock=nf; S.round.fac=nf; _sheetLastSig=''; _qcLastSig=''; save(); paintFacSel(); render(); toast('Started '+(nf||'a new facility')); }
   else  { S.round.fac=lock; save(); paintFacSel(); }
 }
 
@@ -1268,7 +1268,8 @@ function scheduleRcAutoSave(){ clearTimeout(_rcAutoT); _rcAutoT=setTimeout(rcAut
 let _rcKalFlush=false;
 function rcFlushAutoSave(){ clearTimeout(_rcAutoT); _rcKalFlush=true;
   Promise.resolve(rcAutoSaveCloud()).catch(()=>{}).finally(()=>{ _rcKalFlush=false; });
-  sheetAutoSave(); }
+  sheetAutoSave();
+  qcAutoSave(true); }        // hiding/closing the tab is a real end signal — file the count regardless of the hour
 window.addEventListener('pagehide', rcFlushAutoSave);
 document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='hidden') rcFlushAutoSave(); });
 
@@ -1293,7 +1294,10 @@ function _sheetSig(pts){
   try{ return JSON.stringify({p:pts, f:S.round.fac||'', d:S.round.date||'', pr:S.round.prov||''}); }
   catch(e){ return String(Math.random()); }            // unserialisable -> treat as changed
 }
-function scheduleSheetSave(){ clearTimeout(_sheetAutoT); _sheetAutoT=setTimeout(sheetAutoSave, SHEET_AUTOSAVE_MS); }
+function scheduleSheetSave(){ clearTimeout(_sheetAutoT); _sheetAutoT=setTimeout(function(){
+  sheetAutoSave();
+  qcAutoSave(false);        // no-op until the working day is over; see QC_AFTER_HOUR
+}, SHEET_AUTOSAVE_MS); }
 async function sheetAutoSave(){
   if(_sheetAutoBusy) return;
   /* EVERYTHING the filename and the document depend on is captured synchronously, before the first
@@ -1324,6 +1328,52 @@ async function sheetAutoSave(){
     _paintSheetWarn();
   }catch(e){ /* leave _sheetLastSig unset so the next edit retries */ }
   finally{ _sheetAutoBusy=false; }
+}
+
+/* ---------- THE QC COUNT FILES ITSELF TOO, BUT ONLY ONCE ROUNDS ARE OVER ----------
+   Same gap as the sheet: a provider who never taps "Save to ClinicalVault" was never counted, so the QC
+   tracker silently under-counted her. But this one must NOT stream the way the sheet does — the sheet is
+   a document that simply reflects the round, while this is a business metric, and a count that ticks
+   1,2,3… all afternoon is noise.
+   Scott 2026-07-26: "set it to pull at a time when rounds would be over." That fits the consumer exactly —
+   Ramil's Day Check reads this feed the NEXT MORNING to catch visits that never became a PCC note, so the
+   only real deadline is "correct by tomorrow".
+   So it files when the round is genuinely done, judged two ways:
+     · after QC_AFTER_HOUR — the tab is still open and the working day is over, or
+     · on a real end signal — switching facility, or hiding/closing the tab (force=true).
+   The filename is fixed per date+facility+provider, so every write overwrites and the LAST one is the
+   count that stands. A tab closed mid-round files a partial count; coming back and finishing overwrites
+   it, well before the morning read. Count only, no names — deliberately not PHI (QC-COUNT-FEED-SPEC). */
+const QC_AFTER_HOUR=17;                                // 5pm local
+let _qcBusy=false, _qcLastSig='';
+async function qcAutoSave(force){
+  if(_qcBusy) return;
+  // captured synchronously — a facility switch must not file this building's count under the next one
+  const pts=sentNamed();
+  if(!pts.length) return;
+  const facRaw=(S.round.fac||'').trim(); if(!facRaw) return;
+  const fac  = cleanSeg(facRaw) || 'Unfiled';
+  const date = /^\d{4}-\d{2}-\d{2}/.test(String(S.round.date||'')) ? S.round.date.slice(0,10) : 'undated';
+  const count= pts.length;
+  if(!force && new Date().getHours() < QC_AFTER_HOUR) return;   // rounds may still be running
+  const sig=date+'|'+fac+'|'+count;
+  if(sig===_qcLastSig) return;                          // this exact count is already on file
+  let token=null;
+  try{ token=await _vaultTokenSilent(); }catch(e){}
+  if(!token) return;                                    // signed out — the manual save still covers it
+  _qcBusy=true;
+  try{
+    await _autoFillProvider();
+    const prov = cleanSeg(S.round.prov) || 'Provider unlisted';
+    const {driveId}=await _vaultCtx(token);
+    await _vaultEnsureFolders(token,driveId,['QC Feed']);
+    const qc={ schema:'qcfeed.v1', date:date, facility:facRaw, provider:S.round.prov||'',
+      patientCount:count, savedAt:new Date().toISOString() };
+    await _vaultUpload(token,driveId,['QC Feed'], date+' — '+fac+' — '+prov+'.json',
+      new Blob([JSON.stringify(qc)],{type:'application/json'}),'application/json');
+    _qcLastSig=sig;
+  }catch(e){ /* leave the signature unset so the next trigger retries */ }
+  finally{ _qcBusy=false; }
 }
 async function rcAutoSaveCloud(){
   if(_rcAutoBusy){ _rcAutoAgain=true; return; }
