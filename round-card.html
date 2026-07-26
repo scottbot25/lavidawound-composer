@@ -138,7 +138,10 @@
          the screen). Today's round already restores by itself on open; this reaches BACK — any round
          saved in the last week can be reloaded, amended, and re-sent. A Cleared round is gone on
          purpose (Clear wipes the cloud copy too); the PCC note + saved sheet remain the record. -->
-    <button class="tiny no-print" style="margin-top:8px" onclick="openRecentRounds()">↩ Load a recent round</button>
+    <div class="row no-print" style="gap:6px;margin-top:8px">
+      <button class="tiny" id="cfBtn" onclick="carryForward()">⤴ Start from last visit</button>
+      <button class="tiny" onclick="openRecentRounds()">↩ Load a recent round</button>
+    </div>
   </div>
 
   <!-- PATIENT TABS -->
@@ -241,7 +244,10 @@ const EXPOSED     = ['None','Subcutaneous tissue','Tendon','Muscle','Bone','Hard
 const PERIWOUND   = ['Normal','Macerated','Erythematous','Indurated','Ecchymotic','Callused','Fluctuant','Warm','Tender'];
 /* Facility wants just the three-state trend. "Improving" (not "Improved") matches the
    composer note's Status wording so a Phase-3 pre-fill copies straight across. */
-const STATUS      = ['Improving','Stable','Worsening'];
+/* 'Healed' added 2026-07-26 for carry-forward: it is how the provider says "this one is done", and a
+   healed wound must NOT be carried into next week's card (Scott's rule). It maps 1:1 onto the note's
+   own Status option, so the composer pull is unaffected. */
+const STATUS      = ['Improving','Stable','Worsening','Healed'];
 
 /* ---------- state: sessionStorage only, wipes on tab close ---------- */
 const KEY = 'lavida_roundcard';
@@ -522,9 +528,41 @@ function toggleW(i,field,opt,on){
   if(on){ if(arr.indexOf(opt)<0) arr.push(opt); } else arr=arr.filter(x=>x!==opt);
   w[field]=arr; save(); render();   // re-render: Type toggles Stage, and "Other" reveals its box
 }
+/* ---------- carry-forward reference lines ----------
+   A carried wound arrives with its IDENTITY filled (location / type / stage) and every FINDING blank.
+   Last visit's numbers ride along in w.prior and are shown BESIDE the blank boxes, never inside them:
+   pre-filling last week's measurement is how a wound that grew gets charted as unchanged, and it is the
+   same trap the note's "last visit" panel was built to avoid (Abby: "I need the numbers to actually show
+   that it's getting better"). Orders are the one exception — one tap copies them, because that is the
+   biggest time saver on the card and a tap is still a decision. */
+function _priorLine(txt){ return '<div class="muted" style="font-size:11.5px;margin:2px 0 6px">'+txt+'</div>'; }
+function _priorDims(pr){
+  const d=[pr.l,pr.w,pr.d].filter(x=>String(x||'').trim()!=='');
+  return d.length ? d.join(' × ')+' cm' : '';
+}
+function _priorBed(pr){
+  const parts=[];
+  if(String(pr.wbGran||'').trim())   parts.push(pr.wbGran+'% gran');
+  if(String(pr.wbSlough||'').trim()) parts.push(pr.wbSlough+'% slough');
+  if(String(pr.wbFib||'').trim())    parts.push(pr.wbFib+'% fibrin');
+  if(String(pr.wbEpi||'').trim())    parts.push(pr.wbEpi+'% epi');
+  if(String(pr.wbEschar||'').trim()) parts.push('eschar: '+pr.wbEschar);
+  return parts.join(', ');
+}
+function useSameOrders(i){
+  const p=activePt(); if(!p) return; const w=p.wounds[i]; if(!w||!w.prior) return;
+  w.orders=String(w.prior.orders||''); save(); render();
+}
+function useSameEdu(){
+  const p=activePt(); if(!p||!p.priorEdu) return;
+  p.edu=String(p.priorEdu||''); save(); render();
+}
 function woundHTML(w,i){
+  const pr = w.prior || null;
+  const priorWhen = pr && pr.date ? ' ('+esc(pr.date)+')' : '';
   return '<div class="card">'
     + '<div class="wound-head"><b>Wound '+(i+1)+'</b>'
+    + (pr?'<span class="muted" style="font-size:11px;margin-left:8px">carried from last visit</span>':'')
     + '<button class="tiny no-print" onclick="delWound('+i+')">Remove</button></div>'
 
     + '<label>Where is it</label>'
@@ -543,6 +581,7 @@ function woundHTML(w,i){
     +   '<input inputmode="decimal" value="'+esc(w.d)+'" placeholder="depth"  oninput="setW('+i+',\'d\',this.value)">'
     + '</div>'
     + '<div class="calc" id="calc_'+i+'">'+esc(calcText(w))+'</div>'
+    + (pr && _priorDims(pr) ? _priorLine('Last visit'+priorWhen+': '+esc(_priorDims(pr))) : '')
 
     + '<label>Drainage</label>'
     + selField(i,w,'drain',DRAINAGE)
@@ -552,6 +591,7 @@ function woundHTML(w,i){
 
     + '<label>Status</label>'
     + selField(i,w,'status',STATUS)
+    + (pr && String(pr.status||'').trim() ? _priorLine('Last visit: '+esc(pr.status)) : '')
 
     + '<label>Wound bed (% tissue)</label>'
     + '<div class="dims" style="grid-template-columns:1fr 1fr 1fr 1fr">'
@@ -564,6 +604,7 @@ function woundHTML(w,i){
     + '<select onchange="setW('+i+',\'wbEschar\',this.value)"><option value=""></option>'
     +   '<option value="yes"'+(w.wbEschar==='yes'?' selected':'')+'>yes</option>'
     +   '<option value="no"'+(w.wbEschar==='no'?' selected':'')+'>no</option></select>'
+    + (pr && _priorBed(pr) ? _priorLine('Last visit: '+esc(_priorBed(pr))) : '')
 
     + '<label>Exposed structures</label>'
     + multiField(i,w,'exposed',EXPOSED)
@@ -582,6 +623,12 @@ function woundHTML(w,i){
     + '<label>Orders</label>'
     + '<textarea placeholder="what the nurse should do — dressing, frequency, offloading, re-check" '
     + 'oninput="setW('+i+',\'orders\',this.value)">'+esc(w.orders)+'</textarea>'
+    // ONE TAP, not a pre-fill: an order that carried silently is an order the facility acts on that
+    // nobody issued this week. The button keeps the speed and still makes it a deliberate act.
+    + (pr && String(pr.orders||'').trim() && !String(w.orders||'').trim()
+        ? '<div class="muted no-print" style="font-size:11.5px;margin:4px 0 0">Last visit: '+esc(pr.orders)
+          +' <button class="tiny" style="margin-left:6px" onclick="useSameOrders('+i+')">Same</button></div>'
+        : '')
     + '</div>';
 }
 function render(){
@@ -619,6 +666,10 @@ function render(){
     +   '<label for="p_edu">Additional info, plan &amp; education</label>'
     +   '<textarea id="p_edu" placeholder="plan, patient education, tunneling / undermining, precautions — anything else for the nurse" '
     +   'oninput="setPt(\'edu\',this.value)">'+esc(p.edu||'')+'</textarea>'
+    +   (String(p.priorEdu||'').trim() && !String(p.edu||'').trim()
+          ? '<div class="muted no-print" style="font-size:11.5px;margin:4px 0 0">Last visit: '+esc(p.priorEdu)
+            +' <button class="tiny" style="margin-left:6px" onclick="useSameEdu()">Same</button></div>'
+          : '')
     + '</div>';
 }
 
@@ -1544,6 +1595,91 @@ async function openRecentRounds(){
     list.innerHTML='<div class="muted">⚠ '+esc(e.message||'Couldn’t reach ClinicalVault')+'</div>';
   }
 }
+/* ---------- START FROM LAST VISIT (Abby 2026-07-22: "what will the rounding card pull from this week?
+   ...there is some stuff that 100 percent shld pull forward so it keeps adding data") ----------
+   Rebuilds this week's panel for the CURRENT facility from each patient's OWN most recent earlier visit
+   (not "last week's round" — someone seen off-schedule still gets their history). What carries is settled
+   in the vault Decisions log, and the split is deliberate:
+     carried  : the patient, and each wound's LOCATION / TYPE / STAGE — the wound's identity
+     reference: last visit's size, wound bed and status, shown beside the blank fields (w.prior)
+     one tap  : orders and the education/plan text
+     never    : drainage, odor, periwound, exposed structures, undermining, tunneling — pure findings
+   A wound marked Healed last visit is dropped; a patient the provider removed left no record behind, so
+   they never come back. New ids are minted: this is a NEW round, not an edit of the old one. */
+function _cfNameKey(s){ return String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim(); }
+async function carryForward(){
+  const facRaw=(S.round.fac||'').trim();
+  if(!facRaw){ toast('Pick the facility first'); return; }
+  if(S.pts.some(p=>(p.name||'').trim())
+     && !confirm('Replace what’s on screen with your panel from last visit at '+facRaw+'?')) return;
+  const btn=document.getElementById('cfBtn'); const lab=btn?btn.textContent:'';
+  if(btn){ btn.disabled=true; btn.textContent='Checking…'; }
+  try{
+    const token=await _vaultToken();
+    const {driveId}=await _vaultCtx(token);
+    const today=todayISO();
+    const cut=Date.now()-RR_LOOKBACK_DAYS*24*3600*1000;
+    const files=(await _vaultList(token,driveId,'RoundCards/'+cleanSeg(facRaw)))
+      .filter(f=>/\.json$/i.test(f.name||''))
+      .filter(f=>{ const t=Date.parse(f.lastModifiedDateTime||''); return !isNaN(t) && t>=cut; });
+    const recs=(await Promise.all(files.map(f=>{
+      const dl=f['@microsoft.graph.downloadUrl'];
+      if(dl) return fetch(dl).then(r=>r.ok?r.json():null).catch(()=>null);
+      return _vaultReadJson(token,driveId,'RoundCards/'+cleanSeg(facRaw)+'/'+f.name).catch(()=>null);
+    }))).filter(Boolean);
+    // each patient's OWN latest visit strictly BEFORE today
+    const byPatient={};
+    recs.forEach(rec=>{
+      if(!rec || rec.schema!=='roundcard.v1') return;
+      const nm=((rec.patient&&rec.patient.name)||'').trim(); if(!nm) return;
+      const d=String(rec.date||'').slice(0,10); if(!d || d>=today) return;
+      const k=_cfNameKey(nm);
+      if(!byPatient[k] || d>String(byPatient[k].date||'').slice(0,10)) byPatient[k]=rec;
+    });
+    const chosen=Object.keys(byPatient).map(k=>byPatient[k])
+      .sort((a,b)=>String((a.patient&&a.patient.name)||'').toLowerCase()
+                   .localeCompare(String((b.patient&&b.patient.name)||'').toLowerCase()));
+    if(!chosen.length){ toast('No earlier visits found at '+facRaw); return; }
+    let healedDropped=0;
+    const pts=chosen.map(rec=>{
+      const src=Array.isArray(rec.wounds)?rec.wounds:[];
+      const kept=src.filter(w=>{
+        const healed=String(w&&w.status||'').trim().toLowerCase()==='healed';
+        if(healed) healedDropped++;
+        return !healed;
+      });
+      const wounds=kept.map(w=>Object.assign(newWound(),{
+        loc: w.loc||'',
+        type: Array.isArray(w.type)?w.type.slice():[],
+        typeOther: w.typeOther||'',
+        stage: w.stage||'',
+        // flat snapshot — never a copy of the whole wound, or next week would nest priors forever
+        prior:{ date:String(rec.date||'').slice(0,10),
+                l:w.l||'', w:w.w||'', d:w.d||'',
+                status:w.status||'', orders:w.orders||'',
+                wbGran:w.wbGran||'', wbSlough:w.wbSlough||'', wbFib:w.wbFib||'',
+                wbEpi:w.wbEpi||'', wbEschar:w.wbEschar||'' }
+      }));
+      return { id:newId(), name:((rec.patient&&rec.patient.name)||'').trim(), edu:'',
+               priorEdu:String(rec.edu||''), wounds:wounds.length?wounds:[newWound()],
+               send:true, visitType:'' };      // Auto — the composer decides Initial vs Follow-up from history
+    });
+    // a load replaces the list: disarm any half-finished two-tap first (see loadRecentRound)
+    try{ if(_delArm){ if(_delArm.t) clearTimeout(_delArm.t); _delArm=null; } }catch(e){}
+    try{ if(_clearArm){ clearTimeout(_clearArm); _clearArm=null;
+      const cb=document.getElementById('clearBtn');
+      if(cb){ cb.textContent='Clear'; cb.style.background=''; cb.style.color=''; } } }catch(e){}
+    S.round.date=today; S.round.facLock=facRaw;
+    S.pts=pts; normalizePts(S); S.active=0;
+    save(); paintRound(); render();
+    toast('Brought forward '+pts.length+' patient'+(pts.length===1?'':'s')+' from their last visit'
+      +(healedDropped?' · '+healedDropped+' healed wound'+(healedDropped===1?'':'s')+' left off':'')
+      +' — measurements start blank');
+  }catch(e){
+    toast('Couldn’t reach ClinicalVault'+(e&&e.message?' ('+e.message+')':''));
+  }finally{ if(btn){ btn.disabled=false; btn.textContent=lab||'⤴ Start from last visit'; } }
+}
+
 function loadRecentRound(i){
   const g=_rrGroups[i]; if(!g) return;
   if(S.pts.some(p=>(p.name||'').trim())
