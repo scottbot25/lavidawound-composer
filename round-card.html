@@ -141,6 +141,8 @@
     <div class="row no-print" style="gap:6px;margin-top:8px">
       <button class="tiny" id="cfBtn" onclick="carryForward()">⤴ Start from last visit</button>
       <button class="tiny" onclick="openRecentRounds()">↩ Load a recent round</button>
+      <!-- shown only at ?maintenance=1 (see the gate in the idle-lock block) -->
+      <button class="tiny" id="maintBtn" style="display:none" onclick="purgePreview()">🧹 Clean up old records</button>
     </div>
   </div>
 
@@ -154,6 +156,21 @@
 <footer class="no-print">
   <button class="primary" onclick="openReview()">Review &amp; send</button>
 </footer>
+
+<!-- MAINTENANCE — only rendered at ?maintenance=1; never visible during rounds -->
+<div class="modal" id="purgeModal">
+  <div class="sheet">
+    <div class="row" style="justify-content:space-between">
+      <b>Clean up old round-card records</b>
+      <button class="tiny" onclick="closePurge()">Close</button>
+    </div>
+    <div class="muted" style="margin-top:6px">
+      Deletes only records whose round is over 45 days old <b>and</b> whose handoff sheet is already
+      filed in Daily Handoffs. Anything without a sheet is kept and listed — it may be the only copy.
+    </div>
+    <div id="purgeBody" style="margin-top:10px"></div>
+  </div>
+</div>
 
 <!-- RECENT ROUNDS — reload a past round (last 7 days) to amend orders after it left the screen -->
 <div class="modal" id="recentRounds">
@@ -176,6 +193,7 @@
     </div>
     <div id="rcSyncStatus2" style="font-size:12px;color:var(--muted);margin-top:4px"></div>
     <div class="muted" style="margin-top:6px">This is exactly what the nurse gets. Anything blank shows as “—”.</div>
+    <div id="sheetWarn"></div>
     <div id="gaps"></div>
     <div id="sendPick"></div>
     <div class="prev" id="prev"></div>
@@ -361,7 +379,7 @@ function paintProvSel(){
     + _optList(PROVIDERS,S.round.provExtra,cur).map(p=>'<option'+(p===cur?' selected':'')+'>'+esc(p)+'</option>').join('')
     + '<option value="__other__">+ Other…</option>';
 }
-function setRound(){ S.round.date=document.getElementById('r_date').value; save(); }
+function setRound(){ S.round.date=document.getElementById('r_date').value; _sheetInvalidate(); save(); }
 function paintRound(){
   document.getElementById('r_date').value = S.round.date || todayISO();
   paintFacSel(); paintProvSel();
@@ -393,6 +411,7 @@ function onFacPick(sel){
 }
 function applyFacChange(nf){
   nf=(nf||'').trim(); const lock=(S.round.facLock||'').trim();
+  _sheetInvalidate();                                  // different facility = a different round's sheet
   if(!S.pts.length || !lock || nf===lock){ if(!S.pts.length) S.round.facLock=nf; S.round.fac=nf; save(); paintFacSel(); return; }
   const n=S.pts.length;
   const ok=confirm('This card still has '+n+' patient'+(n===1?'':'s')+' from '+lock+'.\n\n'
@@ -892,11 +911,45 @@ function paintSendPick(){
 }
 /* Repaint the whole review screen from the current selection — gaps, chooser, preview, and whether the
    send buttons are live. Called on open and on every checkbox toggle. */
+/* ---------- "is there a handoff sheet for this round?" ----------
+   Auto-save streams each patient's RoundCards record continuously, but the nurse-facing sheet under
+   Daily Handoffs/ is only written by the manual "Save to ClinicalVault". A provider watching the header
+   say "Backed up to ClinicalVault" can reasonably believe the round is filed when no sheet exists — and
+   for such a round the RoundCards record is the ONLY copy in the vault. That is both a workflow gap and
+   the thing that makes purging dangerous, so the card now says so out loud.
+   _sheetOnFile: null = not checked yet, true/false = answer for the round currently on screen. */
+let _sheetOnFile=null, _sheetCheckKey='';
+function _sheetKey(){ return (cleanSeg(S.round.fac)||'Unfiled')+'|'+(String(S.round.date||'').slice(0,10)||'undated'); }
+function _sheetInvalidate(){ _sheetOnFile=null; _sheetCheckKey=''; }
+async function _checkSheetOnFile(){
+  const key=_sheetKey();
+  if(_sheetCheckKey===key && _sheetOnFile!==null) return _sheetOnFile;   // already answered for this round
+  const fac=cleanSeg(S.round.fac)||'Unfiled';
+  const date=/^\d{4}-\d{2}-\d{2}/.test(String(S.round.date||'')) ? S.round.date.slice(0,10) : 'undated';
+  try{
+    const token=await _vaultTokenSilent(); if(!token) return null;       // signed out — can't know, don't claim
+    const {driveId}=await _vaultCtx(token);
+    const files=await _vaultList(token,driveId,'Daily Handoffs/'+fac+'/'+date);
+    _sheetOnFile=(files||[]).some(f=>/\.doc$/i.test(f.name||''));
+    _sheetCheckKey=key;
+    return _sheetOnFile;
+  }catch(e){ return null; }
+}
+function _paintSheetWarn(){
+  const el=document.getElementById('sheetWarn'); if(!el) return;
+  const named=(S.pts||[]).filter(p=>(p.name||'').trim()).length;
+  if(!named || _sheetOnFile!==false){ el.innerHTML=''; return; }
+  el.innerHTML='<div class="warn"><b>No handoff sheet filed for this round yet.</b><br>'
+    +'The patient records are backed up, but the nurse’s sheet is only created when you tap '
+    +'<b>Save to ClinicalVault</b> below. Until then this round has no sheet in the vault.</div>';
+}
 function paintReview(){
   const gaps=findGaps();
   document.getElementById('gaps').innerHTML = gaps.length
     ? '<div class="warn"><b>Worth a look before you send:</b><br>· '+gaps.map(esc).join('<br>· ')+'</div>'
     : '';
+  _paintSheetWarn();                                   // paint what we know now…
+  _checkSheetOnFile().then(_paintSheetWarn);           // …then again once the vault answers
   paintSendPick();
   const pts=sentNamed();
   const prev=document.getElementById('prev');
@@ -1300,6 +1353,8 @@ async function saveVault(){
     const blob=new Blob(['﻿'+sheetHTML()],{type:'application/msword'});
     const item=await _vaultUpload(token,driveId,sheetSegs,
       'Wound Orders — '+fac+' — '+date+' — '+prov+'.doc',blob,'application/msword');
+    _sheetOnFile=true; _sheetCheckKey=_sheetKey();     // the sheet now exists for this round
+    _paintSheetWarn();
     st('Saving patient records…');
     const recSegs=['RoundCards',fac];
     await _vaultEnsureFolders(token,driveId,recSegs);
@@ -1399,6 +1454,9 @@ async function saveVault(){
   setInterval(check, POLL);
   document.addEventListener('visibilitychange', () => { if(document.visibilityState==='visible') check(); });
   if(qs.get('locked')==='1'){ setTimeout(()=>toast('Locked after inactivity — your round was cleared for privacy.'), 400); }
+  // Record cleanup is a deliberate maintenance job, never a bedside control: the button only exists
+  // when the page is opened as ?maintenance=1, so it cannot be tapped by accident mid-round.
+  if(qs.get('maintenance')==='1'){ const mb=document.getElementById('maintBtn'); if(mb) mb.style.display=''; }
 })();
 
 /* ---------- PHI input hygiene (ported from the composer) ----------
@@ -1450,7 +1508,7 @@ function clearAll(btn){
   const isTodaysRound = String(S.round.date||'').slice(0,10)===todayISO();
   const doomed=isTodaysRound ? (S.pts||[]).filter(p=>p.id).map(p=>p.id) : [];
   const fac=cleanSeg(S.round.fac)||'Unfiled';
-  S=blank(); try{ sessionStorage.removeItem(KEY); }catch(e){}
+  S=blank(); _sheetInvalidate(); try{ sessionStorage.removeItem(KEY); }catch(e){}
   Object.keys(_rcCloudSig).forEach(k=>delete _rcCloudSig[k]);
   paintRound(); render(); toast('Cleared');
   if(btn){ btn.textContent='Clear'; btn.style.background=''; btn.style.color=''; }
@@ -1643,6 +1701,118 @@ async function openRecentRounds(){
    A wound marked Healed last visit is dropped; a patient the provider removed left no record behind, so
    they never come back. New ids are minted: this is a NEW round, not an edit of the old one. */
 function _cfNameKey(s){ return String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim(); }
+
+/* ============================ SAFE PURGE (maintenance only) ============================
+   `RoundCards/` has never been purged, so patient records accumulate forever — the slowdown AND an open
+   PHI-minimisation gap. (No law sets a minimum period for these working files: the medical record is the
+   PCC note, and HIPAA's 6-year rule covers compliance documentation, not PHI. Retention is the practice's
+   call — see the vault Data Contract.)
+
+   The danger is specific and known: auto-save writes the RoundCards record, but the nurse's sheet under
+   `Daily Handoffs/` is only written by the MANUAL save. For a round that was never manually saved, the
+   record is the ONLY copy in the vault. So this deliberately does NOT purge by age alone.
+
+   A record is deleted only if ALL of these hold:
+     1. its round is older than PURGE_AFTER_DAYS, AND
+     2. a handoff sheet exists in `Daily Handoffs/<facility>/<date>/` — its content survives elsewhere, AND
+     3. it is not the round currently on screen.
+   Everything else is KEPT and listed with the reason. A record with no sheet is never deleted, however
+   old — it is reported instead so a human decides.
+
+   Rails: preview is the only entry point and shows every file with its verdict; deleting takes a second
+   explicit action plus a confirm; it lives behind ?maintenance=1 so it can never be tapped during rounds;
+   deletes go to the SharePoint recycle bin. It never runs on a timer. */
+const PURGE_AFTER_DAYS=45;
+let _purgePlan=null;
+function _purgeDaysOld(dateStr){
+  const d=Date.parse(String(dateStr||'')+'T00:00:00');
+  if(isNaN(d)) return -1;                               // undated -> unknown age -> never auto-deleted
+  return Math.floor((Date.now()-d)/86400000);
+}
+async function purgeScan(){
+  const out={when:new Date().toISOString().slice(0,16).replace('T',' '), del:[], keep:[], err:null};
+  try{
+    const token=await _vaultToken();
+    const {driveId}=await _vaultCtx(token);
+    const facs=(await _vaultList(token,driveId,'RoundCards')).filter(it=>it.folder).map(it=>it.name);
+    const liveKey=_sheetKey();
+    for(const fac of facs){
+      const files=(await _vaultList(token,driveId,'RoundCards/'+fac)).filter(f=>/\.json$/i.test(f.name||''));
+      const recs=await Promise.all(files.map(f=>{
+        const dl=f['@microsoft.graph.downloadUrl'];
+        if(dl) return fetch(dl).then(r=>r.ok?r.json():null).catch(()=>null);
+        return _vaultReadJson(token,driveId,'RoundCards/'+fac+'/'+f.name).catch(()=>null);
+      }));
+      const sheetByDate={};                             // one Daily Handoffs listing per date, per scan
+      for(let i=0;i<files.length;i++){
+        const f=files[i], rec=recs[i], path='RoundCards/'+fac+'/'+f.name;
+        if(!rec || rec.schema!=='roundcard.v1'){ out.keep.push({path, why:'not a round-card record — left alone'}); continue; }
+        const date=String(rec.date||'').slice(0,10);
+        const age=_purgeDaysOld(date);
+        if(age<0){ out.keep.push({path, why:'no usable date on the record'}); continue; }
+        if(age<PURGE_AFTER_DAYS){ out.keep.push({path, why:'only '+age+' days old (kept under '+PURGE_AFTER_DAYS+')'}); continue; }
+        if((cleanSeg(fac)+'|'+date)===liveKey){ out.keep.push({path, why:'this is the round open on screen'}); continue; }
+        if(sheetByDate[date]===undefined){
+          try{ const sf=await _vaultList(token,driveId,'Daily Handoffs/'+fac+'/'+date);
+               sheetByDate[date]=(sf||[]).some(x=>/\.doc$/i.test(x.name||'')); }
+          catch(e){ sheetByDate[date]=null; }           // couldn't check -> no proof -> keep
+        }
+        if(sheetByDate[date]!==true){
+          out.keep.push({path, why:age+' days old, but NO handoff sheet on file for '+date+' — may be the only copy'});
+          continue;
+        }
+        out.del.push({path, why:age+' days old, handoff sheet on file for '+date});
+      }
+    }
+  }catch(e){ out.err=(e&&e.message)||'Couldn’t reach ClinicalVault'; }
+  return out;
+}
+function _purgeRender(plan){
+  const el=document.getElementById('purgeBody'); if(!el) return;
+  if(plan.err){ el.innerHTML='<div class="warn">⚠ '+esc(plan.err)+'</div>'; return; }
+  const d=plan.del, k=plan.keep;
+  el.innerHTML=
+    '<div class="muted" style="margin-bottom:8px">Scanned '+(d.length+k.length)+' record'+((d.length+k.length)===1?'':'s')+' · '+esc(plan.when)+'</div>'
+    +'<div class="warn" style="margin-bottom:10px"><b>'+d.length+' would be deleted.</b> Each is over '
+      +PURGE_AFTER_DAYS+' days old AND has a handoff sheet on file. Deletes go to the SharePoint recycle bin.</div>'
+    +(d.length ? '<div style="max-height:170px;overflow:auto;font-size:12px;border:1px solid var(--line);border-radius:8px;padding:8px;margin-bottom:10px">'
+        +d.map(x=>'<div>🗑 '+esc(x.path)+' <span class="muted">— '+esc(x.why)+'</span></div>').join('')+'</div>' : '')
+    +'<div style="margin-bottom:6px"><b>'+k.length+' kept</b></div>'
+    +'<div style="max-height:170px;overflow:auto;font-size:12px;border:1px solid var(--line);border-radius:8px;padding:8px">'
+      +(k.length?k.map(x=>'<div>• '+esc(x.path)+' <span class="muted">— '+esc(x.why)+'</span></div>').join('')
+                :'<span class="muted">nothing</span>')+'</div>'
+    +(d.length ? '<button class="primary" style="margin-top:12px" onclick="purgeApply()">Delete those '+d.length+' record'+(d.length===1?'':'s')+'</button>' : '');
+}
+async function purgePreview(){
+  const el=document.getElementById('purgeBody');
+  document.getElementById('purgeModal').classList.add('on');
+  if(el) el.innerHTML='<div class="muted">Scanning ClinicalVault…</div>';
+  _purgePlan=await purgeScan();
+  _purgeRender(_purgePlan);
+}
+async function purgeApply(){
+  if(!_purgePlan || !_purgePlan.del.length) return;
+  const n=_purgePlan.del.length;
+  if(!confirm('Delete '+n+' old round-card record'+(n===1?'':'s')+' from ClinicalVault?\n\n'
+    +'Each is over '+PURGE_AFTER_DAYS+' days old and its handoff sheet is on file.\n'
+    +'They go to the SharePoint recycle bin and can be restored from there.')) return;
+  const el=document.getElementById('purgeBody');
+  if(el) el.innerHTML='<div class="muted">Deleting…</div>';
+  let ok=0, failed=0;
+  try{
+    const token=await _vaultToken();
+    const {driveId}=await _vaultCtx(token);
+    for(const item of _purgePlan.del){
+      try{ const r=await _vaultDelete(token,driveId,item.path); if(r) ok++; else failed++; }
+      catch(e){ failed++; }
+    }
+  }catch(e){ failed=n-ok; }
+  if(el) el.innerHTML='<div class="warn"><b>Deleted '+ok+' of '+n+'.</b>'
+    +(failed?' '+failed+' could not be deleted — those are still in the vault.':'')
+    +'<br>Recoverable from the SharePoint recycle bin.</div>';
+  _purgePlan=null;
+}
+function closePurge(){ document.getElementById('purgeModal').classList.remove('on'); }
 /* Only YOUR patients, and only ones you are actually still rounding on (Scott 2026-07-26: carrying
    forward at Crestmoor returned "a whole load of patients"). Two separate causes, both fixed here:
    (1) this listed the facility folder with NO provider filter, so it returned every patient ever carded
@@ -1653,7 +1823,7 @@ function _cfNameKey(s){ return String(s||'').toLowerCase().replace(/[^a-z0-9]+/g
    Unattributed (blank-provider) records are deliberately NOT accepted here: restore-on-open tolerates
    them because it is same-day and almost certainly yours, but reaching back weeks across a shared
    building is exactly how another provider's patients land on your card. */
-const CF_ACTIVE_DAYS=30;
+const CF_ACTIVE_DAYS=21;   // 3 weeks — covers a missed week plus a buffer (Scott 2026-07-26); retention (45d) sits above it
 async function carryForward(){
   const facRaw=(S.round.fac||'').trim();
   if(!facRaw){ toast('Pick the facility first'); return; }
@@ -1730,7 +1900,7 @@ async function carryForward(){
     try{ if(_clearArm){ clearTimeout(_clearArm); _clearArm=null;
       const cb=document.getElementById('clearBtn');
       if(cb){ cb.textContent='Clear'; cb.style.background=''; cb.style.color=''; } } }catch(e){}
-    S.round.date=today; S.round.facLock=facRaw;
+    S.round.date=today; S.round.facLock=facRaw; _sheetInvalidate();
     S.pts=pts; normalizePts(S); S.active=0;
     save(); paintRound(); render();
     toast('Brought forward '+pts.length+' of '+who+'’s patient'+(pts.length===1?'':'s')+' from their last visit'
@@ -1753,7 +1923,7 @@ function loadRecentRound(i){
   try{ if(_clearArm){ clearTimeout(_clearArm); _clearArm=null;
     const cb=document.getElementById('clearBtn');                                        // header button — render() doesn't touch it
     if(cb){ cb.textContent='Clear'; cb.style.background=''; cb.style.color=''; } } }catch(e){}
-  S.round.fac=g.facility||S.round.fac; S.round.date=g.date; S.round.prov=S.round.prov||g.provider||'';
+  S.round.fac=g.facility||S.round.fac; S.round.date=g.date; S.round.prov=S.round.prov||g.provider||''; _sheetInvalidate();
   S.round.facLock=(S.round.fac||'').trim();
   S.pts=mine.map(r=>({ id:r.id||newId(), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], send:true, visitType:r.visitType||'' }));
   normalizePts(S); S.active=0;
