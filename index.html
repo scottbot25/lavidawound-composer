@@ -2273,19 +2273,47 @@ const _RC_PERIWOUND={ 'Normal':'normal','Macerated':'macerated','Erythematous':'
 function _rcFacSeg(f){ f=String(f||'').replace(/[\\/:*?"<>|#%]/g,'').replace(/\s+/g,' ').trim(); if(/^\.+$/.test(f)) f=''; return f||'Unfiled'; }
 let _rcRecs=[];
 
+/* Parsed records, kept in memory for the life of the tab, keyed by the file's own last-modified stamp.
+   A record whose stamp hasn't moved cannot have changed, so a repeat pull re-uses it instead of
+   downloading it again. This is the fix for the pull getting slower every week: auto-pull runs on open,
+   on every card save, AND on tab refocus, and `RoundCards/` is never purged — so the old code
+   re-downloaded the building's entire history several times a minute. Memory only (never localStorage:
+   these records carry patient data), and capped so a long day can't grow it without bound. */
+const _rcDocCache=new Map();
+const RC_DOC_CACHE_MAX=600;
+function _rcCacheGet(k){ return _rcDocCache.get(k); }
+function _rcCachePut(k,v){
+  if(_rcDocCache.size>=RC_DOC_CACHE_MAX){ const first=_rcDocCache.keys().next(); if(!first.done) _rcDocCache.delete(first.value); }
+  _rcDocCache.set(k,v);
+}
 async function rcList(facility){
   const ctx=await _draftContext(); if(!ctx) throw new Error('Sign in to read Round Cards.');
   const seg=_rcFacSeg(facility);
-  const url='https://graph.microsoft.com/v1.0/drives/'+ctx.driveId+'/root:/'+_encPath(['RoundCards',seg].join('/'))+':/children?$top=200';
+  const url='https://graph.microsoft.com/v1.0/drives/'+ctx.driveId+'/root:/'+_encPath(['RoundCards',seg].join('/'))
+    +':/children?$top=200&$select=id,name,folder,lastModifiedDateTime,@microsoft.graph.downloadUrl';
   const r=await _gfetch(url, ctx.token);
   if(r.status===404) return [];                                   // no records for this building yet
   if(!r.ok) throw new Error('Couldn’t read Round Cards (HTTP '+r.status+').');
   const items=(await r.json()).value||[];
-  // PERF (Scott 2026-07-21): records now download IN PARALLEL — the one-by-one loop made the
-  // composer's patient pull crawl once a folder held more than a couple of records.
-  const files=items.filter(it=>!it.folder && /\.json$/i.test(it.name||'') && it['@microsoft.graph.downloadUrl']);
-  const got=await Promise.all(files.map(it=>
-    fetch(it['@microsoft.graph.downloadUrl']).then(c=>c.ok?c.json():null).catch(()=>null)));
+  // Skip stale files BEFORE downloading them. A record's file cannot pre-date the round it describes,
+  // so anything last touched before the listing window can't be inside it — checking the stamp we
+  // already have costs nothing, while fetching the file costs a round trip.
+  const mtimeCut=Date.now()-RC_LIST_DAYS*24*3600*1000;
+  const files=items.filter(it=>{
+    if(it.folder || !/\.json$/i.test(it.name||'')) return false;
+    const t=Date.parse(it.lastModifiedDateTime||'');
+    return isNaN(t) ? true : t>=mtimeCut;                         // undated stamp -> don't gamble, read it
+  });
+  // PERF (Scott 2026-07-21): records download IN PARALLEL — the one-by-one loop made the pull crawl.
+  const got=await Promise.all(files.map(it=>{
+    const key=(it.id||it.name)+'|'+(it.lastModifiedDateTime||'');
+    const hit=_rcCacheGet(key);
+    if(hit!==undefined) return Promise.resolve(hit);               // unchanged since we last read it
+    const dl=it['@microsoft.graph.downloadUrl'];
+    if(!dl) return Promise.resolve(null);
+    return fetch(dl).then(c=>c.ok?c.json():null).catch(()=>null)
+      .then(rec=>{ _rcCachePut(key, rec); return rec; });
+  }));
   const out=got.filter(rec=>rec && rec.schema==='roundcard.v1');
   out.sort((a,b)=>String(b.savedAt||'').localeCompare(String(a.savedAt||'')));   // newest first
   return out;
