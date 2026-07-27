@@ -2,16 +2,81 @@
 <meta charset="utf-8">
 <title>Signing in…</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<body style="font:15px system-ui,Segoe UI,Arial;padding:24px;color:#44545f">Signing you in… one moment; this window closes automatically.</body>
+<body style="font:15px system-ui,Segoe UI,Arial;padding:24px;color:#44545f">
+<div id="msg">Signing you in… one moment.</div>
+<div id="err" style="display:none;margin-top:14px;padding:14px;border:1px solid #c0492b;border-radius:8px;background:#fdf3f1">
+  <b style="color:#c0492b">Sign-in did not complete.</b>
+  <div id="errtext" style="margin-top:8px;font-family:ui-monospace,Consolas,monospace;font-size:12.5px;white-space:pre-wrap;word-break:break-word"></div>
+  <div style="margin-top:10px;color:#5b6b76">Nothing was saved. Go back and tap Save again. If this keeps happening, send the text above — it says exactly what Microsoft refused.</div>
+  <button id="back" style="margin-top:10px;padding:8px 14px;border-radius:8px;border:1px solid #44545f;background:#fff;cursor:pointer">Back to the app</button>
+</div>
+</body>
 <!-- MSAL redirect landing. It RUNS MSAL to complete the sign-in handshake:
-     - popup sign-in: handleRedirectPromise processes the response, notifies the opener
-       (BroadcastChannel), then this window closes;
-     - full-page redirect: it caches the result, then returns to the app.
-     A blank/no-script page leaves the opener waiting -> MSAL "timed_out" on newer MSAL. -->
+     - popup sign-in: handleRedirectPromise processes the response, notifies the opener, closes;
+     - full-page redirect: it redeems the code, then returns to the app.
+     A blank/no-script page leaves the opener waiting -> MSAL "timed_out" on newer MSAL.
+
+     IT MUST NOT SWALLOW FAILURES (fixed 2026-07-27). This page used to catch the error, log it to
+     a console nobody was looking at, and navigate away in the same tick - so a failed token
+     exchange looked exactly like a successful one. The app just came back "not signed in", and
+     the reason was destroyed before anyone could read it. That cost hours of guessing, and in the
+     field it would have been a provider tapping Save, bouncing through Microsoft, and coming back
+     to a card that silently would not save, with no message anywhere.
+
+     The failure we were actually chasing was AADSTS70008 - the authorization code expiring
+     unredeemed - which is only diagnosable if the FIRST error is visible. Now it is. -->
 <script src="msal-browser.min.js"></script>
 <script>
 (async function () {
+  var RETURN_KEY = 'rc_return_to';
+
+  /* CONSUMED ONCE, HERE, BEFORE ANYTHING CAN THROW - not inside goBack().
+     The Note Composer signs in through THIS SAME PAGE (index.html acquireTokenRedirect), so a
+     leftover stash from the Round Card would hijack the composer's next sign-in and dump the
+     provider on the round card instead. Reading it only inside goBack() left it alive on the two
+     paths that never call goBack: a FAILURE the provider walks away from instead of clicking
+     "Back to the app", and the POPUP path, which just closes the window. Taking it here means
+     landing on this page always spends it, whichever way the page then exits.
+
+     It also carries a timestamp, because a stash can be written and never landed on at all (the
+     provider abandons the Microsoft page). A sign-in round-trip is seconds; anything older than
+     this is not the trip we are on, so it is ignored rather than followed. */
+  var MAX_STASH_AGE_MS = 5 * 60 * 1000;
+  var returnTo = null;
   try {
+    var raw = sessionStorage.getItem(RETURN_KEY);
+    sessionStorage.removeItem(RETURN_KEY);            // one-shot, even if it turns out to be junk
+    if (raw) {
+      var st = JSON.parse(raw);                       // {url, at} - a bare string is an old/foreign
+      if (st && typeof st.url === 'string' && typeof st.at === 'number'   // format and is ignored
+          && st.url.indexOf(location.origin) === 0
+          && (Date.now() - st.at) < MAX_STASH_AGE_MS) returnTo = st.url;
+    }
+  } catch (e) { returnTo = null; }
+
+  function goBack() {
+    /* Return to the page that STARTED the sign-in, not to the folder root. The old behaviour
+       assumed the app is index.html in this folder, which is true on the hosted site and false
+       anywhere else - on a local test server the folder root is a directory listing, so the
+       round card was never reached and its query string (?sandbox=1) was lost. Falls back to the
+       old behaviour when nothing was stashed, so the hosted composer is unaffected. */
+    if (returnTo) location.replace(returnTo);
+    else location.replace(location.pathname.replace(/[^/]*$/, ''));
+  }
+  function fail(e) {
+    var code = (e && (e.errorCode || e.name)) || 'unknown';
+    var text = (e && (e.errorMessage || e.message)) || String(e);
+    try { console.error('redirect handler:', e); } catch (_) {}
+    var el = document.getElementById('errtext');
+    if (el) el.textContent = code + '\n\n' + text;
+    var box = document.getElementById('err'); if (box) box.style.display = '';
+    var m = document.getElementById('msg'); if (m) m.style.display = 'none';
+    var b = document.getElementById('back'); if (b) b.onclick = goBack;
+    // Deliberately does NOT navigate. The message has to survive long enough to be read.
+  }
+  try {
+    if (!(window.msal && window.msal.PublicClientApplication))
+      throw new Error('The Microsoft sign-in library did not load (msal-browser.min.js).');
     var pca = new msal.PublicClientApplication({
       auth: {
         clientId: '3702875f-471b-4878-a009-8a2575b41db3',
@@ -20,11 +85,29 @@
       },
       cache: { cacheLocation: 'sessionStorage' }
     });
+    var hadHash = !!(location.hash && location.hash.length > 1);
     await pca.initialize();
-    await pca.handleRedirectPromise();
-  } catch (e) { try { console.error('redirect handler:', e); } catch (_) {} }
-  // popup -> let it close; full-page redirect -> return to the app (index.html in this folder)
+    var res = await pca.handleRedirectPromise();
+    /* Breadcrumb. This page navigates away immediately, so anything it learns is normally
+       destroyed with it - which is how a sign-in that silently did nothing went undiagnosed for
+       hours. Auth metadata only: no patient data, no tokens, no secrets. Read it from the app
+       with sessionStorage.rc_signin_debug. */
+    try {
+      sessionStorage.setItem('rc_signin_debug', JSON.stringify({
+        at: new Date().toISOString(),
+        hadHashOnArrival: hadHash,
+        handleRedirectReturned: res ? (res.account ? 'account: ' + res.account.username : 'response, no account') : 'null (nothing to process)',
+        accountsAfter: pca.getAllAccounts().length,
+        cachedUrlHashStillThere: !!sessionStorage.getItem('msal.3702875f-471b-4878-a009-8a2575b41db3.urlHash')
+      }));
+    } catch (_) {}
+  } catch (e) {
+    try { sessionStorage.setItem('rc_signin_debug', JSON.stringify({
+      at: new Date().toISOString(), threw: (e && (e.errorCode || e.name)) + ': ' + (e && (e.errorMessage || e.message))
+    })); } catch (_) {}
+    fail(e); return;
+  }
   if (window.opener && window.opener !== window) { window.close(); }
-  else { location.replace(location.pathname.replace(/[^/]*$/, '')); }
+  else { goBack(); }
 })();
 </script>
