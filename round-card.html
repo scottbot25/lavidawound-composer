@@ -280,7 +280,9 @@ function load(){
    (default true — you're sending everyone unless you uncheck them). */
 function normalizePts(o){
   if(!o || !Array.isArray(o.pts)) return;
-  o.pts.forEach(p=>{ if(!p.id) p.id=newId(); if(typeof p.send!=='boolean') p.send=true; });
+  o.pts.forEach(p=>{ if(!p.id) p.id=newId(); if(typeof p.send!=='boolean') p.send=true;
+    if(typeof p.dispo!=='string') p.dispo='';   // absent means seen — see DISPO_OPTS
+  });
 }
 function save(){ try{ sessionStorage.setItem(KEY, JSON.stringify(S)); }catch(e){}
   if(typeof scheduleRcAutoSave==='function') scheduleRcAutoSave();
@@ -310,8 +312,43 @@ function wbText(w){
    patients added in the same second can't collide; never derived from the name (two "Maria Garcia"
    stay distinct). */
 function newId(){ return 'rc-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,7); }
-function newPt(){ return { id:newId(), name:'', edu:'', wounds:[newWound()], send:true, visitType:'' }; }   // visitType: ''=Auto (history decides) | 'new' | 'fu'
+function newPt(){ return { id:newId(), name:'', edu:'', wounds:[newWound()], send:true, visitType:'', dispo:'' }; }   // visitType: ''=Auto (history decides) | 'new' | 'fu'
 function activePt(){ return S.pts[S.active] || null; }
+
+/* ---------- disposition: was this patient actually seen? (Scott 2026-07-27) ----------
+   A record exists for everyone the provider put on the card. That is not the same as
+   everyone they SAW, and the QC count was counting the list rather than the visits.
+     ''           seen  - the normal case, and what every record written before today means
+     'notSeen'          - not in their room. Nothing done, nothing owed, does NOT count.
+                          Still carries forward: they are still on the panel.
+     'discharged'       - gone from the facility. Does not count and does NOT carry forward.
+   A patient who REFUSES care is none of these - they were seen, it was documented, it counts.
+   That is deliberately not a status; it is note content.
+
+   Readmission needs no mechanism. Carry-forward already takes each patient's LATEST record
+   and ignores anyone older than CF_ACTIVE_DAYS, so a discharge just makes them dormant now
+   instead of in three weeks. If they come back, the provider adds them by hand - the path
+   that already exists for every dormant patient - and that new record carries no discharge,
+   so carry-forward resumes on its own. Initial-vs-Follow-up on a readmission stays the
+   provider's call to document (there is a multi-year rule); the tool does not guess. */
+const DISPO_OPTS=[['','Seen'],['notSeen','Not seen'],['discharged','Discharged']];
+function isCounted(p){ const d=String((p&&p.dispo)||'').trim(); return d!=='notSeen' && d!=='discharged'; }
+function countedPts(){ return sentNamed().filter(isCounted); }
+function setDispo(v){ const p=activePt(); if(!p) return; p.dispo=v; save(); render(); }
+
+/* Drops discharged patients from carry-forward. Takes the map of patient-key -> their LATEST
+   record and mutates it, returning how many went. Separate function so it can be tested from
+   source (round-card-dispo-test.js) — the ordering it depends on is the subtle part:
+   it must run AFTER latest-record selection. Only the most recent visit can say whether a
+   patient is still at the facility; filter before selecting and an older pre-discharge visit
+   wins, quietly bringing them back. 'notSeen' is intentionally left in — still on the panel. */
+function _cfDropDischarged(byPatient){
+  let dropped=0;
+  Object.keys(byPatient||{}).forEach(k=>{
+    if(String((byPatient[k]||{}).dispo||'').trim()==='discharged'){ delete byPatient[k]; dropped++; }
+  });
+  return dropped;
+}
 
 /* Size prints only what was actually measured — a bare "cm" or a half-filled
    dimension string is worse than saying nothing. */
@@ -486,8 +523,13 @@ function setWOther(i,f,val){ const p=activePt(); if(!p) return; p.wounds[i][f+'O
 
 /* ---------- render ---------- */
 function paintCount(){
-  const n = S.pts.filter(p=>(p.name||'').trim()).length;
-  document.getElementById('countPill').textContent = n+' patient'+(n===1?'':'s');
+  const named = S.pts.filter(p=>(p.name||'').trim());
+  const n = named.length;
+  // Show the counted number alongside the total whenever they differ, so "what will be filed
+  // as the QC count" is visible on the round rather than only discoverable the next morning.
+  const seen = named.filter(isCounted).length;
+  document.getElementById('countPill').textContent =
+    n+' patient'+(n===1?'':'s') + (seen!==n ? ' · '+seen+' seen' : '');
 }
 /* ABC ordering (Abby 2026-07-22: the card should line up with PCC's name-sorted patient list).
    DISPLAY-only — S.pts keeps entry order (indices stay stable for pickPt/delPt/setW), and every
@@ -675,6 +717,18 @@ function render(){
        composer's history check would wrongly open those patients as Initials forever. Auto = the
        composer decides from history (the default, unchanged); Initial/Follow-up force it. The
        composer warns on a contradiction (e.g. forced Initial when a visit is already on file). */
+    /* Disposition (Scott 2026-07-27). Sits above Visit type on purpose: if the patient wasn't
+       seen, nothing below it applies. Marking one keeps the record — they were on the round
+       list, and that is worth knowing — while keeping them out of the QC count. */
+    + '<label style="margin-top:10px">This visit</label>'
+    + '<div class="row no-print" style="gap:6px">'
+    +   DISPO_OPTS.map(function(o){
+          const on=(p.dispo||'')===o[0];
+          return '<button class="tiny" style="'+(on?'background:#0f8a7c;color:#fff;border-color:#0f8a7c':'')+'" onclick="setDispo(\''+o[0]+'\')">'+o[1]+'</button>';
+        }).join('')
+    + '</div>'
+    + ((p.dispo==='notSeen')?'<div class="muted" style="margin-top:4px">Not in their room — no note is owed, so they will <b>not</b> be counted. They still carry forward to next week.</div>':'')
+    + ((p.dispo==='discharged')?'<div class="muted" style="margin-top:4px">Left the facility — <b>not</b> counted, and they will <b>not</b> carry forward. If they are readmitted, add them back by hand.</div>':'')
     + '<label style="margin-top:10px">Visit type</label>'
     + '<div class="row no-print" style="gap:6px">'
     +   [['','Auto'],['new','Initial'],['fu','Follow-up']].map(function(o){
@@ -1252,7 +1306,10 @@ function _rcPaintSync(state, when){
 }
 // On load, show whether we're backed-up-capable (signed in) or device-only. Silent — never prompts.
 (async function _rcSyncInit(){ try{ const t=await _vaultTokenSilent(); _rcPaintSync(t?'ready':'local'); }catch(e){ _rcPaintSync('local'); } })();
-function _rcSig(p){ return JSON.stringify({n:p.name||'', e:p.edu||'', w:p.wounds||[], vt:p.visitType||'', f:S.round.fac||'', d:S.round.date||'', pr:S.round.prov||''}); }
+/* dp MUST be in here. The signature is how auto-save decides a patient changed; leave a field
+   out and editing it reads as "already saved", so it silently never uploads. That exact bug
+   ate wound edits typed during an in-flight save (2026-07-21). */
+function _rcSig(p){ return JSON.stringify({n:p.name||'', e:p.edu||'', w:p.wounds||[], vt:p.visitType||'', dp:p.dispo||'', f:S.round.fac||'', d:S.round.date||'', pr:S.round.prov||''}); }
 async function _vaultTokenSilent(){
   try{
     if(window.self!==window.top){ try{ return await _tokenFromParent(); }catch(e){ return null; } }
@@ -1354,7 +1411,12 @@ async function qcAutoSave(force){
   const facRaw=(S.round.fac||'').trim(); if(!facRaw) return;
   const fac  = cleanSeg(facRaw) || 'Unfiled';
   const date = /^\d{4}-\d{2}-\d{2}/.test(String(S.round.date||'')) ? S.round.date.slice(0,10) : 'undated';
-  const count= pts.length;
+  /* Counts patients SEEN, not patients listed. Not-seen and discharged are on the card but
+     owe no note, so counting them sends the QC tracker chasing notes that should not exist.
+     Must stay in step with Build-QcPlan in qc_count_nightly.ps1 - both write this same file,
+     so if they disagree the number flips depending on which ran last. */
+  const count= pts.filter(isCounted).length;
+  if(!count) return;                                    // attended, nobody available: no count is owed
   if(!force && new Date().getHours() < QC_AFTER_HOUR) return;   // rounds may still be running
   const sig=date+'|'+fac+'|'+count;
   if(sig===_qcLastSig) return;                          // this exact count is already on file
@@ -1408,7 +1470,7 @@ async function rcAutoSaveCloud(){
       const sigNow=_rcSig(p);
       const rec={ schema:'roundcard.v1', id:id, savedAt:new Date().toISOString(), key:ptSlug(p.name),
         facility:S.round.fac||'', date:date, provider:S.round.prov||'',
-        visitType:p.visitType||'',
+        visitType:p.visitType||'', dispo:p.dispo||'',
         patient:{name:p.name}, edu:p.edu||'', wounds:JSON.parse(JSON.stringify(p.wounds||[])) };
       const jb=new Blob([JSON.stringify(rec)],{type:'application/json'});
       await _netTmo(_vaultUpload(token,driveId,recSegs,id+'.json',jb,'application/json'), 30000);
@@ -1486,7 +1548,7 @@ async function saveVault(){
       const sigNow=_rcSig(p);
       const rec={ schema:'roundcard.v1', id:id, savedAt:new Date().toISOString(), key:ptSlug(p.name),
         facility:S.round.fac||'', date:date, provider:S.round.prov||'',
-        visitType:p.visitType||'',
+        visitType:p.visitType||'', dispo:p.dispo||'',
         patient:{name:p.name}, edu:p.edu||'', wounds:JSON.parse(JSON.stringify(p.wounds||[])) };
       const jb=new Blob([JSON.stringify(rec)],{type:'application/json'});
       await _vaultUpload(token,driveId,recSegs,id+'.json',jb,'application/json');
@@ -1497,12 +1559,18 @@ async function saveVault(){
        note. Deliberately no names — a bare count is not PHI, so this feed can later flow
        outside the vault (Power Automate → QC tracker) with zero HIPAA friction.
        `patientCount` is the contract field name — don't rename casually. */
-    st('Logging QC count…');
-    await _vaultEnsureFolders(token,driveId,['QC Feed']);
-    const qc={ schema:'qcfeed.v1', date:date, facility:S.round.fac||'', provider:S.round.prov||'',
-      patientCount:pts.length, savedAt:new Date().toISOString() };
-    await _vaultUpload(token,driveId,['QC Feed'], date+' — '+fac+' — '+prov+'.json',
-      new Blob([JSON.stringify(qc)],{type:'application/json'}),'application/json');
+    // Seen patients only — same rule as the auto-save above and as the nightly job. A round
+    // where the provider attended but nobody was available owes no count, so nothing is filed
+    // and the silence check reads that day as quiet rather than raising a missing-count alarm.
+    const qcCount=pts.filter(isCounted).length;
+    if(qcCount>0){
+      st('Logging QC count…');
+      await _vaultEnsureFolders(token,driveId,['QC Feed']);
+      const qc={ schema:'qcfeed.v1', date:date, facility:S.round.fac||'', provider:S.round.prov||'',
+        patientCount:qcCount, savedAt:new Date().toISOString() };
+      await _vaultUpload(token,driveId,['QC Feed'], date+' — '+fac+' — '+prov+'.json',
+        new Blob([JSON.stringify(qc)],{type:'application/json'}),'application/json');
+    }
     st('✓ Saved');
     /* If we're running inside the composer's overlay iframe, tell it to pull the patients we just
        filed — so the provider closes the card and they're already in the note, no extra step. */
@@ -1743,7 +1811,9 @@ async function rcRestoreFromVault(){
     if(!mine.length) return;
     mine.sort((a,b)=>String(a.savedAt||'').localeCompare(String(b.savedAt||'')));
     S.round.fac=mine[mine.length-1].facility||S.round.fac; S.round.date=today; S.round.prov=S.round.prov||prov;
-    S.pts=mine.map(r=>({ id:r.id||newId(), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], send:true, visitType:r.visitType||'' }));
+    // dispo has to come back too — reopening a round must not quietly reset everyone to
+    // "seen" and re-inflate the count that was already filed for that day.
+    S.pts=mine.map(r=>({ id:r.id||newId(), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], send:true, visitType:r.visitType||'', dispo:r.dispo||'' }));
     normalizePts(S); S.active=0;
     S.pts.forEach(p=>{ try{ _rcCloudSig[p.id]=_rcSig(p); }catch(e){} });   // restored = already in the cloud; no re-upload
     save(); paintRound(); render();
@@ -1996,6 +2066,8 @@ async function carryForward(){
       const k=_cfNameKey(nm);
       if(!byPatient[k] || d>String(byPatient[k].date||'').slice(0,10)) byPatient[k]=rec;
     });
+    // AFTER latest-record selection, never during it — see _cfDropDischarged.
+    const dischargedDropped=_cfDropDischarged(byPatient);
     const chosen=Object.keys(byPatient).map(k=>byPatient[k])
       .sort((a,b)=>String((a.patient&&a.patient.name)||'').toLowerCase()
                    .localeCompare(String((b.patient&&b.patient.name)||'').toLowerCase()));
@@ -2025,9 +2097,10 @@ async function carryForward(){
                 wbGran:w.wbGran||'', wbSlough:w.wbSlough||'', wbFib:w.wbFib||'',
                 wbEpi:w.wbEpi||'', wbEschar:w.wbEschar||'' }
       }));
+      // dispo starts clean every visit: last week's "not seen" says nothing about this week.
       return { id:newId(), name:((rec.patient&&rec.patient.name)||'').trim(), edu:'',
                priorEdu:String(rec.edu||''), wounds:wounds.length?wounds:[newWound()],
-               send:true, visitType:'' };      // Auto — the composer decides Initial vs Follow-up from history
+               send:true, visitType:'', dispo:'' };   // Auto — the composer decides Initial vs Follow-up from history
     });
     // a load replaces the list: disarm any half-finished two-tap first (see loadRecentRound)
     try{ if(_delArm){ if(_delArm.t) clearTimeout(_delArm.t); _delArm=null; } }catch(e){}
@@ -2038,6 +2111,7 @@ async function carryForward(){
     S.pts=pts; normalizePts(S); S.active=0;
     save(); paintRound(); render();
     toast('Brought forward '+pts.length+' of '+who+'’s patient'+(pts.length===1?'':'s')+' from their last visit'
+      +(dischargedDropped?' · '+dischargedDropped+' discharged patient'+(dischargedDropped===1?'':'s')+' left off':'')
       +(healedDropped?' · '+healedDropped+' healed wound'+(healedDropped===1?'':'s')+' left off':'')
       +' — measurements start blank');
   }catch(e){
@@ -2059,7 +2133,10 @@ function loadRecentRound(i){
     if(cb){ cb.textContent='Clear'; cb.style.background=''; cb.style.color=''; } } }catch(e){}
   S.round.fac=g.facility||S.round.fac; S.round.date=g.date; S.round.prov=S.round.prov||g.provider||''; _sheetInvalidate();
   S.round.facLock=(S.round.fac||'').trim();
-  S.pts=mine.map(r=>({ id:r.id||newId(), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], send:true, visitType:r.visitType||'' }));
+  // dispo comes back too — see the same line in rcRestoreFromVault. Reopening a round must
+  // not quietly reset everyone to "seen"; auto-save would then re-upload them as seen and
+  // re-inflate a count that was already filed correctly.
+  S.pts=mine.map(r=>({ id:r.id||newId(), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], send:true, visitType:r.visitType||'', dispo:r.dispo||'' }));
   normalizePts(S); S.active=0;
   S.pts.forEach(p=>{ try{ _rcCloudSig[p.id]=_rcSig(p); }catch(e){} });   // loaded = already in the cloud; only edits re-upload
   save(); paintRound(); render();
