@@ -1615,25 +1615,32 @@ function clearAll(btn){
     return;
   }
   clearTimeout(_clearArm); _clearArm=null;
-  /* The cloud cleanup below exists for ONE reason: stop restore-on-open from resurrecting a round the
-     provider deliberately wiped. Restore only ever looks at TODAY (rcRestoreFromVault), so for a round
-     that is NOT today's there is nothing to resurrect — deleting its records would be pure collateral
-     damage. That matters now that a past round can be LOADED and amended (openRecentRounds): tidying up
-     with Clear afterwards used to wipe that older round's records out of the vault. Clear still wipes
-     the screen either way; it just no longer reaches back into history. */
-  const isTodaysRound = String(S.round.date||'').slice(0,10)===todayISO();
-  const doomed=isTodaysRound ? (S.pts||[]).filter(p=>p.id).map(p=>p.id) : [];
-  const fac=cleanSeg(S.round.fac)||'Unfiled';
+  /* CLEAR WIPES THE SCREEN. IT DOES NOT TOUCH THE VAULT. (Scott 2026-07-26 — this cost a real round.)
+     It used to delete the on-screen patients' records from ClinicalVault, so that reopening the card
+     couldn't resurrect a round the provider had deliberately wiped. The trade was wrong by an order of
+     magnitude: to a provider, "Clear" plainly means clear the screen before the next building — nothing
+     about it suggests reaching into the server and destroying a completed round. On 2026-07-22 Abby
+     finished University Heights, sent the sheet, cleared to start Crestmoor, and all 21 of that round's
+     records were deleted from the vault. The folder survived, empty, which is how we found it. They were
+     recovered from the recycle bin; the next one might not be.
+     The resurrection worry it was solving is trivial by comparison, so it is now handled locally: we
+     remember that this day+facility was dismissed, and restore-on-open honours that. The records stay
+     in the vault, so nothing is ever lost and "Load a recent round" can still bring the round back.
+     Removing a SINGLE patient still deletes that patient's record — that action names the patient in
+     its confirm and is meant to remove them. This is about the blanket wipe. */
+  const clearedKey = (String(S.round.date||'').slice(0,10)||'undated') + '|' + (cleanSeg(S.round.fac)||'Unfiled');
   S=blank(); _sheetInvalidate(); try{ sessionStorage.removeItem(KEY); }catch(e){}
   Object.keys(_rcCloudSig).forEach(k=>delete _rcCloudSig[k]);
-  paintRound(); render(); toast('Cleared');
+  try{
+    const seen=JSON.parse(localStorage.getItem(RC_CLEARED_KEY)||'{}');
+    seen[clearedKey]=Date.now();
+    // forget dismissals older than 30 days so this can't grow forever
+    Object.keys(seen).forEach(k=>{ if(Date.now()-(seen[k]||0) > 30*24*3600*1000) delete seen[k]; });
+    localStorage.setItem(RC_CLEARED_KEY, JSON.stringify(seen));
+  }catch(e){}
+  paintRound(); render();
+  toast('Cleared from this screen — the round is still saved in ClinicalVault');
   if(btn){ btn.textContent='Clear'; btn.style.background=''; btn.style.color=''; }
-  // best-effort cloud cleanup so restore-on-open doesn't resurrect a deliberately wiped round
-  (async()=>{ try{
-    const token=await _vaultTokenSilent(); if(!token) return;
-    const {driveId}=await _vaultCtx(token);
-    for(const id of doomed){ try{ await _vaultDelete(token,driveId,'RoundCards/'+fac+'/'+id+'.json'); }catch(e){} }
-  }catch(e){} })();
 }
 
 /* ---------- boot ---------- */
@@ -1687,6 +1694,16 @@ function _cardProvOk(rec, okSet, allowBlank){
   if(!p) return !!allowBlank;
   return okSet.has(p);
 }
+/* Rounds the provider deliberately cleared, remembered LOCALLY as "date|facility" so restore-on-open
+   doesn't bring them straight back. This replaces deleting their records from the vault — the records
+   stay, so a mistaken Clear costs nothing and "Load a recent round" can still fetch the round. */
+const RC_CLEARED_KEY='rc_cleared_v1';
+function _wasCleared(dateStr, facRaw){
+  try{
+    const seen=JSON.parse(localStorage.getItem(RC_CLEARED_KEY)||'{}');
+    return !!seen[(String(dateStr||'').slice(0,10)||'undated')+'|'+(cleanSeg(facRaw)||'Unfiled')];
+  }catch(e){ return false; }
+}
 async function rcRestoreFromVault(){
   try{
     if((S.pts||[]).some(p=>(p.name||'').trim())) return;            // session already has work — never clobber
@@ -1720,7 +1737,8 @@ async function rcRestoreFromVault(){
     }));
     recs.forEach(rec=>{
       if(rec && rec.schema==='roundcard.v1' && String(rec.date||'').slice(0,10)===today
-         && _cardProvOk(rec, okProv, true)) mine.push(rec);        // same-day: unattributed legacy records still count
+         && _cardProvOk(rec, okProv, true)
+         && !_wasCleared(rec.date, rec.facility)) mine.push(rec);  // same-day, mine, and not one I cleared
     });
     if(!mine.length) return;
     mine.sort((a,b)=>String(a.savedAt||'').localeCompare(String(b.savedAt||'')));
