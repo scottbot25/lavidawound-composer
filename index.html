@@ -2886,7 +2886,20 @@ async function rcAutoPull(reason){
         if(srcPid && sameSlotPatient){
           rcMergeIntoPatient(srcPid, r); pulled++;
           const nm=((r.patient&&r.patient.name)||'').trim()||'Patient';
-          toast('Updated '+nm+' from their Round Card');
+          /* SAY WHICH NOTE CHANGED, because it is often not the one on screen.
+             One card record is one visit, so a patient rounded on two days has TWO notes with the
+             SAME name - and this pull deliberately returns the provider to whichever note they were
+             working in (returnPid, captured above). "Updated TEST India" then names a note they are
+             not looking at while the one in front of them is unchanged, which reads exactly like the
+             card update never arrived.
+             Found 2026-07-27 in the sandbox: an order edited on the card merged correctly into the
+             7/27 note while the 7/26 note was displayed, and nothing said so. Nothing was lost - the
+             message just pointed at the wrong place. */
+          const when=String(r.date||'').slice(0,10);
+          const elsewhere=returnNamed && returnPid && returnPid!==srcPid;
+          toast(elsewhere
+            ? 'Updated '+nm+'’s '+(when||'other')+' note from their Round Card — open that note to see the changes'
+            : 'Updated '+nm+' from their Round Card');
           const want=(r.visitType==='new'||r.visitType==='fu')?r.visitType:'';
           const have=(WS.patients[srcPid]||{}).noteType;
           if(want && have && want!==have){
