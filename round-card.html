@@ -284,7 +284,21 @@ function normalizePts(o){
     if(typeof p.dispo!=='string') p.dispo='';   // absent means seen — see DISPO_OPTS
   });
 }
+/* WHAT WE KNOW IS ALREADY IN THE VAULT, persisted alongside the round.
+   _rcCloudSig is the "this patient is already uploaded, unchanged" map, and it used to live only in
+   memory. Every fresh page load therefore started with it EMPTY, so the first auto-save re-sent every
+   patient - same ids and same content, but a new savedAt. Reopening the card inside the composer's
+   overlay does exactly that, and savedAt is precisely the signal the composer reads as "this record
+   was edited", so simply opening the card made every patient look freshly changed and pulled them
+   into the notes again. Measured in the sandbox 2026-07-27.
+   It stores what was CONFIRMED uploaded rather than what is on screen - so work that never reached
+   the vault (offline, a failed save) still has no signature and is still retried. */
+const SIGKEY = KEY + '_cloudsig';
+function saveCloudSig(){
+  try{ if(typeof _rcCloudSig!=='undefined') sessionStorage.setItem(SIGKEY, JSON.stringify(_rcCloudSig)); }catch(e){}
+}
 function save(){ try{ sessionStorage.setItem(KEY, JSON.stringify(S)); }catch(e){}
+  saveCloudSig();
   if(typeof scheduleRcAutoSave==='function') scheduleRcAutoSave();
   if(typeof scheduleSheetSave==='function') scheduleSheetSave(); }
 function todayISO(){ const d=new Date(), p=n=>String(n).padStart(2,'0');
@@ -483,7 +497,17 @@ function onProvPick(sel){
    The dangerous case is narrower - a round LOADED from the vault that belongs to someone
    else. Re-filing then takes a filed round off one provider and puts it on another, which
    also changes who it comes back to (restore and the round picker both filter by provider)
-   and which provider the QC count lands under. That one gets a confirm. */
+   and which provider the QC count lands under. That one gets a confirm.
+
+   WHERE THE "the QC count moves too" PROMISE IS ACTUALLY KEPT: not here. Re-filing moves the
+   RECORDS; the old provider's count file is named after them and would just sit there, leaving
+   QC Feed with two counts for one facility on one day - one real, one with nothing behind it.
+   The nightly job reconciles that (qc_count_nightly.ps1, Get-OrphanedCounts), removing a count
+   only when the same facility and day still has a round under a different provider. It runs at
+   23:00 and the feed is read the next morning, so the promise holds by the time anyone acts on
+   it. Deliberately NOT done from here: it would be a destructive vault call from the client for
+   no gain, and it would only cover this one way of orphaning a count. Found 2026-07-27 in the
+   ToolSandbox run - the confirm had been promising something nothing did. */
 function applyProvChange(v){
   const old=(S.round.prov||'').trim(); v=(v||'').trim();
   if(v===old){ paintProvSel(); return; }
@@ -1325,9 +1349,23 @@ async function _vaultUpload(token,driveId,segs,filename,blob,ctype){
 // Read-side helpers (restore-on-open + Clear's cloud cleanup). Content is read via the item's
 // pre-authenticated downloadUrl (same pattern as the composer — Graph's /content endpoint 302s
 // cross-origin and drops the auth header; the downloadUrl is short-lived and needs none).
+/* "EMPTY" AND "COULDN'T ASK" ARE NOT THE SAME ANSWER, and this used to return [] for both.
+   Every caller then said something confidently false the moment SharePoint hiccupped: the round
+   picker showed nothing, carry-forward said "no visits in the last 21 days", the sheet warning
+   said no handoff sheet was filed, and coming back to a round said "No round on file". A 401 on
+   an expired token, a 429, a dropped connection - all of them looked exactly like "you have
+   nothing here", which is the most alarming thing this tool can say to a provider.
+   404 is the one status that really does mean nothing is there: the folder has never been
+   created, so nothing was ever uploaded for it. Everything else throws, tagged, so a caller can
+   tell the difference and say "couldn't check" instead of inventing an answer. */
 async function _vaultList(token,driveId,rel){
   const r=await _gfetch('https://graph.microsoft.com/v1.0/drives/'+driveId+'/root:/'+_encPath(rel)+':/children?$top=200',token);
-  if(!r.ok) return []; return (await r.json()).value||[];
+  if(r.status===404) return [];                    // never created = genuinely nothing there
+  if(!r.ok){
+    const e=new Error('Couldn’t read '+rel+' (HTTP '+r.status+')');
+    e.vaultUnreadable=true; e.status=r.status; throw e;
+  }
+  return (await r.json()).value||[];
 }
 async function _vaultReadJson(token,driveId,rel){
   const m=await _gfetch('https://graph.microsoft.com/v1.0/drives/'+driveId+'/root:/'+_encPath(rel),token);
@@ -1350,7 +1388,18 @@ let _rcAutoT=null, _rcAutoBusy=false, _rcAutoAgain=false;
 // Deadline wrapper — same fix as the composer (Scott 2026-07-21): a stalled request left "Saving…"
 // up forever and wedged _rcAutoBusy, silently blocking every later auto-save until reload.
 function _netTmo(p, ms){ return Promise.race([p, new Promise((_,rej)=>setTimeout(()=>rej(new Error('vault-timeout')), ms))]); }
-const _rcCloudSig={};   // patient id -> last-uploaded content signature
+/* patient id -> last-uploaded content signature. RESTORED, not started empty - see saveCloudSig().
+   Only signatures for patients still on the card are kept, so one can never outlive the patient it
+   describes and wrongly mark a later, different patient as "already uploaded". */
+function _loadCloudSig(raw, pts){
+  try{
+    if(!raw) return {};
+    const stored=JSON.parse(raw)||{}, live={};
+    (pts||[]).forEach(p=>{ if(p && p.id && Object.prototype.hasOwnProperty.call(stored,p.id)) live[p.id]=stored[p.id]; });
+    return live;
+  }catch(e){ return {}; }                                  // unreadable -> re-upload, never assume uploaded
+}
+const _rcCloudSig=_loadCloudSig((function(){ try{ return sessionStorage.getItem(SIGKEY); }catch(e){ return null; } })(), S.pts);
 
 /* How many named patients are NOT yet in the vault.
    Clearing the card on a date or facility switch is only safe because the records are
@@ -2371,9 +2420,18 @@ async function rcLoadRoundFor(dateStr, facRaw){
     const {driveId}=await _vaultCtx(token);
     const fac=cleanSeg(facR)||'Unfiled';
 
+    /* A folder that has never existed really is "no round". Anything ELSE - an expired token, a
+       429, a dropped connection - means we could not check, and saying "No round on file" then is
+       a lie that reads exactly like a lost round. Say what is true: we could not look. */
     let files=null;
     try{ files=await _vaultList(token, driveId, 'RoundCards/'+fac); }
-    catch(e){ _rcNoRoundNotice(date, facR); return 'empty'; }        // no folder = no round, not an error
+    catch(e){
+      if(e && e.vaultUnreadable){
+        toast('Couldn’t check ClinicalVault for that round just now — anything already saved is still there. Set the date again to retry.');
+        return 'unreadable';
+      }
+      _rcNoRoundNotice(date, facR); return 'empty';                 // folder never created = no round
+    }
 
     const cands=(files||[]).filter(f=>/\.json$/i.test(f.name||''));
     const recs=await Promise.all(cands.map(f=>{
