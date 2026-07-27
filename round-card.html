@@ -418,7 +418,44 @@ function paintProvSel(){
     + _optList(PROVIDERS,S.round.provExtra,cur).map(p=>'<option'+(p===cur?' selected':'')+'>'+esc(p)+'</option>').join('')
     + '<option value="__other__">+ Other…</option>';
 }
-function setRound(){ S.round.date=document.getElementById('r_date').value; _sheetInvalidate(); save(); }
+/* ---------- changing the round DATE (Scott 2026-07-27) ----------
+   The date is round-level, exactly like the facility, AND it is part of every patient's
+   change signature - so editing it with patients on the card made auto-save rewrite each
+   record to its OWN FILE with the new date. A move, not a copy. On 2026-07-27 that
+   silently relocated 18 of 21 records off 7/22 onto 7/23, and the only reason it was
+   recoverable is that record ids are stable, so writing the date back restored them.
+
+   The fix is not a warning. A warning still lets you say OK and corrupt the day, and
+   carrying the patients over was never the right outcome anyway: a round IS one facility
+   on one day, so changing the date means you are looking at a DIFFERENT round and the
+   patients on screen belong to the old one. They do not come with you. The records are
+   then never rewritten with a new date, so the failure stops existing rather than being
+   made more annoying. Same shape as applyFacChange, for the same reason.
+
+   The confirm stays only to protect a round in progress from a mistyped date - it is not
+   asking permission to move anything. */
+function setRound(){ applyDateChange(document.getElementById('r_date').value); }
+function applyDateChange(nd){
+  const old=(S.round.date||'').trim(); nd=(nd||'').trim();
+  if(nd===old) return;
+  const named=S.pts.filter(p=>(p.name||'').trim());
+  if(!named.length){ S.round.date=nd; _sheetInvalidate(); save(); return; }
+  const n=named.length;
+  const ok=confirm('This card holds '+n+' patient'+(n===1?'':'s')+' from the '+(old||'current')+' round.\n\n'
+    + 'A round is one facility on one day, so changing the date starts a different round and '
+    + 'clears the card.\n\n'
+    + _clearRisk(_unsavedCount(), old||'that date')
+    + 'OK = clear and start ' + (nd||'the new date')
+    + '\nCancel = stay on '+(old||'this date'));
+  if(!ok){ paintRound(); return; }                     // put the date picker back
+  /* Switching away IS the end of that round - the same signal a facility switch gives. File
+     its sheet and count while the OLD date is still set; both capture date/facility/patients
+     synchronously, before their first await, so they land under the old day. */
+  clearTimeout(_sheetAutoT); sheetAutoSave(); qcAutoSave(true);
+  S.pts=[]; S.active=0; S.round.date=nd; S.round.loadedProv='';   // nothing is loaded any more
+  _sheetInvalidate(); _sheetLastSig=''; _qcLastSig='';
+  save(); paintRound(); render(); toast('Started '+(nd||'a new date'));
+}
 function paintRound(){
   document.getElementById('r_date').value = S.round.date || todayISO();
   paintFacSel(); paintProvSel();
@@ -430,6 +467,34 @@ function onProvPick(sel){
     if(!v){ paintProvSel(); return; }
     S.round.provExtra=S.round.provExtra||[];
     if(_optList(PROVIDERS,S.round.provExtra,'').indexOf(v)<0) S.round.provExtra.push(v);
+  }
+  applyProvChange(v);
+}
+/* ---------- changing the PROVIDER ----------
+   Provider is round-level and in the change signature too, so editing it rewrites every
+   record with the new name. Unlike the date and the facility, that is often exactly what
+   you want: if the provider was auto-filled wrong on a round you are building, correcting
+   it SHOULD re-file those records. The records are still this round; they were just
+   mis-attributed. So this does not clear the card.
+
+   The dangerous case is narrower - a round LOADED from the vault that belongs to someone
+   else. Re-filing then takes a filed round off one provider and puts it on another, which
+   also changes who it comes back to (restore and the round picker both filter by provider)
+   and which provider the QC count lands under. That one gets a confirm. */
+function applyProvChange(v){
+  const old=(S.round.prov||'').trim(); v=(v||'').trim();
+  if(v===old){ paintProvSel(); return; }
+  const loaded=(S.round.loadedProv||'').trim();
+  const named=S.pts.filter(p=>(p.name||'').trim()).length;
+  if(loaded && named && loaded===old){
+    const ok=confirm(named+' patient'+(named===1?'':'s')+' on this card were loaded from '
+      + loaded+'\'s round.\n\nChanging the provider re-files every one of those records under '
+      + (v||'the new provider')+'. They will stop coming back for '+loaded
+      + ', and the QC count for that day moves too.\n\n'
+      + 'OK = re-file them under '+(v||'the new provider')
+      + '\nCancel = leave them with '+loaded);
+    if(!ok){ paintProvSel(); return; }
+    S.round.loadedProv=v;                              // they are this provider's now
   }
   S.round.prov=v; save(); paintProvSel();
 }
@@ -455,7 +520,9 @@ function applyFacChange(nf){
   const n=S.pts.length;
   const ok=confirm('This card still has '+n+' patient'+(n===1?'':'s')+' from '+lock+'.\n\n'
     + 'A sheet can only carry one facility\'s residents. Send '+lock+'\'s sheet first if you '
-    + 'haven\'t.\n\nOK = clear them and start ' + (nf||'the new facility')
+    + 'haven\'t.\n\n'
+    + _clearRisk(_unsavedCount(), lock)          // same exposure as the date switch
+    + 'OK = clear them and start ' + (nf||'the new facility')
     + '\nCancel = stay on '+lock);
   if(ok){
     // Moving to the next building IS the end of this one's round — the closest thing to a real signal
@@ -463,7 +530,7 @@ function applyFacChange(nf){
     // date and patients synchronously, so this lands under the OLD building even though we change it
     // on the next line.
     clearTimeout(_sheetAutoT); sheetAutoSave(); qcAutoSave(true);
-    S.pts=[]; S.active=0; S.round.facLock=nf; S.round.fac=nf; _sheetLastSig=''; _qcLastSig=''; save(); paintFacSel(); render(); toast('Started '+(nf||'a new facility')); }
+    S.pts=[]; S.active=0; S.round.facLock=nf; S.round.fac=nf; S.round.loadedProv=''; _sheetLastSig=''; _qcLastSig=''; save(); paintFacSel(); render(); toast('Started '+(nf||'a new facility')); }
   else  { S.round.fac=lock; save(); paintFacSel(); }
 }
 
@@ -1271,6 +1338,25 @@ let _rcAutoT=null, _rcAutoBusy=false, _rcAutoAgain=false;
 // up forever and wedged _rcAutoBusy, silently blocking every later auto-save until reload.
 function _netTmo(p, ms){ return Promise.race([p, new Promise((_,rej)=>setTimeout(()=>rej(new Error('vault-timeout')), ms))]); }
 const _rcCloudSig={};   // patient id -> last-uploaded content signature
+
+/* How many named patients are NOT yet in the vault.
+   Clearing the card on a date or facility switch is only safe because the records are
+   already filed - the card empties, the vault keeps them, and Recent rounds reopens them.
+   That stops being true when the provider is signed out: auto-save has been device-only,
+   the patients live in sessionStorage alone, and clearing really would lose them. The
+   confirms used to promise "nothing is lost" unconditionally, which was a lie in exactly
+   the case where it mattered most. Now they count and say so. */
+function _unsavedCount(){
+  return (S.pts||[]).filter(p=>(p.name||'').trim() && p.send!==false)
+    .filter(p=>{ try{ return _rcCloudSig[p.id]!==_rcSig(p); }catch(e){ return true; } }).length;
+}
+function _clearRisk(unsaved, where){
+  return unsaved
+    ? '⚠ ' + unsaved + ' of them ' + (unsaved===1?'is':'are') + ' NOT backed up to ClinicalVault yet '
+      + '(you may be signed out). Clearing will lose ' + (unsaved===1?'it':'them') + '.\n\n'
+    : 'Their records are already filed under ' + where + ' — nothing is lost, and you can '
+      + 'reopen that round from Recent rounds.\n\n';
+}
 function _rcHm(){ const d=new Date(); let h=d.getHours(); const ap=h<12?'AM':'PM'; h=h%12||12; return h+':'+String(d.getMinutes()).padStart(2,'0')+' '+ap; }
 /* Persistent save-status bar. Always shows a meaningful state (never blank), in the STICKY teal header
    (#rcSyncStatusHdr — always visible no matter how far you scroll, Scott 2026-07-20) and mirrored in
@@ -1672,8 +1758,15 @@ function _hardenPHIInput(el){
    silently swallow native dialogs fired from inside the composer's overlay iframe, so the old confirm()
    returned false without ever showing. First tap arms the button ("Really wipe?"), second tap within 4s
    clears; it disarms itself otherwise.
-   Clear also DELETES today's auto-saved records from the vault (best-effort, recycle-bin delete) —
-   without that, the new restore-on-open would faithfully resurrect a round the provider just wiped. */
+
+   CLEAR DOES NOT TOUCH THE VAULT. It wipes the screen so the next building can be started, and
+   that is all. The full story of why — and the round it cost on 2026-07-22 — is in the comment
+   inside clearAll() itself; read that before changing anything here.
+
+   (This comment used to say the opposite: that Clear also deleted the round's records from the
+   vault. That was true until 2026-07-26 and was left behind when the behaviour was fixed. It was
+   read as current on 2026-07-27 and repeated back to Scott as fact. A stale comment describing
+   deleted behaviour is worse than no comment — it is how a fixed bug gets argued back in.) */
 let _clearArm=null;
 function clearAll(btn){
   btn = btn || document.getElementById('clearBtn');
@@ -1811,6 +1904,14 @@ async function rcRestoreFromVault(){
     if(!mine.length) return;
     mine.sort((a,b)=>String(a.savedAt||'').localeCompare(String(b.savedAt||'')));
     S.round.fac=mine[mine.length-1].facility||S.round.fac; S.round.date=today; S.round.prov=S.round.prov||prov;
+    /* facLock MUST be set here. applyFacChange skips its whole confirm when facLock is empty
+       (`!lock`), and this path was the one load path that never set it - so after a restore
+       on open, switching facility silently re-filed every patient. Worse than the date bug:
+       the facility is in the record's PATH, so those writes land in the new folder and leave
+       the originals behind - the same patients then exist under two facilities on one day,
+       double-counted in the QC feed. Found 2026-07-27 while adding the date guard. */
+    S.round.facLock=(S.round.fac||'').trim();
+    S.round.loadedProv=(S.round.prov||'').trim();   // whose records these are — see applyProvChange
     // dispo has to come back too — reopening a round must not quietly reset everyone to
     // "seen" and re-inflate the count that was already filed for that day.
     S.pts=mine.map(r=>({ id:r.id||newId(), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], send:true, visitType:r.visitType||'', dispo:r.dispo||'' }));
@@ -2107,7 +2208,9 @@ async function carryForward(){
     try{ if(_clearArm){ clearTimeout(_clearArm); _clearArm=null;
       const cb=document.getElementById('clearBtn');
       if(cb){ cb.textContent='Clear'; cb.style.background=''; cb.style.color=''; } } }catch(e){}
-    S.round.date=today; S.round.facLock=facRaw; _sheetInvalidate();
+    // These are BRAND NEW records for today (newId above), not a loaded round - so correcting
+    // the provider should re-file them, and must not raise the loaded-round confirm.
+    S.round.date=today; S.round.facLock=facRaw; S.round.loadedProv=''; _sheetInvalidate();
     S.pts=pts; normalizePts(S); S.active=0;
     save(); paintRound(); render();
     toast('Brought forward '+pts.length+' of '+who+'’s patient'+(pts.length===1?'':'s')+' from their last visit'
@@ -2133,6 +2236,7 @@ function loadRecentRound(i){
     if(cb){ cb.textContent='Clear'; cb.style.background=''; cb.style.color=''; } } }catch(e){}
   S.round.fac=g.facility||S.round.fac; S.round.date=g.date; S.round.prov=S.round.prov||g.provider||''; _sheetInvalidate();
   S.round.facLock=(S.round.fac||'').trim();
+  S.round.loadedProv=(S.round.prov||'').trim();   // whose records these are — see applyProvChange
   // dispo comes back too — see the same line in rcRestoreFromVault. Reopening a round must
   // not quietly reset everyone to "seen"; auto-save would then re-upload them as seen and
   // re-inflate a count that was already filed correctly.
