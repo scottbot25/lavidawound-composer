@@ -27,6 +27,11 @@
      unredeemed - which is only diagnosable if the FIRST error is visible. Now it is. -->
 <script src="msal-browser.min.js"></script>
 <script>
+/* FIRST STATEMENT ON THE PAGE, before MSAL, before anything that can throw or navigate.
+   If this key is missing after a sign-in, this page never executed at all - which is a very
+   different problem from "it ran and failed", and telling those two apart by guesswork is what
+   burned two sessions. Costs one sessionStorage write. */
+try { sessionStorage.setItem('rc_redirect_reached', new Date().toISOString() + ' hash=' + (location.hash ? location.hash.length + 'ch' : 'none')); } catch (e) {}
 (async function () {
   var RETURN_KEY = 'rc_return_to';
 
@@ -81,19 +86,42 @@
       auth: {
         clientId: '3702875f-471b-4878-a009-8a2575b41db3',
         authority: 'https://login.microsoftonline.com/cc541639-168a-4a8d-9880-4e3628918b70',
-        redirectUri: location.origin + location.pathname   // = .../redirect.html
+        redirectUri: location.origin + location.pathname,  // = .../redirect.html
+        /* REDEEM HERE. THIS IS THE FIX, 2026-07-27.
+           MSAL defaults this to TRUE, which means handleRedirectPromise below does NOT complete
+           the sign-in - it stashes the response and navigates back to the page that started it,
+           expecting THAT page to redeem it. Two things then went wrong at once:
+             1. the navigation happens DURING the await, so this page is destroyed mid-execution
+                and neither the success breadcrumb nor the error box below can ever be written.
+                That is the "its script provably runs but writes nothing" mystery exactly, and it
+                is why the failure-visibility work done this morning could never fire.
+             2. the card's own boot handler then failed to redeem the stashed response and
+                swallowed the reason in an empty catch, so getAllAccounts() stayed [] forever and
+                the authorization code eventually expired unredeemed - AADSTS70008.
+           Setting it FALSE keeps the whole exchange on this page: the code is redeemed here, the
+           account lands in the shared sessionStorage cache, the breadcrumb is written, and only
+           then does goBack() return to the app. Verified against a real sandbox sign-in. */
+        navigateToLoginRequestUrl: false
       },
       cache: { cacheLocation: 'sessionStorage' }
     });
     var hadHash = !!(location.hash && location.hash.length > 1);
+    /* Step markers. The page was dying somewhere inside these three lines and taking every clue
+       with it; one breadcrumb at the end could not say WHICH line. Each write is its own record,
+       so whatever survives tells you exactly how far it got. */
+    var mark = function (s) { try { sessionStorage.setItem('rc_redirect_step', s + ' @' + new Date().toISOString()); } catch (e) {} };
+    mark('constructed');
     await pca.initialize();
+    mark('initialized');
     var res = await pca.handleRedirectPromise();
+    mark('handleRedirectPromise resolved');
     /* Breadcrumb. This page navigates away immediately, so anything it learns is normally
        destroyed with it - which is how a sign-in that silently did nothing went undiagnosed for
        hours. Auth metadata only: no patient data, no tokens, no secrets. Read it from the app
-       with sessionStorage.rc_signin_debug. */
+       with sessionStorage.rc_signin_debug_redirect. The CARD writes its own rc_signin_debug;
+       two pages sharing one key meant whichever ran last destroyed the other's evidence. */
     try {
-      sessionStorage.setItem('rc_signin_debug', JSON.stringify({
+      sessionStorage.setItem('rc_signin_debug_redirect', JSON.stringify({
         at: new Date().toISOString(),
         hadHashOnArrival: hadHash,
         handleRedirectReturned: res ? (res.account ? 'account: ' + res.account.username : 'response, no account') : 'null (nothing to process)',
@@ -102,7 +130,7 @@
       }));
     } catch (_) {}
   } catch (e) {
-    try { sessionStorage.setItem('rc_signin_debug', JSON.stringify({
+    try { sessionStorage.setItem('rc_signin_debug_redirect', JSON.stringify({
       at: new Date().toISOString(), threw: (e && (e.errorCode || e.name)) + ': ' + (e && (e.errorMessage || e.message))
     })); } catch (_) {}
     fail(e); return;

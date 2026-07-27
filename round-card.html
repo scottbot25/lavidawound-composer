@@ -439,7 +439,9 @@ function applyDateChange(nd){
   const old=(S.round.date||'').trim(); nd=(nd||'').trim();
   if(nd===old) return;
   const named=S.pts.filter(p=>(p.name||'').trim());
-  if(!named.length){ S.round.date=nd; _sheetInvalidate(); save(); return; }
+  // Empty card: no confirm needed, but this is the COMMONEST way back to a previous round -
+  // the card is already clear, you flip the date, and that round should be on screen.
+  if(!named.length){ S.round.date=nd; _sheetInvalidate(); save(); paintRound(); rcLoadRoundInto(nd, S.round.fac); return; }
   const n=named.length;
   const ok=confirm('This card holds '+n+' patient'+(n===1?'':'s')+' from the '+(old||'current')+' round.\n\n'
     + 'A round is one facility on one day, so changing the date starts a different round and '
@@ -455,6 +457,7 @@ function applyDateChange(nd){
   S.pts=[]; S.active=0; S.round.date=nd; S.round.loadedProv='';   // nothing is loaded any more
   _sheetInvalidate(); _sheetLastSig=''; _qcLastSig='';
   save(); paintRound(); render(); toast('Started '+(nd||'a new date'));
+  rcLoadRoundInto(nd, S.round.fac);      // if that round already exists, put it back on screen
 }
 function paintRound(){
   document.getElementById('r_date').value = S.round.date || todayISO();
@@ -516,7 +519,9 @@ function onFacPick(sel){
 function applyFacChange(nf){
   nf=(nf||'').trim(); const lock=(S.round.facLock||'').trim();
   _sheetInvalidate();                                  // different facility = a different round's sheet
-  if(!S.pts.length || !lock || nf===lock){ if(!S.pts.length) S.round.facLock=nf; S.round.fac=nf; save(); paintFacSel(); return; }
+  // Empty card: picking the building completes the round's identity (facility + date), so if that
+  // round is already on file it belongs on screen. Same path as flipping the date back.
+  if(!S.pts.length || !lock || nf===lock){ if(!S.pts.length) S.round.facLock=nf; S.round.fac=nf; save(); paintFacSel(); rcLoadRoundInto(S.round.date, nf); return; }
   const n=S.pts.length;
   const ok=confirm('This card still has '+n+' patient'+(n===1?'':'s')+' from '+lock+'.\n\n'
     + 'A sheet can only carry one facility\'s residents. Send '+lock+'\'s sheet first if you '
@@ -530,7 +535,8 @@ function applyFacChange(nf){
     // date and patients synchronously, so this lands under the OLD building even though we change it
     // on the next line.
     clearTimeout(_sheetAutoT); sheetAutoSave(); qcAutoSave(true);
-    S.pts=[]; S.active=0; S.round.facLock=nf; S.round.fac=nf; S.round.loadedProv=''; _sheetLastSig=''; _qcLastSig=''; save(); paintFacSel(); render(); toast('Started '+(nf||'a new facility')); }
+    S.pts=[]; S.active=0; S.round.facLock=nf; S.round.fac=nf; S.round.loadedProv=''; _sheetLastSig=''; _qcLastSig=''; save(); paintFacSel(); render(); toast('Started '+(nf||'a new facility'));
+    rcLoadRoundInto(S.round.date, nf); }      // if that building already has this day's round, put it back
   else  { S.round.fac=lock; save(); paintFacSel(); }
 }
 
@@ -1253,6 +1259,13 @@ async function _vaultToken(){
      state is in sessionStorage, which persists across same-tab navigation. On return, tap Save again.
      If the provider came from the Composer they're already signed in to Microsoft, so the redirect
      bounces straight back without re-typing credentials. */
+  /* Remember WHERE to come back to. redirect.html used to return to the folder root, which is
+     index.html on the hosted site but a directory listing anywhere else - so a local test never
+     got back to this page and lost its query string (?sandbox=1) on the way.
+     Timestamped: the Composer signs in through the same redirect.html, so a stash left behind by
+     an abandoned sign-in must expire rather than hijack the Composer's next one. redirect.html
+     consumes this on arrival and ignores anything older than 5 minutes. */
+  try{ sessionStorage.setItem('rc_return_to', JSON.stringify({url:location.href, at:Date.now()})); }catch(e){}
   await pca.acquireTokenRedirect(req);
   throw new Error('redirecting to sign in…');
 }
@@ -1670,16 +1683,69 @@ async function saveVault(){
     _vaultResultShow(false,(e&&e.message)||'Save failed.');
   }
 }
-/* Finish a returning sign-in redirect (clears any stuck interaction state, activates the account). */
+/* Finish a returning sign-in redirect (clears any stuck interaction state, activates the account).
+   This handler ALREADY EXISTED and still failed, because it ended in an empty catch: whatever went
+   wrong was thrown away, the account never appeared, and the card just looked "not signed in" with
+   no reason anywhere. That cost two sessions of guessing.
+
+   WHAT ACTUALLY HAPPENS, measured against a real sign-in rather than reasoned about:
+   redirect.html receives the response, reaches initialize(), and is then navigated away by MSAL
+   *during* handleRedirectPromise - so that call never resolves and never redeems, and nothing
+   redirect.html might have logged can survive. MSAL stashes the response as
+   msal.<clientId>.urlHash and bounces back HERE, expecting this page to finish the exchange.
+   Setting navigateToLoginRequestUrl:false on redirect.html does NOT prevent that navigation -
+   it was tried, and it did not work. Do not "fix" this by trying it again.
+   So the redemption has to happen here, and one call is not enough - see the retry below.
+
+   This also no longer swallows: a failure writes rc_signin_debug (auth metadata only - no tokens,
+   no patient data), under its own key so redirect.html's breadcrumb cannot clobber it.
+   It also digs itself out of the one state that used to be a dead end. If a previous attempt died
+   part-way, `msal.interaction.status` stays set and MSAL then refuses every future sign-in in this
+   tab with interaction_in_progress - the provider taps Save, nothing happens, forever, and closing
+   the tab is the only cure. Clearing that key costs nothing when it is stale. */
 (async()=>{
+  const _dbg=(o)=>{ try{ sessionStorage.setItem('rc_signin_debug', JSON.stringify(Object.assign({at:new Date().toISOString(),where:'card boot'},o))); }catch(_){} };
   try{
-    if(!window.msal) return;
+    if(!window.msal){ _dbg({skipped:'msal-browser.min.js not loaded'}); return; }
     const pca=await _getPca();
-    const res=await pca.handleRedirectPromise();
+    let res=null;
+    try{ res=await pca.handleRedirectPromise(); }
+    catch(e){
+      const code=(e&&(e.errorCode||e.name))||'';
+      _dbg({handleRedirectThrew:code+': '+((e&&(e.errorMessage||e.message))||e)});
+      if(/interaction_in_progress/i.test(code)){
+        // Stuck from an attempt that never finished. Clear it and try once more, or the provider
+        // is locked out of signing in for the life of this tab.
+        try{ sessionStorage.removeItem('msal.interaction.status'); }catch(_){}
+        try{ res=await pca.handleRedirectPromise(); _dbg({recoveredFrom:'interaction_in_progress'}); }
+        catch(e2){ _dbg({recoveryAlsoFailed:(e2&&(e2.errorCode||e2.name))+': '+(e2&&(e2.errorMessage||e2.message))}); }
+      }
+    }
+    /* THE ACTUAL FIX, and it has to be a retry because of where the failure is.
+       Measured 2026-07-27 against a real sign-in: redirect.html receives the response, gets as far
+       as initialize(), and is then navigated away by MSAL *during* handleRedirectPromise - which
+       therefore never resolves and never redeems. MSAL stashes the response as
+       msal.<clientId>.urlHash and bounces back here for this page to finish the job. This page's
+       FIRST attempt resolves null while that stash is still sitting there, but a second attempt a
+       moment later redeems it every time. So: do not trust one call. Check whether the stash is
+       still there and, if it is, ask again.
+       Without this the stash is never redeemed, getAllAccounts() stays [] forever, the provider
+       taps Save and silently nothing happens, and the authorization code eventually expires
+       unredeemed - which is the AADSTS70008 that has been chased across two sessions. */
+    const hashKey='msal.'+VAULT_CFG.clientId+'.urlHash';
+    const stashed=()=>{ try{ return !!sessionStorage.getItem(hashKey); }catch(_){ return false; } };
+    let retried=false;
+    if(!(res&&res.account) && !pca.getAllAccounts().length && stashed()){
+      retried=true;
+      await new Promise(r=>setTimeout(r,120));
+      try{ res=await pca.handleRedirectPromise(); }
+      catch(e){ _dbg({retryThrew:(e&&(e.errorCode||e.name))+': '+(e&&(e.errorMessage||e.message))}); }
+    }
     const acct=(res&&res.account)||pca.getAllAccounts()[0];
     if(acct) pca.setActiveAccount(acct);
-    if(res&&res.account){ toast('Signed in — open Review & send, then tap Save again'); }
-  }catch(e){}
+    _dbg({redeemed:!!acct, retried:retried, accounts:pca.getAllAccounts().length, leftoverUrlHash:stashed()});
+    if(acct){ _rcPaintSync('ready'); toast('Signed in — open Review & send, then tap Save again'); }
+  }catch(e){ _dbg({bootThrew:(e&&(e.errorCode||e.name))+': '+(e&&(e.errorMessage||e.message))}); }
 })();
 
 /* ---------- idle auto-lock (BYOD defense-in-depth — ported from the composer) ----------
@@ -2246,6 +2312,102 @@ function loadRecentRound(i){
   save(); paintRound(); render();
   closeRecentRounds();
   toast('Loaded the '+g.date+' round ('+S.pts.length+' patient'+(S.pts.length===1?'':'s')+') — edits update the same round');
+}
+
+/* ---------- COMING BACK TO A ROUND ----------
+   A round is one facility on one day, so facility+date IS its identity. Changing either clears
+   the card - that guard is why a round can no longer be dragged onto the wrong day - but until
+   now nothing brought the round back when you navigated to it again. The tool made it impossible
+   to lose a round and still made you go hunting for it in the picker.
+   Scott 2026-07-27: "a date set to a facility becomes unique ... that way we can always go back
+   and update if needed."
+
+   This is loadRecentRound's job, pointed at the round you just navigated to. Same rules as every
+   other vault-load path: records keep their ORIGINAL ids and their change signature is seeded, so
+   reopening a round uploads NOTHING until you actually edit something. That matters more here than
+   anywhere else - an automatic load that re-uploaded would be the date-move bug wearing a new hat.
+
+   WHAT IT DELIBERATELY WILL NOT DO
+   - clobber a card that has work on it (checked before AND after the awaits - the provider can
+     start typing while SharePoint is answering)
+   - prompt for sign-in. Silent token only, so it can never interrupt a round with a redirect.
+   - bring back a round that was deliberately Cleared (_wasCleared), same as restore-on-open
+   - accept a record without a POSITIVE provider match. Restore-on-open tolerates legacy
+     blank-provider records because it is same-day and low-risk; reaching back across a building
+     the whole practice shares is exactly how carry-forward once pulled every patient in Crestmoor.
+     Those legacy records are still reachable through the picker, where a human reads the list and
+     they are labelled "no provider on file". */
+let _rcLoadPromise=null;
+function rcLoadRoundInto(dateStr, facRaw){ _rcLoadPromise=rcLoadRoundFor(dateStr, facRaw); return _rcLoadPromise; }
+
+/* Silence is the right answer when you are STARTING a round: today or a future date with nothing
+   on file is simply a new round, and a toast on every date change would be noise. Going BACK is
+   different - you navigated there expecting something. So if a PAST round is not there, say so,
+   and if it is past the keep window say that too. Otherwise a blank card looks like a round that
+   vanished, which is the single most alarming thing this tool could do. */
+function _rcNoRoundNotice(date, facR){
+  try{
+    const today=todayISO();
+    if(!date || date>=today) return;
+    const age=Math.floor((Date.parse(date+'T00:00:00')-Date.parse(today+'T00:00:00'))/86400000)*-1;
+    if(isNaN(age) || age<=0) return;
+    if(age>PURGE_AFTER_DAYS)
+      toast('No round on file for '+facR+' on '+date+'. Rounds are kept about '+PURGE_AFTER_DAYS+' days, so this one may already have been cleared out.');
+    else
+      toast('No round on file for '+facR+' on '+date+'.');
+  }catch(e){}
+}
+
+async function rcLoadRoundFor(dateStr, facRaw){
+  const date=String(dateStr||'').slice(0,10), facR=(facRaw||'').trim();
+  try{
+    if((S.pts||[]).some(p=>(p.name||'').trim())) return 'busy';      // never clobber work
+    if(!date || !facR) return 'incomplete';                          // half a round identity
+    if(_wasCleared(date, facR)) return 'cleared';                    // wiped on purpose, stays wiped
+    const token=await _vaultTokenSilent(); if(!token) return 'signed-out';
+    await _autoFillProvider();
+    const okProv=_cardProvSet().set;
+    if(!okProv.size) return 'no-provider';                           // can't attribute - refuse, never show-everything
+    const {driveId}=await _vaultCtx(token);
+    const fac=cleanSeg(facR)||'Unfiled';
+
+    let files=null;
+    try{ files=await _vaultList(token, driveId, 'RoundCards/'+fac); }
+    catch(e){ _rcNoRoundNotice(date, facR); return 'empty'; }        // no folder = no round, not an error
+
+    const cands=(files||[]).filter(f=>/\.json$/i.test(f.name||''));
+    const recs=await Promise.all(cands.map(f=>{
+      const dl=f['@microsoft.graph.downloadUrl'];
+      if(dl) return fetch(dl).then(r=>r.ok?r.json():null).catch(()=>null);
+      return _vaultReadJson(token, driveId, 'RoundCards/'+fac+'/'+f.name).catch(()=>null);
+    }));
+
+    const mine=[];
+    recs.forEach(rec=>{
+      if(rec && rec.schema==='roundcard.v1'
+         && String(rec.date||'').slice(0,10)===date
+         && _cardProvOk(rec, okProv, false)) mine.push(rec);
+    });
+    if(!mine.length){ _rcNoRoundNotice(date, facR); return 'empty'; }
+
+    /* Re-check AFTER the awaits. SharePoint took a moment; in that moment the provider may have
+       started a patient, or moved on to another date entirely. Landing a stale round on top of
+       either would be worse than not loading at all. */
+    if((S.pts||[]).some(p=>(p.name||'').trim())) return 'busy';
+    if(String(S.round.date||'').slice(0,10)!==date || (S.round.fac||'').trim()!==facR) return 'moved-on';
+
+    mine.sort((a,b)=>String(a.savedAt||'').localeCompare(String(b.savedAt||'')));
+    S.pts=mine.map(r=>({ id:r.id||newId(), name:(r.patient&&r.patient.name)||'', edu:r.edu||'',
+      wounds:Array.isArray(r.wounds)?r.wounds:[], send:true, visitType:r.visitType||'', dispo:r.dispo||'' }));
+    normalizePts(S); S.active=0;
+    S.round.facLock=facR;                                  // every vault-load path must set this
+    S.round.loadedProv=(S.round.prov||'').trim();          // whose round this is - see applyProvChange
+    S.pts.forEach(p=>{ try{ _rcCloudSig[p.id]=_rcSig(p); }catch(e){} });   // loaded = already filed
+    _sheetInvalidate(); _sheetLastSig=''; _qcLastSig='';
+    save(); paintRound(); render();
+    toast('Loaded the '+date+' round ('+S.pts.length+' patient'+(S.pts.length===1?'':'s')+') — edits update the same round');
+    return 'loaded';
+  }catch(e){ return 'error'; }
 }
 setTimeout(rcRestoreFromVault, 150);   // was 800ms — an arbitrary pause the provider felt on every open
 </script>
