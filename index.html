@@ -1140,8 +1140,19 @@ function renderPatientBar(){
   order.forEach(k=>{ const g=gmap[k]; const isOn=(k===activeFacKey);
     // the box shows the active patient if they're in it, otherwise the box's first patient
     const shownPid=(isOn && g.pids.indexOf(activePid)>=0) ? activePid : g.pids[0];
+    /* SHOW THE ROUND DATE WHEN THE NAME REPEATS. One card record is one visit, so a patient rounded
+       on two days has TWO notes in this building with an identical name. Picking between them was
+       guesswork, and it is what made a card update look lost: the edit landed on the 7/27 note while
+       the 7/26 one was on screen and both read "TEST India" (2026-07-27).
+       Only shown when the name actually repeats here - adding a date to every single patient would
+       be noise on the common day where nobody is duplicated. A note with no round date behind it
+       (started by hand) just keeps its name. */
+    const nameSeen={};
+    g.pids.forEach(pid=>{ const n=(((WS.patients[pid].name||'').trim())||'New patient').toLowerCase(); nameSeen[n]=(nameSeen[n]||0)+1; });
     const opts=g.pids.map(pid=>{ const nm=(WS.patients[pid].name&&WS.patients[pid].name.trim())||'New patient';
-      return '<option value="'+pid+'"'+(pid===shownPid?' selected':'')+'>'+esc(nm)+'</option>'; }).join('');
+      const d=String(WS.patients[pid].rcDate||'').trim();
+      const label=(d && nameSeen[nm.toLowerCase()]>1) ? (nm+' · '+d) : nm;
+      return '<option value="'+pid+'"'+(pid===shownPid?' selected':'')+'>'+esc(label)+'</option>'; }).join('');
     h+='<div class="pb-fbox'+(isOn?' on':'')+'" data-shown="'+esc(shownPid)+'" title="Click to work in '+esc(g.fac)+'">'+
        '<span class="pb-fbox-name">'+esc(g.fac)+'<span class="pb-fbox-n" title="'+g.pids.length+' patient'+(g.pids.length===1?'':'s')+'">'+g.pids.length+'</span></span>'+
        '<select class="pb-ptsel" title="Pick a patient at '+esc(g.fac)+'">'+opts+'</select>'+
@@ -2570,7 +2581,11 @@ async function rcPrefill(rec){
     if(edu) W['__ap:edu']='Additional info / education: '+edu;
     _rcSetAP(S, _rcComposeAP(ord, edu));
   }
-  { const _p=activePt(); if(_p){ _p.srcRcKey=_rcKey(rec); _p.srcRcId=rec.id||null; _p.rcName=nm; } }   // tag the source record: dedup + card updates find their patient; rcName = the card owns this name until the provider edits it
+  { const _p=activePt(); if(_p){ _p.srcRcKey=_rcKey(rec); _p.srcRcId=rec.id||null; _p.rcName=nm;
+      /* Which ROUND this note came from. One card record is one visit, so a patient rounded twice
+         has two notes with the same name - remembering the date is what lets the patient list tell
+         them apart. See renderPatientBar. */
+      _p.rcDate=String((rec&&rec.date)||'').slice(0,10)||null; } }   // tag the source record: dedup + card updates find their patient; rcName = the card owns this name until the provider edits it
   setMode(nt); persist(); renderPatientBar();
 }
 
@@ -2814,7 +2829,9 @@ function rcMergeIntoPatient(pid, rec){
       upsert('__ap:edu', eduS?('Additional info / education: '+eduS):'');
       if(pend.length) cur=cur.trim() ? (cur.trim()+'\n\n'+pend.join('\n')) : pend.join('\n');
       S[k]=cur; } }
-  { const _p=activePt(); if(_p){ _p.srcRcKey=_rcKey(rec); _p.srcRcId=rec.id||_p.srcRcId||null; } }
+  { const _p=activePt(); if(_p){ _p.srcRcKey=_rcKey(rec); _p.srcRcId=rec.id||_p.srcRcId||null;
+      // keep the round date current too - see renderPatientBar
+      _p.rcDate=String((rec&&rec.date)||'').slice(0,10)||_p.rcDate||null; } }
   persist(); setMode(MODE); renderPatientBar();
 }
 let _rcPulling=false, _rcLastPull=0, _rcPullAgain=false;
