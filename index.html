@@ -2289,8 +2289,17 @@ function _rcCachePut(k,v){
 async function rcList(facility){
   const ctx=await _draftContext(); if(!ctx) throw new Error('Sign in to read Round Cards.');
   const seg=_rcFacSeg(facility);
+  /* DO NOT $select HERE. @microsoft.graph.downloadUrl is an ANNOTATION, not a property, and naming
+     it in $select makes Graph return the opposite of what you asked for - the listing comes back
+     WITHOUT it (verified 2026-07-27: with the $select the items carry only @odata.etag, id,
+     lastModifiedDateTime and name; without it, every item carries the downloadUrl).
+     Every record then hit the "no downloadUrl" branch below and was dropped, so this returned an
+     empty list and the composer silently pulled NOTHING from the Round Card. No error, no toast -
+     the note simply never filled, which is exactly what a provider would report as "the card isn't
+     autofilling". The round card hit this same trap on 2026-07-21 and had its $select removed; this
+     copy was missed. */
   const url='https://graph.microsoft.com/v1.0/drives/'+ctx.driveId+'/root:/'+_encPath(['RoundCards',seg].join('/'))
-    +':/children?$top=200&$select=id,name,folder,lastModifiedDateTime,@microsoft.graph.downloadUrl';
+    +':/children?$top=200';
   const r=await _gfetch(url, ctx.token);
   if(r.status===404) return [];                                   // no records for this building yet
   if(!r.ok) throw new Error('Couldn’t read Round Cards (HTTP '+r.status+').');
@@ -2310,9 +2319,15 @@ async function rcList(facility){
     const hit=_rcCacheGet(key);
     if(hit!==undefined) return Promise.resolve(hit);               // unchanged since we last read it
     const dl=it['@microsoft.graph.downloadUrl'];
-    if(!dl) return Promise.resolve(null);
-    return fetch(dl).then(c=>c.ok?c.json():null).catch(()=>null)
-      .then(rec=>{ _rcCachePut(key, rec); return rec; });
+    /* If the annotation is absent for ANY reason, read the file directly instead of dropping the
+       record. Returning null here is what let a listing quirk become "the card never fills the
+       note" with nothing anywhere saying so - one missing field silently emptied the whole pull. */
+    const read = dl
+      ? fetch(dl).then(c=>c.ok?c.json():null).catch(()=>null)
+      : _gfetch('https://graph.microsoft.com/v1.0/drives/'+ctx.driveId+'/root:/'
+          +_encPath(['RoundCards',seg,it.name].join('/'))+':/content', ctx.token)
+          .then(c=>c.ok?c.json():null).catch(()=>null);
+    return read.then(rec=>{ _rcCachePut(key, rec); return rec; });
   }));
   const out=got.filter(rec=>rec && rec.schema==='roundcard.v1');
   out.sort((a,b)=>String(b.savedAt||'').localeCompare(String(a.savedAt||'')));   // newest first
