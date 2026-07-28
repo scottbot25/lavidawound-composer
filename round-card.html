@@ -586,12 +586,37 @@ function delPt(i,btn){
   S.pts.splice(i,1);
   if(S.active >= S.pts.length) S.active = Math.max(0, S.pts.length-1);
   save(); render();
-  // clean up the removed patient's auto-saved vault record too, so restore-on-open can't resurrect them
-  if(doomedId){ (async()=>{ try{
-    const token=await _vaultTokenSilent(); if(!token) return;
-    const {driveId}=await _vaultCtx(token);
-    await _vaultDelete(token,driveId,'RoundCards/'+fac+'/'+doomedId+'.json');
-  }catch(e){} })(); }
+  /* Clean up the removed patient's vault record too, so restore-on-open can't resurrect them.
+     THIS USED TO BE FIRE-AND-FORGET WITH AN EMPTY CATCH. The patient vanished from the screen
+     whether or not the record actually went, no token meant a silent no-op, and _vaultDelete's
+     own true/false answer was thrown away. "Removed from my screen" and "removed from the vault"
+     are different outcomes and the card showed you the first while telling you nothing about the
+     second (2026-07-27). It now waits for the answer, remembers what it deleted so the picker
+     cannot show it back to you mid-flight, and SAYS SO when the record survives. */
+  if(doomedId){
+    _rcDeleting.add(doomedId);
+    (async()=>{
+      let ok=false, why='';
+      try{
+        const token=await _vaultTokenSilent();
+        if(!token){ why='you’re not signed in'; }
+        else{
+          const {driveId}=await _vaultCtx(token);
+          ok=await _vaultDelete(token,driveId,'RoundCards/'+fac+'/'+doomedId+'.json');
+          if(!ok) why='ClinicalVault refused it';
+        }
+      }catch(e){ why=(e&&e.message)||'the delete failed'; }
+      _rcDeleting.delete(doomedId);
+      if(ok){
+        _rcDeleted.add(doomedId);
+        try{ delete _rcCloudSig[doomedId]; saveCloudSig(); }catch(e){}
+      }else{
+        // Do NOT put them back on screen - the provider asked for them gone and a surprise
+        // reappearance is its own bug. Tell them the truth instead: the record is still there.
+        toast('Taken off this card, but their record is still in ClinicalVault — '+why+'. Try again once that’s sorted.');
+      }
+    })();
+  }
 }
 function pickPt(i){ S.active=i; save(); render(); }
 function setPt(f,val){ const p=activePt(); if(!p) return; p[f]=val; save(); paintTabs(); paintCount(); }
@@ -1391,6 +1416,19 @@ function _netTmo(p, ms){ return Promise.race([p, new Promise((_,rej)=>setTimeout
 /* patient id -> last-uploaded content signature. RESTORED, not started empty - see saveCloudSig().
    Only signatures for patients still on the card are kept, so one can never outlive the patient it
    describes and wrongly mark a later, different patient as "already uploaded". */
+/* READ YOUR OWN WRITES. A delete is a request, not an event: it takes a moment to land, and the
+   listing you read a second later can still show what you just removed. That is exactly what
+   happened on 2026-07-27 - 21 patients were removed one by one, and because each delete was fired
+   and never waited for, the round picker opened onto records that were still mid-deletion and the
+   composer pulled them into notes. Everything was correct a moment later, which is the worst kind
+   of wrong: the tool contradicted the user's own last action and then quietly agreed with them.
+   So the card remembers what it has deleted, or is deleting, and refuses to show those records
+   back to you regardless of what the server says yet. In memory only - it describes this session's
+   actions, not a durable fact. */
+const _rcDeleting=new Set();   // delete in flight
+const _rcDeleted=new Set();    // delete confirmed by the server
+function _rcGone(id){ return !!id && (_rcDeleting.has(id) || _rcDeleted.has(id)); }
+
 function _loadCloudSig(raw, pts){
   try{
     if(!raw) return {};
@@ -2014,6 +2052,7 @@ async function rcRestoreFromVault(){
     recs.forEach(rec=>{
       if(rec && rec.schema==='roundcard.v1' && String(rec.date||'').slice(0,10)===today
          && _cardProvOk(rec, okProv, true)
+         && !_rcGone(rec.id)                                        // ...and not one I just deleted
          && !_wasCleared(rec.date, rec.facility)) mine.push(rec);  // same-day, mine, and not one I cleared
     });
     if(!mine.length) return;
@@ -2108,6 +2147,7 @@ async function openRecentRounds(){
     const groups={};
     recs.forEach(rec=>{
       if(!rec || rec.schema!=='roundcard.v1') return;
+      if(_rcGone(rec.id)) return;                      // you deleted this - never offer it back
       const d=String(rec.date||'').slice(0,10); if(!d) return;
       if(!_cardProvOk(rec, _pv.set, true)){ skippedOther++; return; }
       const k=d+'|'+(rec.facility||'');
@@ -2471,6 +2511,7 @@ async function rcLoadRoundFor(dateStr, facRaw){
     const mine=[];
     recs.forEach(rec=>{
       if(rec && rec.schema==='roundcard.v1'
+         && !_rcGone(rec.id)                           // you deleted this - do not reopen it
          && String(rec.date||'').slice(0,10)===date
          && _cardProvOk(rec, okProv, false)) mine.push(rec);
     });
