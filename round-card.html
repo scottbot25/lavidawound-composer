@@ -299,6 +299,9 @@ function saveCloudSig(){
 }
 function save(){ try{ sessionStorage.setItem(KEY, JSON.stringify(S)); }catch(e){}
   saveCloudSig();
+  // A carried-forward round files nothing until something actually changes - this is where that
+  // "something changed" is noticed. Guarded because save() is defined long before the flag is.
+  try{ if(typeof _rcNoteWorkStarted==='function') _rcNoteWorkStarted(); }catch(e){}
   if(typeof scheduleRcAutoSave==='function') scheduleRcAutoSave();
   if(typeof scheduleSheetSave==='function') scheduleSheetSave(); }
 function todayISO(){ const d=new Date(), p=n=>String(n).padStart(2,'0');
@@ -1429,6 +1432,25 @@ const _rcDeleting=new Set();   // delete in flight
 const _rcDeleted=new Set();    // delete confirmed by the server
 function _rcGone(id){ return !!id && (_rcDeleting.has(id) || _rcDeleted.has(id)); }
 
+/* LOOKING IS NOT ROUNDING. "Start from last visit" used to file the whole round the instant it was
+   tapped - on 2026-07-27 that put 21 records into the vault for a round nobody had started, purely
+   because Scott wanted to see what the button did. Undoing it meant deleting 21 patients one at a
+   time, and until he did, the QC count read 21 patients seen on a day nobody was seen, which would
+   have sent Ramil hunting for 21 notes that do not exist.
+   So a carried-forward round is UNSTARTED until the provider actually changes something. The
+   patients are on screen; nothing is filed. The first real edit starts the round and everything
+   behaves exactly as before from then on.
+   "A real edit" is not guesswork: every patient's carried-forward state is recorded as its uploaded
+   signature, so the moment any signature differs, work has happened. The manual "Save to
+   ClinicalVault" button is never gated - that is an explicit instruction, not an accident. */
+let _rcUnstarted=false;
+function _rcNoteWorkStarted(){
+  if(!_rcUnstarted) return;
+  try{
+    if((S.pts||[]).some(p=>p && p.id && _rcCloudSig[p.id]!==_rcSig(p))) _rcUnstarted=false;
+  }catch(e){ _rcUnstarted=false; }        // can't tell -> assume the round is real, never lose work
+}
+
 function _loadCloudSig(raw, pts){
   try{
     if(!raw) return {};
@@ -1543,6 +1565,7 @@ function scheduleSheetSave(){ clearTimeout(_sheetAutoT); _sheetAutoT=setTimeout(
 }, SHEET_AUTOSAVE_MS); }
 async function sheetAutoSave(){
   if(_sheetAutoBusy) return;
+  if(_rcUnstarted) return;        // carried forward, nothing changed yet - no round, no sheet
   /* EVERYTHING the filename and the document depend on is captured synchronously, before the first
      await. Otherwise a flush triggered BY a facility switch would resolve after S.round.fac had already
      moved on and file the old building's patients under the new building's name — a wrong-facility
@@ -1591,6 +1614,9 @@ const QC_AFTER_HOUR=17;                                // 5pm local
 let _qcBusy=false, _qcLastSig='';
 async function qcAutoSave(force){
   if(_qcBusy) return;
+  // Never file a count for a round nobody has started. This is the one that would have sent Ramil
+  // looking for 21 notes that were never owed.
+  if(_rcUnstarted) return;
   // captured synchronously — a facility switch must not file this building's count under the next one
   const pts=sentNamed();
   if(!pts.length) return;
@@ -1692,6 +1718,9 @@ function _vaultResultShow(ok,msg,url){
   el.style.display='';
 }
 async function saveVault(){
+  /* An explicit "Save to ClinicalVault" always files, and it starts the round. The unstarted state
+     only ever suppresses the AUTOMATIC savers - a deliberate instruction is never second-guessed. */
+  _rcUnstarted=false;
   const pts=sentNamed();
   if(!pts.length){ toast('Select at least one named patient to send'); return; }
   const btn=document.getElementById('vaultBtn'); btn.disabled=true;
@@ -2395,11 +2424,18 @@ async function carryForward(){
     // the provider should re-file them, and must not raise the loaded-round confirm.
     S.round.date=today; S.round.facLock=facRaw; S.round.loadedProv=''; _sheetInvalidate();
     S.pts=pts; normalizePts(S); S.active=0;
+    /* NOTHING IS FILED YET. Seeding each patient's signature as "already uploaded" is what makes
+       that true without a second mechanism: auto-save compares against these and finds nothing to
+       do, so no record, sheet or count is written. The moment the provider changes anything, its
+       signature stops matching, _rcNoteWorkStarted() clears the flag, and the round files itself
+       normally from then on. Tapping the button to see last week's list now costs nothing. */
+    try{ S.pts.forEach(p=>{ if(p && p.id) _rcCloudSig[p.id]=_rcSig(p); }); }catch(e){}
+    _rcUnstarted=true;
     save(); paintRound(); render();
     toast('Brought forward '+pts.length+' of '+who+'’s patient'+(pts.length===1?'':'s')+' from their last visit'
       +(dischargedDropped?' · '+dischargedDropped+' discharged patient'+(dischargedDropped===1?'':'s')+' left off':'')
       +(healedDropped?' · '+healedDropped+' healed wound'+(healedDropped===1?'':'s')+' left off':'')
-      +' — measurements start blank');
+      +' — measurements start blank. Nothing is filed until you start charting.');
   }catch(e){
     toast('Couldn’t reach ClinicalVault'+(e&&e.message?' ('+e.message+')':''));
   }finally{ if(btn){ btn.disabled=false; btn.textContent=lab||'⤴ Start from last visit'; } }
