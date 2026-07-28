@@ -1101,10 +1101,25 @@ function newPatient(){ if(typeof refreshActiveSummary==='function') refreshActiv
   activePid=pid; activateForm(); const el=document.getElementById('patientName'); if(el){ el.focus(); } }
 function removePatient(pid){ const p=WS.patients[pid]; if(!p) return;
   if(!confirm('Remove '+((p.name&&p.name.trim())||'this patient')+' and their note from the workspace?\n(Does not affect anything already saved to ClinicalVault or pasted into PCC.)')) return;
+  /* REMOVING SOMEONE ELSE MUST NOT REBUILD THE NOTE YOU ARE LOOKING AT.
+     This used to call activateForm() - which tears down and rebuilds the ENTIRE note UI, every
+     field and every wound - plus an immediate cloud upload, on every single removal. Clearing a
+     dozen patients therefore queued a dozen full rebuilds and a dozen uploads on the main thread
+     and locked the whole tool up (Scott, 2026-07-27: "it froze the whole tool").
+     The open note only changes when the patient you removed WAS the open one. Otherwise the patient
+     bar is the only thing that moved, so repaint that and nothing else.
+     The immediate draft save STAYS. Debouncing it was tried and reverted: structural edits save at
+     once on purpose, because these are the ones that resurrect if the tab closes before a delayed
+     save lands ("I deleted it and it came back"), and draftSaveNow also ends the view-only hold,
+     which scheduleDraftSave deliberately does not. saveDraft already coalesces a burst through
+     _draftBusy/_draftDirty and skips a PUT when nothing changed, so the uploads were never the
+     freeze - the rebuilt DOM was. */
+  const wasActive = (pid===activePid);
   delete WS.patients[pid]; const ids=Object.keys(WS.patients);
-  if(!ids.length){ WS.patients.p1={name:'',store:newStore(),updatedAt:Date.now(),facility:'',noteType:'new'}; WS.seq=2; activePid='p1'; WS.round=WS.round||{}; WS.round.facility=''; }  // removed the LAST patient -> truly reset to a blank "Start here" (don't re-inherit the sticky facility)
-  else if(pid===activePid){ activePid=ids[0]; }
-  activateForm(); if(typeof draftSaveNow==='function') draftSaveNow(); }
+  if(!ids.length){ WS.patients.p1={name:'',store:newStore(),updatedAt:Date.now(),facility:'',noteType:'new'}; WS.seq=2; activePid='p1'; WS.round=WS.round||{}; WS.round.facility=''; activateForm(); }  // removed the LAST patient -> truly reset to a blank "Start here" (don't re-inherit the sticky facility)
+  else if(wasActive){ activePid=ids[0]; activateForm(); }                 // the open note really did change
+  else { saveWS(); renderPatientBar(); }                                  // someone else went - repaint the bar only
+  if(typeof draftSaveNow==='function') draftSaveNow(); }
 // Wipe the CURRENT patient (name, facility, note) back to a fresh blank — the "clear" affordance for
 // the single/blank slot, where there's no ✕ (nothing to group into a facility box yet).
 function clearCurrentPatient(){
