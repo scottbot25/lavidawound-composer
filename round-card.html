@@ -294,8 +294,18 @@ function normalizePts(o){
    It stores what was CONFIRMED uploaded rather than what is on screen - so work that never reached
    the vault (offline, a failed save) still has no signature and is still retried. */
 const SIGKEY = KEY + '_cloudsig';
+/* DEBOUNCED, because save() runs on every keystroke and this map does not change on every keystroke
+   - it only moves when an upload completes, a round is loaded, or a patient is removed. Stringifying
+   it per character was a cost I added earlier today while fixing the reopen re-upload; writing it
+   once the typing pauses is the same guarantee for a fraction of the work.
+   Worst case if the tab dies inside the window: one patient re-uploads next session with identical
+   content under the same id. Harmless, and far cheaper than paying for it on every key. */
+let _sigSaveT=null;
 function saveCloudSig(){
-  try{ if(typeof _rcCloudSig!=='undefined') sessionStorage.setItem(SIGKEY, JSON.stringify(_rcCloudSig)); }catch(e){}
+  clearTimeout(_sigSaveT);
+  _sigSaveT=setTimeout(()=>{
+    try{ if(typeof _rcCloudSig!=='undefined') sessionStorage.setItem(SIGKEY, JSON.stringify(_rcCloudSig)); }catch(e){}
+  }, 1200);
 }
 function save(){ try{ sessionStorage.setItem(KEY, JSON.stringify(S)); }catch(e){}
   saveCloudSig();
