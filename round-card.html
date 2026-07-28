@@ -557,7 +557,7 @@ function applyDateChange(nd){
   // loadedProv released here too: an empty card is nobody's round, and leaving the last round's
   // owner behind would file the NEXT one under them (see _fileProv). rcLoadRoundInto sets it again
   // if a round is actually there.
-  if(!named.length){ S.round.date=nd; S.round.loadedProv=''; S.round.loadedMixed=false; _sheetInvalidate(); save(); paintRound(); rcLoadRoundInto(nd, S.round.fac); return; }
+  if(!named.length){ S.round.date=nd; S.round.loadedProv=''; S.round.loadedMixed=false; _setUnstarted(false); _sheetInvalidate(); save(); paintRound(); rcLoadRoundInto(nd, S.round.fac); return; }
   const n=named.length;
   const ok=confirm('This card holds '+n+' patient'+(n===1?'':'s')+' from the '+(old||'current')+' round.\n\n'
     + 'A round is one facility on one day, so changing the date starts a different round and '
@@ -570,7 +570,7 @@ function applyDateChange(nd){
      its sheet and count while the OLD date is still set; both capture date/facility/patients
      synchronously, before their first await, so they land under the old day. */
   clearTimeout(_sheetAutoT); sheetAutoSave(); qcAutoSave(true);
-  S.pts=[]; S.active=0; S.round.date=nd; S.round.loadedProv=''; S.round.loadedMixed=false;   // nothing is loaded any more
+  S.pts=[]; S.active=0; S.round.date=nd; S.round.loadedProv=''; S.round.loadedMixed=false; _setUnstarted(false);   // nothing is loaded any more
   _sheetInvalidate(); _sheetLastSig=''; _qcLastSig='';
   save(); paintRound(); render(); toast('Started '+(nd||'a new date'));
   rcLoadRoundInto(nd, S.round.fac);      // if that round already exists, put it back on screen
@@ -673,7 +673,7 @@ function applyFacChange(nf){
   // Empty card: picking the building completes the round's identity (facility + date), so if that
   // round is already on file it belongs on screen. Same path as flipping the date back.
   // Same release as the date path: an empty card carries no round, so it carries no owner either.
-  if(!S.pts.length || !lock || nf===lock){ if(!S.pts.length){ S.round.facLock=nf; S.round.loadedProv=''; S.round.loadedMixed=false; paintProvSel(); } S.round.fac=nf; save(); paintFacSel(); rcLoadRoundInto(S.round.date, nf); return; }
+  if(!S.pts.length || !lock || nf===lock){ if(!S.pts.length){ S.round.facLock=nf; S.round.loadedProv=''; S.round.loadedMixed=false; _setUnstarted(false); paintProvSel(); } S.round.fac=nf; save(); paintFacSel(); rcLoadRoundInto(S.round.date, nf); return; }
   const n=S.pts.length;
   const ok=confirm('This card still has '+n+' patient'+(n===1?'':'s')+' from '+lock+'.\n\n'
     + 'A sheet can only carry one facility\'s residents. Send '+lock+'\'s sheet first if you '
@@ -687,7 +687,7 @@ function applyFacChange(nf){
     // date and patients synchronously, so this lands under the OLD building even though we change it
     // on the next line.
     clearTimeout(_sheetAutoT); sheetAutoSave(); qcAutoSave(true);
-    S.pts=[]; S.active=0; S.round.facLock=nf; S.round.fac=nf; S.round.loadedProv=''; S.round.loadedMixed=false; _sheetLastSig=''; _qcLastSig=''; save(); paintFacSel(); render(); toast('Started '+(nf||'a new facility'));
+    S.pts=[]; S.active=0; S.round.facLock=nf; S.round.fac=nf; S.round.loadedProv=''; S.round.loadedMixed=false; _setUnstarted(false); _sheetLastSig=''; _qcLastSig=''; save(); paintFacSel(); render(); toast('Started '+(nf||'a new facility'));
     rcLoadRoundInto(S.round.date, nf); }      // if that building already has this day's round, put it back
   else  { S.round.fac=lock; save(); paintFacSel(); }
 }
@@ -1581,12 +1581,28 @@ function _rcGone(id){ return !!id && (_rcDeleting.has(id) || _rcDeleted.has(id))
    "A real edit" is not guesswork: every patient's carried-forward state is recorded as its uploaded
    signature, so the moment any signature differs, work has happened. The manual "Save to
    ClinicalVault" button is never gated - that is an explicit instruction, not an accident. */
-let _rcUnstarted=false;
+/* PERSISTED, because everything it is judged against is. S (the patients) and _rcCloudSig (their
+   uploaded signatures) both survive a tab reload; this flag did not. So carrying a panel forward and
+   then reloading - a phone waking up, a browser restart, an accidental refresh - brought the round
+   back with every signature matching and the gate OFF, and the three auto-savers filed the whole
+   untouched round: records, the nurse's handoff sheet, and a QC count for visits nobody made. That
+   is the exact 21-record phantom this flag exists to prevent, arriving through the one door it did
+   not cover.
+   It cannot be derived on reload instead: a LOADED round also has every signature matching, and the
+   difference between "carried forward, untouched" and "loaded, untouched" is precisely what this
+   remembers. So it is written through one setter, and every path that starts or adopts a real round
+   clears it - a stale TRUE would silently file nothing at all, which is the worse direction. */
+const UNSTKEY = SIGKEY + '_unstarted';
+let _rcUnstarted=(function(){ try{ return sessionStorage.getItem(UNSTKEY)==='1'; }catch(e){ return false; } })();
+function _setUnstarted(v){
+  _rcUnstarted=!!v;
+  try{ if(_rcUnstarted) sessionStorage.setItem(UNSTKEY,'1'); else sessionStorage.removeItem(UNSTKEY); }catch(e){}
+}
 function _rcNoteWorkStarted(){
   if(!_rcUnstarted) return;
   try{
-    if((S.pts||[]).some(p=>p && p.id && _rcCloudSig[p.id]!==_rcSig(p))) _rcUnstarted=false;
-  }catch(e){ _rcUnstarted=false; }        // can't tell -> assume the round is real, never lose work
+    if((S.pts||[]).some(p=>p && p.id && _rcCloudSig[p.id]!==_rcSig(p))) _setUnstarted(false);
+  }catch(e){ _setUnstarted(false); }      // can't tell -> assume the round is real, never lose work
 }
 
 /* THE ROUND-LEVEL FIELDS RIDE INSIDE EVERY PATIENT SIGNATURE - look at _rcSig: it carries
@@ -1616,11 +1632,11 @@ function _rcRoundFieldChange(apply){
   try{ hadWork=(S.pts||[]).some(p=>p && p.id && _rcCloudSig[p.id]!==_rcSig(p)); }
   catch(e){ hadWork=true; }                           // can't tell -> assume real work, never lose it
   apply();
-  if(hadWork){ _rcUnstarted=false; return; }          // charting already happened: this is a real round
+  if(hadWork){ _setUnstarted(false); return; }        // charting already happened: this is a real round
   try{
     (S.pts||[]).forEach(p=>{ if(p && p.id) _rcCloudSig[p.id]=_rcSig(p); });
     saveCloudSig();
-  }catch(e){ _rcUnstarted=false; }        // can't re-seed -> fall back to "the round is real"
+  }catch(e){ _setUnstarted(false); }      // can't re-seed -> fall back to "the round is real"
 }
 
 function _loadCloudSig(raw, pts){
@@ -1954,7 +1970,7 @@ function _vaultResultShow(ok,msg,url){
 async function saveVault(){
   /* An explicit "Save to ClinicalVault" always files, and it starts the round. The unstarted state
      only ever suppresses the AUTOMATIC savers - a deliberate instruction is never second-guessed. */
-  _rcUnstarted=false;
+  _setUnstarted(false);
   const pts=sentNamed();
   if(!pts.length){ toast('Select at least one named patient to send'); return; }
   const btn=document.getElementById('vaultBtn'); btn.disabled=true;
@@ -2210,6 +2226,10 @@ function clearAll(btn){
   const clearedKey = (String(S.round.date||'').slice(0,10)||'undated') + '|' + (cleanSeg(S.round.fac)||'Unfiled');
   S=blank(); _sheetInvalidate(); try{ sessionStorage.removeItem(KEY); }catch(e){}
   Object.keys(_rcCloudSig).forEach(k=>delete _rcCloudSig[k]);
+  /* The unstarted gate and the QC signature are per-ROUND, and this is the end of one. A stale
+     unstarted flag would silently file NOTHING for the next round; a stale QC signature would skip
+     a count that is genuinely owed. _sheetInvalidate above already resets the sheet's. */
+  _setUnstarted(false); _qcLastSig='';
   try{
     const seen=JSON.parse(localStorage.getItem(RC_CLEARED_KEY)||'{}');
     seen[clearedKey]=Date.now();
@@ -2295,7 +2315,8 @@ async function rcRestoreFromVault(){
     const _pv=_cardProvSet(); const okProv=_pv.set; const prov=(S.round.prov||'').trim();
     if(!okProv.size) return;                                        // can't attribute anything — skip
     const {driveId}=await _vaultCtx(token);
-    const today=todayISO(), cut=Date.now()-36*3600*1000, mine=[];
+    // `mine` starts as {rec, folder} pairs and is narrowed to ONE building's records below, so let.
+    const today=todayISO(), cut=Date.now()-36*3600*1000; let mine=[];
     // PERF (Scott 2026-07-21: "takes a little long to load in patients"): the old loop was fully
     // sequential — each facility listed one-by-one, then TWO round-trips per record, one-by-one.
     // Now: all facility folders list IN PARALLEL, and every fresh record downloads IN PARALLEL via
@@ -2314,14 +2335,40 @@ async function rcRestoreFromVault(){
       if(dl) return fetch(dl).then(r=>r.ok?r.json():null).catch(()=>null);
       return _vaultReadJson(token,driveId,'RoundCards/'+fac+'/'+f.name).catch(()=>null);   // fallback if the annotation is absent
     }));
-    recs.forEach(rec=>{
+    /* Keep each record's FOLDER. Two records in one folder are one building, whatever the body says -
+       that is the only fact here that cannot drift, and the next step depends on it. */
+    recs.forEach((rec,i)=>{
       if(rec && rec.schema==='roundcard.v1' && String(rec.date||'').slice(0,10)===today
          && _cardProvOk(rec, okProv, true)
          && !_rcGone(rec.id)                                        // ...and not one I just deleted
-         && !_wasCleared(rec.date, rec.facility)) mine.push(rec);  // same-day, mine, and not one I cleared
+         && !_wasCleared(rec.date, rec.facility)) mine.push({rec:rec, folder:(fresh[i]||{}).fac||cleanSeg(rec.facility)||'Unfiled'});
     });
     if(!mine.length) return;
-    mine.sort((a,b)=>String(a.savedAt||'').localeCompare(String(b.savedAt||'')));
+    mine.sort((a,b)=>String(a.rec.savedAt||'').localeCompare(String(b.rec.savedAt||'')));
+    /* ---------- ONE BUILDING. THIS FILTER IS THE WHOLE POINT OF THE BLOCK BELOW ----------
+       This path matched on provider and date but NOT facility, then took the facility from whichever
+       record happened to sort last - so a provider who rounds two buildings in one day and whose
+       browser restarts got BOTH buildings' patients on one card, labelled with one building's name.
+       A round is one facility on one day, and the handoff sheet carries one facility header and
+       files into Daily Handoffs/<that facility>/ - so the other building's residents would print on
+       this building's sheet and be handed to the wrong facility's nurse. That is a disclosure to the
+       wrong facility, which is the one mistake this tool must never make (same rule as applyFacChange
+       and as the composer's per-patient facility fix).
+       WHICH building: the one whose most recent record is newest - the round you were last working
+       on, which is the one you were looking at when the browser died. The other is untouched in the
+       vault and comes back by picking that building (rcLoadRoundInto) or from the picker, and we say
+       so rather than letting it read as lost patients. */
+    const byFolder={};
+    mine.forEach(m=>{ (byFolder[m.folder]=byFolder[m.folder]||[]).push(m); });
+    const folders=Object.keys(byFolder);
+    const keep=folders.length===1 ? folders[0]
+      : folders.reduce((best,k)=>{
+          const nk=byFolder[k][byFolder[k].length-1].rec.savedAt||'';
+          const nb=byFolder[best][byFolder[best].length-1].rec.savedAt||'';
+          return String(nk).localeCompare(String(nb))>0 ? k : best;
+        }, folders[0]);
+    const dropped=folders.filter(k=>k!==keep);
+    mine=byFolder[keep].map(m=>m.rec);
     S.round.fac=mine[mine.length-1].facility||S.round.fac; S.round.date=today; S.round.prov=S.round.prov||prov;
     /* facLock MUST be set here. applyFacChange skips its whole confirm when facLock is empty
        (`!lock`), and this path was the one load path that never set it - so after a restore
@@ -2339,8 +2386,16 @@ async function rcRestoreFromVault(){
     S.pts=mine.map(r=>({ id:r.id||newId(), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], send:true, visitType:r.visitType||'', dispo:r.dispo||'' }));
     normalizePts(S); S.active=0;
     S.pts.forEach(p=>{ try{ _rcCloudSig[p.id]=_rcSig(p); }catch(e){} });   // restored = already in the cloud; no re-upload
+    /* A round nobody has charted is not restored INTO an unstarted state - these records exist, so
+       the round is real and its savers must not be gated. See _setUnstarted. */
+    _setUnstarted(false);
     save(); paintRound(); render();
     toast('Restored today’s round from ClinicalVault ('+S.pts.length+' patient'+(S.pts.length===1?'':'s')+')'+_ownerNote(owner));
+    /* Never let the other building read as lost patients. It is untouched in the vault; picking that
+       facility brings it straight back (rcLoadRoundInto), and the picker reaches it too. */
+    if(dropped.length) setTimeout(()=>toast('You also have '+(dropped.length===1?'a round':dropped.length+' rounds')+' on file today for '
+      +dropped.join(', ')+'. A round is one building, so only '+(S.round.fac||'this one')
+      +' is on screen — switch the Facility to bring '+(dropped.length===1?'the other':'another')+' one back.'), 1200);
   }catch(e){}
 }
 
@@ -2690,7 +2745,7 @@ async function carryForward(){
        signature stops matching, _rcNoteWorkStarted() clears the flag, and the round files itself
        normally from then on. Tapping the button to see last week's list now costs nothing. */
     try{ S.pts.forEach(p=>{ if(p && p.id) _rcCloudSig[p.id]=_rcSig(p); }); }catch(e){}
-    _rcUnstarted=true;
+    _setUnstarted(true);
     save(); paintRound(); render();
     toast('Brought forward '+pts.length+' of '+who+'’s patient'+(pts.length===1?'':'s')+' from their last visit'
       +(dischargedDropped?' · '+dischargedDropped+' discharged patient'+(dischargedDropped===1?'':'s')+' left off':'')
@@ -2713,10 +2768,26 @@ function loadRecentRound(i){
   try{ if(_clearArm){ clearTimeout(_clearArm); _clearArm=null;
     const cb=document.getElementById('clearBtn');                                        // header button — render() doesn't touch it
     if(cb){ cb.textContent='Clear'; cb.style.background=''; cb.style.color=''; } } }catch(e){}
-  S.round.fac=g.facility||S.round.fac; S.round.date=g.date; S.round.prov=S.round.prov||g.provider||''; _sheetInvalidate();
+  /* THE BOX DOES NOT LEARN THE ROUND'S PROVIDER. This used to fill a blank box from g.provider, and
+     it was the last route to the failure the whole attribution design exists to prevent: nothing
+     resets that box when a round ends, so after opening a colleague's round from the picker with a
+     blank box, the provider's OWN next round - next building, next day - would file under the
+     colleague, silently, and never come back to them.
+     Dropping it costs nothing. loadedProv below carries the round's real provider, every write reads
+     it (see _fileProv), and the standing line under the box says whose round is on screen. A box
+     that stays blank also keeps raising "Provider is blank" on the Review screen, which is exactly
+     the right nudge for someone covering on a shared device. */
+  S.round.fac=g.facility||S.round.fac; S.round.date=g.date; _sheetInvalidate();
   S.round.facLock=(S.round.fac||'').trim();
   const owner=_roundOwner(mine);                  // the RECORDS' provider — see _roundOwner / _fileProv
   S.round.loadedProv=owner.name; S.round.loadedMixed=owner.mixed;
+  /* A round that came OUT of the vault is real work that is already filed, not an untouched
+     carry-forward - so the unstarted gate must come off. It never did, so carrying a panel
+     forward and then opening a past round left all three auto-savers gated OFF for the rest
+     of the session: edits to that round wrote nothing, silently. Only reachable now that the
+     flag survives a reload, but it was always wrong. */
+  _setUnstarted(false);
+
   // dispo comes back too — see the same line in rcRestoreFromVault. Reopening a round must
   // not quietly reset everyone to "seen"; auto-save would then re-upload them as seen and
   // re-inflate a count that was already filed correctly.
@@ -2831,6 +2902,13 @@ async function rcLoadRoundFor(dateStr, facRaw){
     normalizePts(S); S.active=0;
     S.round.facLock=facR;                                  // every vault-load path must set this
     S.round.loadedProv=owner.name; S.round.loadedMixed=owner.mixed;   // whose round this is - see applyProvChange
+    /* A round that came OUT of the vault is real work that is already filed, not an untouched
+       carry-forward - so the unstarted gate must come off. It never did, so carrying a panel
+       forward and then opening a past round left all three auto-savers gated OFF for the rest
+       of the session: edits to that round wrote nothing, silently. Only reachable now that the
+       flag survives a reload, but it was always wrong. */
+    _setUnstarted(false);
+
     S.pts.forEach(p=>{ try{ _rcCloudSig[p.id]=_rcSig(p); }catch(e){} });   // loaded = already filed
     _sheetInvalidate(); _sheetLastSig=''; _qcLastSig='';
     save(); paintRound(); render();
