@@ -2472,6 +2472,36 @@ function _migrateWoundData(p, fromMode, toMode){
     });
     const fk=_rcApKeyFor(fromMode), tk=_rcApKeyFor(toMode);
     if(fk && tk && !isEmpty(src[fk]) && isEmpty(dst[tk])) dst[tk]=src[fk];
+
+    /* CARRY THE CARD-OWNERSHIP MEMORY WITH THE VALUES IT DESCRIBES.
+       __rcw remembers what the CARD last wrote per key; _rcWriteWound's onlyEmpty guard treats a
+       key whose current value still equals that memory as the card's to update, and anything else
+       as the provider's, forever. The values above migrate to the new note type but the memory did
+       not, so on the destination side every card-written value looked provider-typed. Two things
+       broke, both silently and both in the note that gets pasted into PCC:
+         - a bedside correction stopped landing. Fix a mistyped measurement on the card, re-save,
+           and the composer toasts "Updated <patient> from their Round Card" while the note keeps
+           the wrong number - the worst possible combination, because it says it worked.
+         - an A&P order line was APPENDED instead of replaced, so the note carried both the old and
+           the new order for one wound - e.g. npwt at 125 and npwt at 75 in the same plan.
+       Ownership must be re-earned, not assumed: only claim a key whose destination value actually
+       IS the card's value now. Placement matters - this runs after the A&P remap above, because
+       the __ap: check reads dst[tk], which that line has just populated. */
+    const sw=src['__rcw'];
+    if(sw && typeof sw==='object'){
+      const dw=dst['__rcw']=(dst['__rcw']&&typeof dst['__rcw']==='object')?dst['__rcw']:{};
+      const same=(a,b)=>{ try{ return JSON.stringify(a)===JSON.stringify(b); }catch(e){ return false; } };
+      Object.keys(sw).forEach(mk=>{
+        if(mk in dw) return;                       // destination already has its own memory - leave it
+        if(/^__ap:/.test(mk)){
+          // An A&P line memory holds the LINE TEXT. The card still owns it only if that exact line
+          // is in the destination A&P now; otherwise the provider has rewritten it and it is hers.
+          if(tk && typeof dst[tk]==='string' && typeof sw[mk]==='string' && sw[mk] && dst[tk].indexOf(sw[mk])>=0) dw[mk]=sw[mk];
+          return;
+        }
+        if((mk in dst) && same(dst[mk], sw[mk])) dw[mk]=Array.isArray(sw[mk])?sw[mk].slice():sw[mk];
+      });
+    }
   }catch(e){}
 }
 

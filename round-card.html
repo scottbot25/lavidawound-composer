@@ -1656,14 +1656,21 @@ async function sheetAutoSave(){
   try{ token=await _vaultTokenSilent(); }catch(e){}
   if(!token) return;                                   // signed out — stay quiet, the warning covers it
   _sheetAutoBusy=true;
+  /* EVERY await inside the busy window carries a deadline. The flag is released in the finally
+     below, but a finally only runs once the promise SETTLES - and a hung vault call does not
+     reject, it simply never resolves. One stalled request therefore left _sheetAutoBusy true for
+     the rest of the session: every later call returned at the guard above, so the round finished
+     with no handoff sheet in Daily Handoffs and nothing said why. _netTmo turns "never" into a
+     rejection, which the catch already handles and which leaves the signature unset so the next
+     edit retries. Same treatment in qcAutoSave. */
   try{
-    await _autoFillProvider();                         // so the filename names who rounded
+    await _netTmo(_autoFillProvider(), 15000);         // so the filename names who rounded
     const prov = cleanSeg(S.round.prov) || 'Provider unlisted';
-    const {driveId}=await _vaultCtx(token);
+    const {driveId}=await _netTmo(_vaultCtx(token), 15000);
     const segs=['Daily Handoffs',fac,date];
-    await _vaultEnsureFolders(token,driveId,segs);
+    await _netTmo(_vaultEnsureFolders(token,driveId,segs), 15000);
     const blob=new Blob(['﻿'+sheetHTML(pts,{fac:facRaw, date:date, prov:S.round.prov||''})],{type:'application/msword'});
-    await _vaultUpload(token,driveId,segs,'Wound Orders — '+fac+' — '+date+' — '+prov+'.doc',blob,'application/msword');
+    await _netTmo(_vaultUpload(token,driveId,segs,'Wound Orders — '+fac+' — '+date+' — '+prov+'.doc',blob,'application/msword'), 30000);
     _sheetLastSig=sig;
     _sheetOnFile=true; _sheetCheckKey=_sheetKey();      // the round now HAS a sheet
     _paintSheetWarn();
@@ -1712,14 +1719,16 @@ async function qcAutoSave(force){
   if(!token) return;                                    // signed out — the manual save still covers it
   _qcBusy=true;
   try{
-    await _autoFillProvider();
+    // Deadlines for the same reason as sheetAutoSave: a hung call never settles, so the finally
+    // never runs, and _qcBusy would stay true and silently skip the count for the whole session.
+    await _netTmo(_autoFillProvider(), 15000);
     const prov = cleanSeg(S.round.prov) || 'Provider unlisted';
-    const {driveId}=await _vaultCtx(token);
-    await _vaultEnsureFolders(token,driveId,['QC Feed']);
+    const {driveId}=await _netTmo(_vaultCtx(token), 15000);
+    await _netTmo(_vaultEnsureFolders(token,driveId,['QC Feed']), 15000);
     const qc={ schema:'qcfeed.v1', date:date, facility:facRaw, provider:S.round.prov||'',
       patientCount:count, savedAt:new Date().toISOString() };
-    await _vaultUpload(token,driveId,['QC Feed'], date+' — '+fac+' — '+prov+'.json',
-      new Blob([JSON.stringify(qc)],{type:'application/json'}),'application/json');
+    await _netTmo(_vaultUpload(token,driveId,['QC Feed'], date+' — '+fac+' — '+prov+'.json',
+      new Blob([JSON.stringify(qc)],{type:'application/json'}),'application/json'), 30000);
     _qcLastSig=sig;
   }catch(e){ /* leave the signature unset so the next trigger retries */ }
   finally{ _qcBusy=false; }
