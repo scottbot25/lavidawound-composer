@@ -132,6 +132,10 @@
       <div>
         <label for="r_prov">Provider</label>
         <select id="r_prov" onchange="onProvPick(this)"></select>
+        <!-- Painted by paintProvSel when the round on screen is on file under someone other than
+             the Provider box. The box says who you are; this says where the round files. Without
+             it that difference is invisible for the whole round (see _fileProv). -->
+        <div id="provOwner" class="muted" style="display:none;font-size:12px;margin-top:4px;line-height:1.35"></div>
       </div>
     </div>
     <!-- Next-day access (Abby 2026-07-22: "an RN wants a change in the orders" after the round is off
@@ -439,11 +443,80 @@ function paintFacSel(){
     + _optList(FACILITIES,S.round.facExtra,cur).map(f=>'<option'+(f===cur?' selected':'')+'>'+esc(f)+'</option>').join('')
     + '<option value="__add__">+ Add a facility…</option>';
 }
+/* ============ WHO A ROUND FILES UNDER (audit #19 + #33 — one problem, one fix) ============
+   Every READ of RoundCards/ accepts a record whose provider matches the Provider box, the signed-in
+   account, OR rc_last_prov (see _cardProvSet). Every WRITE used to take the name straight off the
+   box. Load under an alias, write under the alias: opening a past round just to LOOK at it filed a
+   SECOND nurse handoff sheet and a SECOND QC count under the wrong name (#19), and picking your own
+   name from the dropdown while someone else's round was on screen re-filed all of their records
+   under you with no confirm at all (#33).
+
+   THE RULE NOW. The BOX means "who I am, and who a NEW round files under". A LOADED round keeps
+   filing under the provider it is ALREADY on file under, so re-saving lands on the SAME filename and
+   overwrites instead of adding a duplicate. The box never moves on its own.
+
+   ADOPTING THE OWNER INTO THE BOX WAS TRIED AND REJECTED. Neither applyDateChange nor applyFacChange
+   resets S.round.prov when they clear the card, and _autoFillProvider refuses to touch a non-blank
+   box — so after merely looking at a colleague's round, the provider's OWN next round, at the next
+   building, would file under the colleague. Silently, and it would never come back to them, because
+   every read path filters by provider. That is worse than the bug being fixed.
+
+   BOTH HELPERS ARE `function` DECLARATIONS ON PURPOSE, never const arrows. _rcSig is reachable from
+   the boot save(), so an arrow would sit in the temporal dead zone; and the test suites locate these
+   by scanning for the literal text "function <name>(".
+
+   THE WRITE-SITE SWEEP AND applyProvChange'S GUARD ARE ONE CHANGE and cannot be split across
+   commits. The guard alone, without the sweep, re-creates #33 for the same-person-different-spelling
+   case: no confirm AND a full re-file. */
+function _fileProv(){ return (S.round.loadedProv||'').trim() || (S.round.prov||'').trim(); }
+function _roundOwner(recs){
+  const names=(recs||[]).map(r=>String((r&&r.provider)||'').trim()).filter(Boolean);
+  const keys=new Set(names.map(_nameKey));
+  const box=(S.round.prov||'').trim();
+  if(keys.size!==1) return {name:box, mixed:keys.size>1};   // unstamped or mixed -> the box, as before
+  /* ONE OWNER, BUT WHICH SPELLING? The sheet and the QC count are named from the literal string, so
+     picking the wrong variant of the same human forks them into two files in one folder.
+     - If the box already names that person, keep the BOX's spelling: it is what the next write was
+       going to use anyway, so nothing moves.
+     - Otherwise take the LAST record's. All three load paths sort savedAt ascending, so the last one
+       is the most recent write - and the sheet and count on file were named in that same pass.
+       names[0] would take the OLDEST spelling, which is the one most likely to be stale. */
+  const last=names[names.length-1];
+  return {name:(box && _nameKey(last)===_nameKey(box)) ? box : last, mixed:false};
+}
+/* One sentence, used both in the load toast and in the standing line under the Provider box. */
+function _ownerNote(o){
+  const box=(S.round.prov||'').trim();
+  if(o && o.mixed) return ' — ⚠ this round has records from more than one provider, so saving files them all under '+(box||'the Provider box');
+  if(o && o.name && _nameKey(o.name)!==_nameKey(box)) return ' — this is '+o.name+'’s round and it stays filed under '+o.name;
+  return '';
+}
 function paintProvSel(){
   const sel=document.getElementById('r_prov'), cur=(S.round.prov||'').trim();
   sel.innerHTML='<option value=""></option>'
     + _optList(PROVIDERS,S.round.provExtra,cur).map(p=>'<option'+(p===cur?' selected':'')+'>'+esc(p)+'</option>').join('')
     + '<option value="__other__">+ Other…</option>';
+  /* A toast lasts four seconds; the divergence lasts the whole round. Say it for as long as it is
+     true, so nobody charts an afternoon under a name they never saw. */
+  const el=document.getElementById('provOwner'); if(!el) return;
+  const own=(S.round.loadedProv||'').trim();
+  if(own && _nameKey(own)!==_nameKey(cur)){
+    /* The button is the ONLY working way to claim the round from here. paintProvSel marks the box's
+       own value as selected, and a <select> fires no change event when you re-pick the option that
+       is already selected - so on the exact case this fix is about (the box says YOU, the round is
+       someone else's) the dropdown is a dead end. */
+    el.innerHTML='Filing under <b>'+esc(own)+'</b> — this round is already on file under that name. '
+      +'<button class="tiny" style="margin-left:4px" onclick="applyProvChange((S.round.prov||\'\').trim())">Take it over</button>';
+    el.style.display='';
+  } else if(S.round.loadedMixed){
+    /* Mixed sets get no "owner differs" banner by construction - _roundOwner hands back the box, so
+       own===cur - and it is the case that most needs saying: the first edit re-files that ONE record
+       under the box and leaves the rest with their own provider, splitting the round across two
+       people with no confirm anywhere. */
+    el.innerHTML='⚠ This round has records from <b>more than one provider</b>. Anything you save files under '
+      +esc(cur||'the Provider box')+'.';
+    el.style.display='';
+  } else { el.innerHTML=''; el.style.display='none'; }
 }
 /* ---------- changing the round DATE (Scott 2026-07-27) ----------
    The date is round-level, exactly like the facility, AND it is part of every patient's
@@ -481,7 +554,10 @@ function applyDateChange(nd){
   const named=S.pts.filter(p=>(p.name||'').trim());
   // Empty card: no confirm needed, but this is the COMMONEST way back to a previous round -
   // the card is already clear, you flip the date, and that round should be on screen.
-  if(!named.length){ S.round.date=nd; _sheetInvalidate(); save(); paintRound(); rcLoadRoundInto(nd, S.round.fac); return; }
+  // loadedProv released here too: an empty card is nobody's round, and leaving the last round's
+  // owner behind would file the NEXT one under them (see _fileProv). rcLoadRoundInto sets it again
+  // if a round is actually there.
+  if(!named.length){ S.round.date=nd; S.round.loadedProv=''; S.round.loadedMixed=false; _sheetInvalidate(); save(); paintRound(); rcLoadRoundInto(nd, S.round.fac); return; }
   const n=named.length;
   const ok=confirm('This card holds '+n+' patient'+(n===1?'':'s')+' from the '+(old||'current')+' round.\n\n'
     + 'A round is one facility on one day, so changing the date starts a different round and '
@@ -494,7 +570,7 @@ function applyDateChange(nd){
      its sheet and count while the OLD date is still set; both capture date/facility/patients
      synchronously, before their first await, so they land under the old day. */
   clearTimeout(_sheetAutoT); sheetAutoSave(); qcAutoSave(true);
-  S.pts=[]; S.active=0; S.round.date=nd; S.round.loadedProv='';   // nothing is loaded any more
+  S.pts=[]; S.active=0; S.round.date=nd; S.round.loadedProv=''; S.round.loadedMixed=false;   // nothing is loaded any more
   _sheetInvalidate(); _sheetLastSig=''; _qcLastSig='';
   save(); paintRound(); render(); toast('Started '+(nd||'a new date'));
   rcLoadRoundInto(nd, S.round.fac);      // if that round already exists, put it back on screen
@@ -536,18 +612,37 @@ function onProvPick(sel){
    ToolSandbox run - the confirm had been promising something nothing did. */
 function applyProvChange(v){
   const old=(S.round.prov||'').trim(); v=(v||'').trim();
-  if(v===old){ paintProvSel(); return; }
   const loaded=(S.round.loadedProv||'').trim();
   const named=S.pts.filter(p=>(p.name||'').trim()).length;
-  if(loaded && named && loaded===old){
-    const ok=confirm(named+' patient'+(named===1?'':'s')+' on this card were loaded from '
+  /* THE GUARD ASKS THE RIGHT QUESTION NOW. It used to be `loaded===old` — true only when the box
+     already agreed with the round's owner. When they disagreed (a shared sign-in, an alias, a blank
+     box after a reload) the guard was FALSE, so re-filing someone else's whole round happened in
+     silence. Comparing the ROUND'S OWNER against the NAME BEING PICKED fires in every case the old
+     one did, plus the cross-provider one, and correctly stays quiet when you are merely correcting
+     the box to the name the round is already on file under — that re-files nothing.
+
+     TAKEOVER: on a loaded round the box may ALREADY say your name, so v===old and the old no-op
+     return would swallow the one action that takes the round. Picking your own name has to stay the
+     way you claim it — that is what the "Take it over" button under the box calls.
+     `v &&` matters: the select's first option is EMPTY, so without it picking the blank would read
+     as a takeover, raise a confirm that names nobody ("re-files them under the new provider"), and
+     then let _autoFillProvider re-file the whole round under the signed-in account. */
+  const takeover=!!(v && loaded && named && _nameKey(loaded)!==_nameKey(v));
+  if(v===old && !takeover){ paintProvSel(); return; }
+  if(takeover){
+    const ok=confirm(named+' patient'+(named===1?' on this card was':'s on this card were')+' loaded from '
       + loaded+'\'s round.\n\nChanging the provider re-files every one of those records under '
       + (v||'the new provider')+'. They will stop coming back for '+loaded
       + ', and the QC count for that day moves too.\n\n'
       + 'OK = re-file them under '+(v||'the new provider')
       + '\nCancel = leave them with '+loaded);
     if(!ok){ paintProvSel(); return; }
-    S.round.loadedProv=v;                              // they are this provider's now
+    /* STAYS HERE, BEFORE _rcRoundFieldChange BELOW. loadedProv now feeds _fileProv, so moving it
+       into that callback would let hadWork read false, re-seed every signature under the new name,
+       and upload nothing - and then the next single edit would file ONE patient under the new
+       provider while the rest stayed with the old. A round split across two people is worse than
+       the outcome this confirm just promised. */
+    S.round.loadedProv=v; S.round.loadedMixed=false;    // they are this provider's now
   }
   /* Through _rcRoundFieldChange, and BEFORE save(): save() calls _rcNoteWorkStarted(), which would
      read the freshly shifted signatures as twelve edits and start a round nobody has charted.
@@ -577,7 +672,8 @@ function applyFacChange(nf){
   _sheetInvalidate();                                  // different facility = a different round's sheet
   // Empty card: picking the building completes the round's identity (facility + date), so if that
   // round is already on file it belongs on screen. Same path as flipping the date back.
-  if(!S.pts.length || !lock || nf===lock){ if(!S.pts.length) S.round.facLock=nf; S.round.fac=nf; save(); paintFacSel(); rcLoadRoundInto(S.round.date, nf); return; }
+  // Same release as the date path: an empty card carries no round, so it carries no owner either.
+  if(!S.pts.length || !lock || nf===lock){ if(!S.pts.length){ S.round.facLock=nf; S.round.loadedProv=''; S.round.loadedMixed=false; paintProvSel(); } S.round.fac=nf; save(); paintFacSel(); rcLoadRoundInto(S.round.date, nf); return; }
   const n=S.pts.length;
   const ok=confirm('This card still has '+n+' patient'+(n===1?'':'s')+' from '+lock+'.\n\n'
     + 'A sheet can only carry one facility\'s residents. Send '+lock+'\'s sheet first if you '
@@ -591,7 +687,7 @@ function applyFacChange(nf){
     // date and patients synchronously, so this lands under the OLD building even though we change it
     // on the next line.
     clearTimeout(_sheetAutoT); sheetAutoSave(); qcAutoSave(true);
-    S.pts=[]; S.active=0; S.round.facLock=nf; S.round.fac=nf; S.round.loadedProv=''; _sheetLastSig=''; _qcLastSig=''; save(); paintFacSel(); render(); toast('Started '+(nf||'a new facility'));
+    S.pts=[]; S.active=0; S.round.facLock=nf; S.round.fac=nf; S.round.loadedProv=''; S.round.loadedMixed=false; _sheetLastSig=''; _qcLastSig=''; save(); paintFacSel(); render(); toast('Started '+(nf||'a new facility'));
     rcLoadRoundInto(S.round.date, nf); }      // if that building already has this day's round, put it back
   else  { S.round.fac=lock; save(); paintFacSel(); }
 }
@@ -616,8 +712,17 @@ function delPt(i,btn){
   clearTimeout(_delArm.t); _delArm=null;
   const doomedId=(S.pts[i]&&S.pts[i].id)||null, fac=cleanSeg(S.round.fac)||'Unfiled';
   S.pts.splice(i,1);
+  /* Removing the last patient empties the card one at a time, which the date and facility handlers
+     do in one go — and only they released the loaded round's owner. Load a colleague's round,
+     remove their patients, add your own on the same day and building, and every record, the nurse's
+     sheet and the QC count would still go out under them (see _fileProv). Worse than a duplicate:
+     the sheet is named facility+date+provider, so it OVERWRITES the colleague's real handoff sheet
+     and rewrites their count.
+     NAMED patients, not rows. `+ Patient` leaves a blank row behind, so a row count of 1 with
+     nothing in it would have skipped the release and kept the round on the colleague. */
+  if(!S.pts.some(p=>(p.name||'').trim())){ S.round.loadedProv=''; S.round.loadedMixed=false; }
   if(S.active >= S.pts.length) S.active = Math.max(0, S.pts.length-1);
-  save(); render();
+  save(); render(); paintProvSel();   // repaint the "Filing under" line, or it says the round is still theirs
   /* Clean up the removed patient's vault record too, so restore-on-open can't resurrect them.
      THIS USED TO BE FIRE-AND-FORGET WITH AN EMPTY CATCH. The patient vanished from the screen
      whether or not the record actually went, no token meant a silent no-op, and _vaultDelete's
@@ -913,7 +1018,7 @@ function sheetText(list){
   const r=S.round, L=[];
   L.push('WOUND CARE ORDERS');
   L.push('Facility: '+v(r.fac)+'    Date: '+v(r.date));
-  L.push('Provider: '+v(r.prov));
+  L.push('Provider: '+v(_fileProv()));   // whoever the round FILES under, same as the .doc renderer
   L.push('');
   const pts = list || S.pts.filter(p=>(p.name||'').trim());
   pts.forEach(p=>{
@@ -971,7 +1076,11 @@ function statusBadge(w){
    flush triggered by switching facility can't stamp the previous building's patients with the new
    building's name. Everything else passes nothing and gets the live round, exactly as before. */
 function sheetHTML(list, roundOverride){
-  const r=roundOverride||S.round;
+  /* A COPY, never Object.assign(S.round,…) — mutating S.round here would move the Provider box
+     itself, which is the design this fix deliberately rejected, arriving through the sheet
+     renderer. The header must name whoever the round FILES under (see _fileProv), or the printed
+     Provider row and the filename disagree. */
+  const r=roundOverride||Object.assign({}, S.round, {prov:_fileProv()});
   const pts = _abcSort(list || S.pts.filter(p=>(p.name||'').trim()));   // sheet prints A→Z, matching the tabs + PCC's list
   const css =
     "body{font:12pt/1.45 'Segoe UI',Arial,Helvetica,sans-serif;color:#26241f;margin:0;padding:22px;background:#fff}"
@@ -1238,7 +1347,7 @@ function downloadSheet(){
   if(!pts.length){ toast('No patients selected'); return; }
   const fac  = cleanSeg(S.round.fac) || 'Unfiled';
   const date = /^\d{4}-\d{2}-\d{2}/.test(String(S.round.date||'')) ? S.round.date.slice(0,10) : 'undated';
-  const prov = cleanSeg(S.round.prov) || 'Provider unlisted';
+  const prov = cleanSeg(_fileProv()) || 'Provider unlisted';
   const blob=new Blob(['﻿'+sheetHTML(pts)],{type:'application/msword'});
   const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
   a.download='Wound Orders — '+fac+' — '+date+' — '+prov+'.doc';
@@ -1580,7 +1689,10 @@ function _rcPaintSync(state, when){
 /* dp MUST be in here. The signature is how auto-save decides a patient changed; leave a field
    out and editing it reads as "already saved", so it silently never uploads. That exact bug
    ate wound edits typed during an in-flight save (2026-07-21). */
-function _rcSig(p){ return JSON.stringify({n:p.name||'', e:p.edu||'', w:p.wounds||[], vt:p.visitType||'', dp:p.dispo||'', f:S.round.fac||'', d:S.round.date||'', pr:S.round.prov||''}); }
+/* pr is the FILING provider, not the box — the signature has to describe the record that would be
+   uploaded. Keeping it on the box would make a loaded round's seeded signatures a lie, and would
+   stop a confirmed re-attribution from marking anything dirty, so nothing would re-file. */
+function _rcSig(p){ return JSON.stringify({n:p.name||'', e:p.edu||'', w:p.wounds||[], vt:p.visitType||'', dp:p.dispo||'', f:S.round.fac||'', d:S.round.date||'', pr:_fileProv()}); }
 async function _vaultTokenSilent(){
   try{
     if(window.self!==window.top){ try{ return await _tokenFromParent(); }catch(e){ return null; } }
@@ -1631,7 +1743,7 @@ document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState=
 const SHEET_AUTOSAVE_MS=20000;
 let _sheetAutoT=null, _sheetAutoBusy=false, _sheetLastSig='';
 function _sheetSig(pts){
-  try{ return JSON.stringify({p:pts, f:S.round.fac||'', d:S.round.date||'', pr:S.round.prov||''}); }
+  try{ return JSON.stringify({p:pts, f:S.round.fac||'', d:S.round.date||'', pr:_fileProv()}); }
   catch(e){ return String(Math.random()); }            // unserialisable -> treat as changed
 }
 function scheduleSheetSave(){ clearTimeout(_sheetAutoT); _sheetAutoT=setTimeout(function(){
@@ -1652,6 +1764,15 @@ async function sheetAutoSave(){
   const date = /^\d{4}-\d{2}-\d{2}/.test(String(S.round.date||'')) ? S.round.date.slice(0,10) : 'undated';
   const sig=_sheetSig(pts);
   if(sig===_sheetLastSig) return;                      // nothing on the sheet changed
+  /* CAPTURE THE OWNER, KEEP READING THE BOX LIVE. Only loadedProv can be stolen mid-flight:
+     applyFacChange and applyDateChange call this and then release it on the very next SYNCHRONOUS
+     line, so a post-await read would file the loaded round's exit sheet as a SECOND document under
+     the box. Pinning the WHOLE name would be its own bug in the other direction - the box is the
+     one field a provider can still be fixing while a 20-second save is in flight (four awaits,
+     15/15/15/30s), and freezing it there files the sheet and the count under the name she just
+     corrected, then files a second pair under the right one. */
+  const provLoaded=(S.round.loadedProv||'').trim();
+  const provAtCapture=provLoaded || (S.round.prov||'').trim();   // dedupe key only
   let token=null;
   try{ token=await _vaultTokenSilent(); }catch(e){}
   if(!token) return;                                   // signed out — stay quiet, the warning covers it
@@ -1665,11 +1786,12 @@ async function sheetAutoSave(){
      edit retries. Same treatment in qcAutoSave. */
   try{
     await _netTmo(_autoFillProvider(), 15000);         // so the filename names who rounded
-    const prov = cleanSeg(S.round.prov) || 'Provider unlisted';
+    const provName = provLoaded || _fileProv();
+    const prov = cleanSeg(provName) || 'Provider unlisted';
     const {driveId}=await _netTmo(_vaultCtx(token), 15000);
     const segs=['Daily Handoffs',fac,date];
     await _netTmo(_vaultEnsureFolders(token,driveId,segs), 15000);
-    const blob=new Blob(['﻿'+sheetHTML(pts,{fac:facRaw, date:date, prov:S.round.prov||''})],{type:'application/msword'});
+    const blob=new Blob(['﻿'+sheetHTML(pts,{fac:facRaw, date:date, prov:provName})],{type:'application/msword'});
     await _netTmo(_vaultUpload(token,driveId,segs,'Wound Orders — '+fac+' — '+date+' — '+prov+'.doc',blob,'application/msword'), 30000);
     _sheetLastSig=sig;
     _sheetOnFile=true; _sheetCheckKey=_sheetKey();      // the round now HAS a sheet
@@ -1712,7 +1834,15 @@ async function qcAutoSave(force){
   const count= pts.filter(isCounted).length;
   if(!count) return;                                    // attended, nobody available: no count is owed
   if(!force && new Date().getHours() < QC_AFTER_HOUR) return;   // rounds may still be running
-  const sig=date+'|'+fac+'|'+count;
+  // Same split as the sheet above: pin the OWNER (which the exit path releases on the next line),
+  // keep reading the box live (which the provider may still be correcting).
+  const provLoaded=(S.round.loadedProv||'').trim();
+  const provAtCapture=provLoaded || (S.round.prov||'').trim();
+  /* THE PROVIDER IS PART OF THE KEY, because it is part of the FILENAME. Without it, viewing a
+     colleague's 5-patient round after 17:00 (count filed under them) and then charting your own 5
+     patients in the same building on the same day produces two different files with one signature -
+     and your count is silently skipped and never filed at all. */
+  const sig=date+'|'+fac+'|'+cleanSeg(provAtCapture)+'|'+count;
   if(sig===_qcLastSig) return;                          // this exact count is already on file
   let token=null;
   try{ token=await _vaultTokenSilent(); }catch(e){}
@@ -1722,10 +1852,11 @@ async function qcAutoSave(force){
     // Deadlines for the same reason as sheetAutoSave: a hung call never settles, so the finally
     // never runs, and _qcBusy would stay true and silently skip the count for the whole session.
     await _netTmo(_autoFillProvider(), 15000);
-    const prov = cleanSeg(S.round.prov) || 'Provider unlisted';
+    const provName = provLoaded || _fileProv();
+    const prov = cleanSeg(provName) || 'Provider unlisted';
     const {driveId}=await _netTmo(_vaultCtx(token), 15000);
     await _netTmo(_vaultEnsureFolders(token,driveId,['QC Feed']), 15000);
-    const qc={ schema:'qcfeed.v1', date:date, facility:facRaw, provider:S.round.prov||'',
+    const qc={ schema:'qcfeed.v1', date:date, facility:facRaw, provider:provName,
       patientCount:count, savedAt:new Date().toISOString() };
     await _netTmo(_vaultUpload(token,driveId,['QC Feed'], date+' — '+fac+' — '+prov+'.json',
       new Blob([JSON.stringify(qc)],{type:'application/json'}),'application/json'), 30000);
@@ -1757,10 +1888,23 @@ async function rcAutoSaveCloud(){
     const date=/^\d{4}-\d{2}-\d{2}/.test(String(S.round.date||''))?S.round.date.slice(0,10):'undated';
     const recSegs=['RoundCards',fac];
     await _netTmo(_vaultEnsureFolders(token,driveId,recSegs), 15000);
-    // Remember the provider name on this device (workforce name only — NOT patient data), so a fresh
-    // session after a browser exit can still recognize this round's records even when the signed-in
-    // account isn't the named provider (admin signs in, sets the real rounding provider).
-    try{ if((S.round.prov||'').trim()) localStorage.setItem('rc_last_prov', S.round.prov.trim()); }catch(e){}
+    /* ONE READ FOR THE WHOLE BATCH, like saveVault. The loop below awaits an upload per record, and
+       three ordinary actions - removing the last patient, changing the date, changing the facility -
+       now release S.round.loadedProv SYNCHRONOUSLY. A date or facility change even guarantees the
+       loop is parked, because confirm() blocks the thread while the provider reads the dialog. Read
+       live inside the loop and one round's records go out under TWO different provider names, which
+       the nightly job then turns into two QC counts that its reconcile is structurally unable to
+       remove (both are backed by real records). */
+    const provNow=_fileProv();
+    /* Remember what this device FILED under, not what the box says. Those were the same thing until
+       a loaded round started keeping its own provider - and then this line quietly became the bug:
+       it replaced the owner's name in the read set with the box's, so the card had written a record
+       that neither its own restore/carry-forward nor the composer's pull would accept ever again.
+       No error, no toast - the provider simply gets nothing, including her own new patient.
+       This does not widen anything: a round is only loadable if its owner is ALREADY in the read
+       set (box, signed-in account, or this same key), so writing it back can only preserve a
+       membership that was there already. Workforce name only - never patient data. */
+    try{ if(provNow) localStorage.setItem('rc_last_prov', provNow); }catch(e){}
     let n=0;
     for(const p of dirty){
       const id=p.id||newId();
@@ -1771,7 +1915,7 @@ async function rcAutoSaveCloud(){
       // wounds typed right as the name-only save fired were silently lost until the next edit).
       const sigNow=_rcSig(p);
       const rec={ schema:'roundcard.v1', id:id, savedAt:new Date().toISOString(), key:ptSlug(p.name),
-        facility:S.round.fac||'', date:date, provider:S.round.prov||'',
+        facility:S.round.fac||'', date:date, provider:provNow,
         visitType:p.visitType||'', dispo:p.dispo||'',
         patient:{name:p.name}, edu:p.edu||'', wounds:JSON.parse(JSON.stringify(p.wounds||[])) };
       const jb=new Blob([JSON.stringify(rec)],{type:'application/json'});
@@ -1827,7 +1971,9 @@ async function saveVault(){
     }catch(e){}
     const fac  = cleanSeg(S.round.fac) || 'Unfiled';
     const date = /^\d{4}-\d{2}-\d{2}/.test(String(S.round.date||'')) ? S.round.date.slice(0,10) : 'undated';
-    const prov = cleanSeg(S.round.prov) || 'Provider unlisted';
+    // One read for the whole save, so the sheet, the records and the count can never disagree.
+    const provName=_fileProv();
+    const prov = cleanSeg(provName) || 'Provider unlisted';
     st('Preparing folders…');
     const {driveId}=await _vaultCtx(token);
     const sheetSegs=['Daily Handoffs',fac,date];
@@ -1852,7 +1998,7 @@ async function saveVault(){
       // whatever the patient looks like after the network round-trip (mid-upload edits must stay dirty).
       const sigNow=_rcSig(p);
       const rec={ schema:'roundcard.v1', id:id, savedAt:new Date().toISOString(), key:ptSlug(p.name),
-        facility:S.round.fac||'', date:date, provider:S.round.prov||'',
+        facility:S.round.fac||'', date:date, provider:provName,
         visitType:p.visitType||'', dispo:p.dispo||'',
         patient:{name:p.name}, edu:p.edu||'', wounds:JSON.parse(JSON.stringify(p.wounds||[])) };
       const jb=new Blob([JSON.stringify(rec)],{type:'application/json'});
@@ -1871,7 +2017,7 @@ async function saveVault(){
     if(qcCount>0){
       st('Logging QC count…');
       await _vaultEnsureFolders(token,driveId,['QC Feed']);
-      const qc={ schema:'qcfeed.v1', date:date, facility:S.round.fac||'', provider:S.round.prov||'',
+      const qc={ schema:'qcfeed.v1', date:date, facility:S.round.fac||'', provider:provName,
         patientCount:qcCount, savedAt:new Date().toISOString() };
       await _vaultUpload(token,driveId,['QC Feed'], date+' — '+fac+' — '+prov+'.json',
         new Blob([JSON.stringify(qc)],{type:'application/json'}),'application/json');
@@ -2184,14 +2330,17 @@ async function rcRestoreFromVault(){
        the originals behind - the same patients then exist under two facilities on one day,
        double-counted in the QC feed. Found 2026-07-27 while adding the date guard. */
     S.round.facLock=(S.round.fac||'').trim();
-    S.round.loadedProv=(S.round.prov||'').trim();   // whose records these are — see applyProvChange
+    // Whose records these ACTUALLY are, read off the records — not off the box, which may name the
+    // signed-in account or an alias that merely PASSED the read test (see _roundOwner / _fileProv).
+    const owner=_roundOwner(mine);
+    S.round.loadedProv=owner.name; S.round.loadedMixed=owner.mixed;
     // dispo has to come back too — reopening a round must not quietly reset everyone to
     // "seen" and re-inflate the count that was already filed for that day.
     S.pts=mine.map(r=>({ id:r.id||newId(), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], send:true, visitType:r.visitType||'', dispo:r.dispo||'' }));
     normalizePts(S); S.active=0;
     S.pts.forEach(p=>{ try{ _rcCloudSig[p.id]=_rcSig(p); }catch(e){} });   // restored = already in the cloud; no re-upload
     save(); paintRound(); render();
-    toast('Restored today’s round from ClinicalVault ('+S.pts.length+' patient'+(S.pts.length===1?'':'s')+')');
+    toast('Restored today’s round from ClinicalVault ('+S.pts.length+' patient'+(S.pts.length===1?'':'s')+')'+_ownerNote(owner));
   }catch(e){}
 }
 
@@ -2533,7 +2682,7 @@ async function carryForward(){
       if(cb){ cb.textContent='Clear'; cb.style.background=''; cb.style.color=''; } } }catch(e){}
     // These are BRAND NEW records for today (newId above), not a loaded round - so correcting
     // the provider should re-file them, and must not raise the loaded-round confirm.
-    S.round.date=today; S.round.facLock=facRaw; S.round.loadedProv=''; _sheetInvalidate();
+    S.round.date=today; S.round.facLock=facRaw; S.round.loadedProv=''; S.round.loadedMixed=false; _sheetInvalidate();
     S.pts=pts; normalizePts(S); S.active=0;
     /* NOTHING IS FILED YET. Seeding each patient's signature as "already uploaded" is what makes
        that true without a second mechanism: auto-save compares against these and finds nothing to
@@ -2566,7 +2715,8 @@ function loadRecentRound(i){
     if(cb){ cb.textContent='Clear'; cb.style.background=''; cb.style.color=''; } } }catch(e){}
   S.round.fac=g.facility||S.round.fac; S.round.date=g.date; S.round.prov=S.round.prov||g.provider||''; _sheetInvalidate();
   S.round.facLock=(S.round.fac||'').trim();
-  S.round.loadedProv=(S.round.prov||'').trim();   // whose records these are — see applyProvChange
+  const owner=_roundOwner(mine);                  // the RECORDS' provider — see _roundOwner / _fileProv
+  S.round.loadedProv=owner.name; S.round.loadedMixed=owner.mixed;
   // dispo comes back too — see the same line in rcRestoreFromVault. Reopening a round must
   // not quietly reset everyone to "seen"; auto-save would then re-upload them as seen and
   // re-inflate a count that was already filed correctly.
@@ -2575,7 +2725,7 @@ function loadRecentRound(i){
   S.pts.forEach(p=>{ try{ _rcCloudSig[p.id]=_rcSig(p); }catch(e){} });   // loaded = already in the cloud; only edits re-upload
   save(); paintRound(); render();
   closeRecentRounds();
-  toast('Loaded the '+g.date+' round ('+S.pts.length+' patient'+(S.pts.length===1?'':'s')+') — edits update the same round');
+  toast('Loaded the '+g.date+' round ('+S.pts.length+' patient'+(S.pts.length===1?'':'s')+') — edits update the same round'+_ownerNote(owner));
 }
 
 /* ---------- COMING BACK TO A ROUND ----------
@@ -2671,15 +2821,20 @@ async function rcLoadRoundFor(dateStr, facRaw){
     if(String(S.round.date||'').slice(0,10)!==date || (S.round.fac||'').trim()!==facR) return 'moved-on';
 
     mine.sort((a,b)=>String(a.savedAt||'').localeCompare(String(b.savedAt||'')));
+    /* BEFORE S.pts is assigned, unlike the other two load paths where it already was. This whole
+       body sits inside catch(e){ return 'error'; }, so computing the owner AFTER the patients land
+       would let a throw leave a full card on screen with NO seeded signatures - every record dirty,
+       the whole round re-uploaded under whatever the box says. That is the 21-record re-file class. */
+    const owner=_roundOwner(mine);
     S.pts=mine.map(r=>({ id:r.id||newId(), name:(r.patient&&r.patient.name)||'', edu:r.edu||'',
       wounds:Array.isArray(r.wounds)?r.wounds:[], send:true, visitType:r.visitType||'', dispo:r.dispo||'' }));
     normalizePts(S); S.active=0;
     S.round.facLock=facR;                                  // every vault-load path must set this
-    S.round.loadedProv=(S.round.prov||'').trim();          // whose round this is - see applyProvChange
+    S.round.loadedProv=owner.name; S.round.loadedMixed=owner.mixed;   // whose round this is - see applyProvChange
     S.pts.forEach(p=>{ try{ _rcCloudSig[p.id]=_rcSig(p); }catch(e){} });   // loaded = already filed
     _sheetInvalidate(); _sheetLastSig=''; _qcLastSig='';
     save(); paintRound(); render();
-    toast('Loaded the '+date+' round ('+S.pts.length+' patient'+(S.pts.length===1?'':'s')+') — edits update the same round');
+    toast('Loaded the '+date+' round ('+S.pts.length+' patient'+(S.pts.length===1?'':'s')+') — edits update the same round'+_ownerNote(owner));
     return 'loaded';
   }catch(e){ return 'error'; }
 }
