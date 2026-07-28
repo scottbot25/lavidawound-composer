@@ -2051,6 +2051,18 @@ async function rcRestoreFromVault(){
    download; it is deliberately far wider than any real round. */
 const RR_MAX_ROUNDS=10;
 const RR_LOOKBACK_DAYS=60;
+/* REMEMBER WHAT WE HAVE ALREADY READ. The picker needs three fields - date, facility, provider -
+   and all three live INSIDE the record, so it downloads every record in the window in full (every
+   wound, order and education note) just to render a handful of rows. It had no cache at all, so it
+   paid that entire cost again on every single click. Scott, 2026-07-27: "load a recent round is
+   also taking like 10 seconds to load whenever i click it."
+   Keyed by id + lastModifiedDateTime: an edited record re-reads because its stamp changed, an
+   unchanged one is never fetched twice. IN MEMORY ONLY - never localStorage - these are patient
+   records and the card deliberately keeps nothing at rest. Cleared wholesale rather than evicted
+   cleverly; it only exists to make the second click fast. */
+const _rrCache=new Map();
+function _rrCacheGet(k){ return _rrCache.get(k); }
+function _rrCachePut(k,v){ if(_rrCache.size>600) _rrCache.clear(); _rrCache.set(k,v); }
 let _rrGroups=[];
 function closeRecentRounds(){ document.getElementById('recentRounds').classList.remove('on'); }
 async function openRecentRounds(){
@@ -2070,10 +2082,22 @@ async function openRecentRounds(){
       const t=Date.parse(f.lastModifiedDateTime||''); if(isNaN(t)||t<cut) return;
       fresh.push({fac,f});
     }));
-    const recs=await Promise.all(fresh.map(({fac,f})=>{
+    /* Newest first, and only as far as we could possibly need. The picker shows RR_MAX_ROUNDS
+       rounds; reading a whole 60-day folder to render ten rows is work nobody sees. A round is a
+       handful of records, so a generous multiple of the row count is still far less than the
+       folder, and it bounds the cost as the folder grows (it is never purged). */
+    fresh.sort((a,b)=>String(b.f.lastModifiedDateTime||'').localeCompare(String(a.f.lastModifiedDateTime||'')));
+    const readCap=Math.max(60, RR_MAX_ROUNDS*30);
+    const skipped=Math.max(0, fresh.length-readCap);
+    const toRead=fresh.slice(0, readCap);
+    const recs=await Promise.all(toRead.map(({fac,f})=>{
+      const key=(f.id||f.name)+'|'+(f.lastModifiedDateTime||'');
+      const hit=_rrCacheGet(key);
+      if(hit!==undefined) return Promise.resolve(hit);          // unchanged since we last read it
       const dl=f['@microsoft.graph.downloadUrl'];
-      if(dl) return fetch(dl).then(r=>r.ok?r.json():null).catch(()=>null);
-      return _vaultReadJson(token,driveId,'RoundCards/'+fac+'/'+f.name).catch(()=>null);
+      const read = dl ? fetch(dl).then(r=>r.ok?r.json():null).catch(()=>null)
+                      : _vaultReadJson(token,driveId,'RoundCards/'+fac+'/'+f.name).catch(()=>null);
+      return read.then(rec=>{ _rrCachePut(key, rec); return rec; });
     }));
     // WHOSE? — this list had no provider test at all until 2026-07-26, so it offered up every provider's
     // rounds at a shared building. Unattributed legacy records are still shown (and labelled), because
@@ -2103,7 +2127,11 @@ async function openRecentRounds(){
       '<button class="rr-row" onclick="loadRecentRound('+i+')" style="display:block;width:100%;text-align:left;margin-top:6px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel);font:inherit;cursor:pointer">'
       +'<b>'+esc(g.date)+'</b> · '+esc(g.facility||'Unfiled')+' · '+g.recs.length+' patient'+(g.recs.length===1?'':'s')
       +(g.provider?' <span class="muted">('+esc(g.provider)+')</span>':' <span class="muted">(no provider on file)</span>')
-      +'</button>').join('');
+      +'</button>').join('')
+      /* Never cap silently. If the folder was big enough that we stopped reading, say so - a list
+         that quietly omits a round reads as "that round is gone". */
+      +(skipped>0 ? '<div class="muted" style="margin-top:8px;font-size:12.5px">Showing the most recent '
+          +toRead.length+' records — '+skipped+' older one'+(skipped===1?'':'s')+' not checked. Everything is still in ClinicalVault.</div>' : '');
   }catch(e){
     list.innerHTML='<div class="muted">⚠ '+esc(e.message||'Couldn’t reach ClinicalVault')+'</div>';
   }
