@@ -1092,7 +1092,15 @@ function whApplyPrior(){
 /* ---- patient workspace operations ---- */
 // Point STORE at the active patient's store and rebuild the form. The outgoing patient's edits are
 // already saved (persist runs on every field change), so we never overwrite here.
-function activateForm(){ STORE=activePt().store; MODE=ptNoteType(activePt()); STATE=STORE[MODE]; WS.activePid=activePid; saveWS(); syncPatientField(); setMode(MODE); }
+/* BATCH DEPTH. setMode() tears down and rebuilds the entire note UI - every field, every wound -
+   and costs ~38ms. A Round Card pull walks patient by patient, and each one used to trigger that
+   twice (switchPatient on the way in, setMode on the way out), so a round of 21 spent roughly a
+   second and a half rebuilding a UI nobody was looking at yet. Measured 2026-07-27.
+   While this is non-zero the STATE still moves - STORE/MODE/STATE are set exactly as before, so the
+   merge writes into the right patient - but the DOM is left alone. The caller does one rebuild when
+   the whole batch is done. Anything not inside a batch behaves exactly as it always has. */
+let _rcBatch=0;
+function activateForm(){ STORE=activePt().store; MODE=ptNoteType(activePt()); STATE=STORE[MODE]; WS.activePid=activePid; saveWS(); syncPatientField(); if(!_rcBatch) setMode(MODE); }
 function switchPatient(pid){ if(!WS.patients[pid]||pid===activePid) return; if(typeof refreshActiveSummary==='function') refreshActiveSummary(); activePid=pid; activateForm(); }
 function newPatient(){ if(typeof refreshActiveSummary==='function') refreshActiveSummary(); const pid='p'+(WS.seq++);
   // a new patient inherits the facility you're rounding in now (the sticky default) so you don't retype
@@ -2847,7 +2855,8 @@ function rcMergeIntoPatient(pid, rec){
   { const _p=activePt(); if(_p){ _p.srcRcKey=_rcKey(rec); _p.srcRcId=rec.id||_p.srcRcId||null;
       // keep the round date current too - see renderPatientBar
       _p.rcDate=String((rec&&rec.date)||'').slice(0,10)||_p.rcDate||null; } }
-  persist(); setMode(MODE); renderPatientBar();
+  // Inside a pull the caller repaints once at the end - see _rcBatch. Alone, this behaves as before.
+  persist(); if(!_rcBatch){ setMode(MODE); renderPatientBar(); }
 }
 let _rcPulling=false, _rcLastPull=0, _rcPullAgain=false;
 async function rcAutoPull(reason){
@@ -2893,6 +2902,12 @@ async function rcAutoPull(reason){
     let pulled=0;
     // rcPrefill is async now (it checks wound-history to decide Initial vs Follow-up), so await each in
     // turn — a for-of loop, not forEach, so the seen-marking and counts stay in step with each create.
+    /* ONE REBUILD FOR THE WHOLE PULL. Everything from here to the returnPid restore below moves
+       state without touching the DOM; the single activateForm() after the finally repaints once.
+       finally, not a plain decrement, so a throw mid-pull cannot leave the app permanently unable
+       to repaint itself. */
+    _rcBatch++;
+    try{
     for(const r of fresh){
       if(r && r.id && isUpdate(r)){
         // The card was RE-SAVED after we pulled it — refresh the patient it created, quietly.
@@ -2982,6 +2997,8 @@ async function rcAutoPull(reason){
         if(!_patientReal(p) && !_patientHasContent(p)) delete WS.patients[pid]; });
       if(!WS.patients[activePid]){ const first=Object.keys(WS.patients)[0]; if(first){ activePid=first; activateForm(); } } }
     if(returnNamed && WS.patients[returnPid]) switchPatient(returnPid);
+    } finally { _rcBatch--; }
+    activateForm();     // the one and only rebuild for this pull, however many patients came in
     _draftHold=false;   // pulled card patients are real new content — make sure autosave persists them
     saveWS(); renderPatientBar();
     if(typeof draftSaveNow==='function') draftSaveNow();   // pulls persist IMMEDIATELY — no debounce window to lose them in
