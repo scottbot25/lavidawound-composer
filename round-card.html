@@ -505,7 +505,13 @@ function paintProvSel(){
        own value as selected, and a <select> fires no change event when you re-pick the option that
        is already selected - so on the exact case this fix is about (the box says YOU, the round is
        someone else's) the dropdown is a dead end. */
-    el.innerHTML='Filing under <b>'+esc(own)+'</b> — this round is already on file under that name. '
+    /* SAY THE CONSEQUENCE, not just the fact. Scott 2026-07-28: "the covering provider should get
+       the credit." The QC count exists to catch visits that never became a PCC note, so it should
+       name whoever OWES the note - and if you are the one rounding, that is you.
+       It stays one tap rather than happening on its own: moving a round onto whoever is looking at
+       it, with nobody asking, IS audit #33. Looking has to stay free. */
+    el.innerHTML='Filing under <b>'+esc(own)+'</b> — today’s visits on this round count for '+esc(own)+'. '
+      +'If you’re the one rounding, take it over so they count for you. '
       +'<button class="tiny" style="margin-left:4px" onclick="applyProvChange((S.round.prov||\'\').trim())">Take it over</button>';
     el.style.display='';
   } else if(S.round.loadedMixed){
