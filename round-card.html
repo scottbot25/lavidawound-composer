@@ -461,7 +461,20 @@ function paintProvSel(){
 
    The confirm stays only to protect a round in progress from a mistyped date - it is not
    asking permission to move anything. */
-function setRound(){ applyDateChange(document.getElementById('r_date').value); }
+function setRound(){
+  const v=document.getElementById('r_date').value;
+  /* IGNORE THE BLANK. An <input type="date"> reports '' for every INCOMPLETE state the provider
+     passes through while typing - the leading 0 of a month or day, a Backspace - not only a
+     deliberate clear, and oninput delivers all of them. Handing '' on set S.round.date to '', and
+     paintRound then wrote a whole date string back into the field, which resets the control's
+     segment state: the keystroke vanished and today reappeared, so keyboard entry was impossible.
+     Worse, the round was left with date '' behind a field DISPLAYING today, so the next save filed
+     under 'undated' - in RoundCards/ and in the QC Feed filename, where nothing downstream can
+     match it back to a day. A round is one facility on one day; blank is never the answer.
+     applyDateChange is deliberately untouched - the suite asserts on its own blank handling. */
+  if(!v) return;
+  applyDateChange(v);
+}
 function applyDateChange(nd){
   const old=(S.round.date||'').trim(); nd=(nd||'').trim();
   if(nd===old) return;
@@ -1580,9 +1593,21 @@ function scheduleRcAutoSave(){ clearTimeout(_rcAutoT); _rcAutoT=setTimeout(rcAut
    apps — inside the 2s debounce silently dropped the last edit (the browser kills in-flight fetches on
    unload). Flush immediately on hide/close with fetch keepalive, which lets the uploads FINISH after
    the page is gone. Same fix the composer drafts already have. Records are tiny (<<64KB keepalive cap). */
-let _rcKalFlush=false;
+let _rcKalFlush=false, _rcKalT=null;
 function rcFlushAutoSave(){ clearTimeout(_rcAutoT); _rcKalFlush=true;
-  Promise.resolve(rcAutoSaveCloud()).catch(()=>{}).finally(()=>{ _rcKalFlush=false; });
+  /* THE FLAG MUST OUTLIVE rcAutoSaveCloud, not track it. It used to be cleared in that promise's
+     .finally, which looks right and is wrong in the commonest case: when nothing is dirty (the 2s
+     debounce already filed the records) rcAutoSaveCloud returns immediately, so .finally runs on
+     the very next microtask — BEFORE sheetAutoSave and qcAutoSave have awaited their token and
+     reached their uploads. Those two then went out WITHOUT keepalive and the browser killed them
+     on unload. So the exact case this flush exists for — finish the last patient, close the tab —
+     lost the nurse's handoff sheet and the day's QC count, which are the two things a closing tab
+     is least likely to get another chance to write.
+     Cleared on a timer instead: long enough for both to reach their upload, short enough that a
+     tab which is merely hidden and comes back does not keep using keepalive for ordinary saves. */
+  clearTimeout(_rcKalT);
+  _rcKalT=setTimeout(()=>{ _rcKalFlush=false; }, 10000);
+  Promise.resolve(rcAutoSaveCloud()).catch(()=>{});
   sheetAutoSave();
   qcAutoSave(true); }        // hiding/closing the tab is a real end signal — file the count regardless of the hour
 window.addEventListener('pagehide', rcFlushAutoSave);
@@ -2189,10 +2214,15 @@ function _rrCacheGet(k){ return _rrCache.get(k); }
 function _rrCachePut(k,v){ if(_rrCache.size>600) _rrCache.clear(); _rrCache.set(k,v); }
 let _rrGroups=[];
 function closeRecentRounds(){ document.getElementById('recentRounds').classList.remove('on'); }
+/* How many records could not be READ on the current open. A short list that says nothing is the
+   problem here: the provider cannot tell "you rounded 2 patients" from "we could only read 2 of
+   your 3 records", and those call for opposite actions. Reset per open, not accumulated. */
+let _rrFailed=0;
 async function openRecentRounds(){
   const modal=document.getElementById('recentRounds'), list=document.getElementById('rrList');
   modal.classList.add('on');
   list.innerHTML='<div class="muted">Checking ClinicalVault…</div>';
+  _rrFailed=0;
   try{
     const token=await _vaultToken();
     const {driveId}=await _vaultCtx(token);
@@ -2219,9 +2249,18 @@ async function openRecentRounds(){
       const hit=_rrCacheGet(key);
       if(hit!==undefined) return Promise.resolve(hit);          // unchanged since we last read it
       const dl=f['@microsoft.graph.downloadUrl'];
-      const read = dl ? fetch(dl).then(r=>r.ok?r.json():null).catch(()=>null)
-                      : _vaultReadJson(token,driveId,'RoundCards/'+fac+'/'+f.name).catch(()=>null);
-      return read.then(rec=>{ _rrCachePut(key, rec); return rec; });
+      /* CACHE ONLY A SUCCESSFUL READ. A failure used to be cached as null, which made a one-off
+         hiccup permanent for the session: the patient silently vanished from the picker and
+         clicking again never brought them back, because the cache answered instantly with the
+         failure. The row just read "2 patients" where there were 3, with nothing to say so.
+         A failed read still degrades to null for THIS render - the grouping below skips falsy
+         recs, so the picker still opens - but nothing is written to the cache, so the next click
+         retries it. A record that parses but is not roundcard.v1 IS cached: it will never become
+         a record, so re-reading it is pure waste. */
+      const read = dl ? fetch(dl).then(r=>r.ok?r.json():Promise.reject(new Error('HTTP '+r.status)))
+                      : _vaultReadJson(token,driveId,'RoundCards/'+fac+'/'+f.name);
+      return read.then(rec=>{ _rrCachePut(key, rec); return rec; })
+                 .catch(()=>{ _rrFailed++; return null; });
     }));
     // WHOSE? — this list had no provider test at all until 2026-07-26, so it offered up every provider's
     // rounds at a shared building. Unattributed legacy records are still shown (and labelled), because
@@ -2256,7 +2295,14 @@ async function openRecentRounds(){
       /* Never cap silently. If the folder was big enough that we stopped reading, say so - a list
          that quietly omits a round reads as "that round is gone". */
       +(skipped>0 ? '<div class="muted" style="margin-top:8px;font-size:12.5px">Showing the most recent '
-          +toRead.length+' records — '+skipped+' older one'+(skipped===1?'':'s')+' not checked. Everything is still in ClinicalVault.</div>' : '');
+          +toRead.length+' records — '+skipped+' older one'+(skipped===1?'':'s')+' not checked. Everything is still in ClinicalVault.</div>' : '')
+      /* Same principle as the cap above, for a different cause: a record we could not READ is not
+         a round that does not exist. Without this the row simply counts one patient fewer and the
+         provider has no way to tell a short round from a short READ. Nothing was cached, so
+         reopening genuinely retries. */
+      +(_rrFailed>0 ? '<div class="muted" style="margin-top:8px;font-size:12.5px">⚠ '+_rrFailed+' record'
+          +(_rrFailed===1?'' : 's')+' could not be read just now, so a round below may show fewer patients than it has. '
+          +'Nothing is lost — close this and open it again to retry.</div>' : '');
   }catch(e){
     list.innerHTML='<div class="muted">⚠ '+esc(e.message||'Couldn’t reach ClinicalVault')+'</div>';
   }

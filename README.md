@@ -29,21 +29,38 @@ Phone-first. Typing today; hold-to-talk dictation is Phase 2.
 
 ## Privacy / PHI posture
 
-This page is a **blank template** — it contains no patient data.
+The pages themselves are **blank templates** — no patient data is baked into either file, and none
+is stored in this repository.
 
-- Runs **100% in your browser**. Nothing you type is sent to this host or anywhere else.
-- Entries are held in `sessionStorage` (this browser tab only) and are **wiped when you close the tab** —
-  never written to disk, never networked.
-- No third-party scripts, fonts, analytics, or CDNs.
-- The only optional external calls are Microsoft sign-in / the facility handoff email, and both are
-  actions **you** initiate from your own device.
+**Once you sign in, what you type IS saved to ClinicalVault.** That is what signing in is for, and
+ClinicalVault is the practice's own Microsoft 365 tenant, which is covered by a BAA. Specifically:
 
-Please still use an encrypted work device.
+- **Round records** → `RoundCards/<facility>/`, one JSON per patient, kept about 45 days.
+- **Your working draft** → `Drafts/<you>/<date>.json`, a folder only you can see.
+- **The nurse's handoff sheet** → `Daily Handoffs/<facility>/<date>/`.
+- **A count of patients seen** → `QC Feed/`. Counts only, no names.
+
+Signed **out**, nothing leaves the device: the round lives in `sessionStorage` and goes when you
+close the tab.
+
+- Nothing is sent to the host that serves these pages. No third-party scripts, fonts, analytics or
+  CDNs — the Microsoft sign-in library is served from this repo, not from a CDN.
+- One value persists on the device between sessions: `rc_last_prov`, the provider name the round
+  card puts back in the box for you. No patient data is kept outside the tab.
+- All vault traffic goes to Microsoft Graph, and only after **you** have signed in.
+
+Use an encrypted work device.
+
+> **Corrected 2026-07-28.** This section used to say the tool ran "100% in your browser", that
+> entries were "never written to disk, never networked", and that the only external calls were
+> sign-in and an email. None of that had been true since the vault integration shipped. Noted here
+> rather than quietly rewritten, because someone may have relied on it.
 
 ## Status
 
-Both are prototypes in provider testing. The Microsoft Entra sign-in gate is built into the Composer
-but **off by default** (tenant/client IDs are placeholders) until the tenant app is registered.
+Both are in daily provider use. The Microsoft Entra sign-in gate is **live** — the tenant and client
+IDs in these files are the real registered app, not placeholders, and signing in is what connects the
+tools to ClinicalVault.
 
 Facility email contacts in both tools are **test placeholders** pointing at an internal admin inbox,
 so testing cannot email a real facility. The real approved contacts live in the private ops vault,
