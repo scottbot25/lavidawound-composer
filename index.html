@@ -2727,18 +2727,58 @@ function applyRcReconcile(){
 const RC_LIST_DAYS=60;                       // perf bound on the listing — NOT a behavior window
 const RC_PULL_DAYS=3;                        // an UNSEEN card only auto-creates a patient this recently
 const RC_SEEN_KEY='rc_pulled_v1';            // durable set of already-pulled round-card IDs. IDs are random
+/* ONE KEY WAS DOING TWO UNRELATED JOBS, AND THE VALVE BELOW CLEARED BOTH (found 2026-07-28).
+   rc_pulled_v1 answers "which records have I already pulled" — that is dedupe/version state, and
+   ?repull=1 is right to forget it. But rcListAllRecent ALSO reads it to answer a different question:
+   "which records am I allowed to keep hearing from at all", the bypass that keeps a record flowing
+   after its provider stamp drifts (box retyped, name variant, a different spelling on the card).
+   Clearing that half meant the documented escape hatch handed a provider FEWER records, not more,
+   silently and permanently — a record the provider filter drops can never re-enter the pulled set,
+   so an RN's next-day order change on that patient never reached the note again.
+   So the two jobs get two keys. RC_SEEN_KEY keeps its exact meaning and the valve keeps clearing it.
+   RC_EVER_KEY is the durable "this workspace has pulled this id before" set: the valve never touches
+   it, and ONLY the listing gate reads it. It must never reach the dedupe logic — see the hazard note
+   on rcListAllRecent. */
+const RC_EVER_KEY='rc_pulled_ever_v1';       // ids this workspace has EVER pulled. ?repull=1 must NOT clear this.
+/* Long enough to outlive anything that could ever surface: RC_LIST_DAYS caps the listing at 60 days,
+   so an entry older than that can never match a record again. The extra month is slack, not policy —
+   there is no reason to keep these longer, and a shorter life shrinks the window in which a shared
+   browser profile keeps bypassing the provider filter for whoever used it last.
+   Entries are {randomId: timestamp} and nothing else. Deliberately NOT the same as RC_SEEN_KEY,
+   whose entries also carry `k` — the patient's name-slug. */
+const RC_EVER_TTL_MS=90*24*60*60*1000;
 /* RECOVERY VALVE (2026-07-22, mid-rounds): opening notes.lavidaheal.com/?repull=1 forgets which card
    records were already pulled, so the next pull brings EVERY recent record back — the escape hatch for
    "I deleted patients during a cleanup and now their card updates never arrive" (the deliberate
    no-resurrect rule has no UI to undo it). Same-name patients still in the list get the collision
-   prompt and merge instead of duplicating. One-shot: the flag does not persist past this load. */
+   prompt and merge instead of duplicating. One-shot: the flag does not persist past this load.
+   REMOVES RC_SEEN_KEY ONLY. That is the whole point of the split above — do not add RC_EVER_KEY here. */
+/* MIGRATION, AND IT HAS TO RUN BEFORE THE VALVE. _rcSeenSave is the only writer of RC_EVER_KEY, and
+   a pull only reaches it when there is something fresh to save — so every workspace that upgrades to
+   this build starts with rc_pulled_v1 full and rc_pulled_ever_v1 absent. That is exactly the state a
+   provider is in when they reach for ?repull=1, because they reach for it when updates stopped
+   arriving. Without this line the valve clears the seen-set, the gate finds neither key, and the
+   drifted record is dropped for good — the fix would not fix its own bug until the second use. */
+try{ if(localStorage.getItem(RC_EVER_KEY)===null) _rcSeenSave(_rcSeenLoad()); }catch(e){}
 try{ if(new URLSearchParams(location.search).get('repull')==='1') localStorage.removeItem(RC_SEEN_KEY); }catch(e){}
 const RC_SEEN_TTL_MS=21*24*60*60*1000;       // tokens (no patient info), so this localStorage set is NOT PHI.
 function _rcRecentCutoff(){ const d=new Date(); d.setDate(d.getDate()-RC_LIST_DAYS);  return d.toISOString().slice(0,10); }   // perf bound on what we LIST
 function _rcCreateCutoff(){ const d=new Date(); d.setDate(d.getDate()-RC_PULL_DAYS);  return d.toISOString().slice(0,10); }   // what may auto-CREATE a patient
 function _rcKey(rec){ return (rec&&rec.id) || [_rcFacSeg(rec&&rec.facility), String((rec&&rec.patient&&rec.patient.name)||'').toLowerCase().trim(), String((rec&&rec.date)||'').slice(0,10)].join('|'); }
 function _rcSeenLoad(){ try{ const o=JSON.parse(localStorage.getItem(RC_SEEN_KEY)||'{}'); return (o&&typeof o==='object')?o:{}; }catch(e){ return {}; } }
-function _rcSeenSave(o){ try{ localStorage.setItem(RC_SEEN_KEY, JSON.stringify(o)); }catch(e){} }
+function _rcEverLoad(){ try{ const o=JSON.parse(localStorage.getItem(RC_EVER_KEY)||'{}'); return (o&&typeof o==='object')?o:{}; }catch(e){ return {}; } }
+function _rcSeenSave(o){
+  try{ localStorage.setItem(RC_SEEN_KEY, JSON.stringify(o)); }catch(e){}
+  /* The durable set is written HERE and nowhere else, so every path that persists a seen entry — the
+     lazy baselining of legacy entries and the main save at the end of a pull — records it without
+     having to remember to. One site, not five, and it prunes, so the key cannot grow forever. */
+  try{
+    const ev=_rcEverLoad(), now=Date.now(); let ch=false;
+    Object.keys(o||{}).forEach(id=>{ if(ev[id]!==undefined) return; ev[id]=now; ch=true; });
+    Object.keys(ev).forEach(id=>{ if(now-(ev[id]||0) > RC_EVER_TTL_MS){ delete ev[id]; ch=true; } });
+    if(ch) localStorage.setItem(RC_EVER_KEY, JSON.stringify(ev));
+  }catch(e){}
+}
 /* ===== Slot reuse vs. name correction — ASK, never guess (Scott 2026-07-23) =====
    A Round Card patient SLOT keeps its id for life, so two very different events reach us as the same
    signal — same record id, different name:
@@ -2790,9 +2830,16 @@ async function rcListAllRecent(){
   // A record this workspace has ALREADY pulled always passes — its updates must keep flowing even if
   // the provider stamp drifts (box retyped, name variant); the provider filter gates NEW records only.
   const seenIds=_rcSeenLoad();
+  /* HAZARD — everIds IS FOR THIS GATE AND NOTHING ELSE. rcAutoPull's `fresh` filter and `isUpdate`
+     must keep reading the SEEN set only. If ever-membership leaked into the dedupe logic, a record
+     that survived ?repull=1 would look "already pulled" with no savedAt baseline, isUpdate would
+     return false, the record would be filtered out, and the valve would silently do nothing at all.
+     Membership here means "you are allowed to hear from this record"; membership in seenIds means
+     "you have already taken this version of it". Two different questions. */
+  const everIds=_rcEverLoad();
   // PERF: every building's folder is read IN PARALLEL (was one-by-one — the other half of the crawl).
   const perFac=await Promise.all(facs.map(fac=>rcList(fac).catch(()=>[])));
-  perFac.forEach(recs=>recs.forEach(r=>{ const d=String(r.date||'').slice(0,10); if(!d || d>=cutoff){ if((r&&r.id&&seenIds[r.id]) || _rcProvOk(r)) out.push(r); } }));
+  perFac.forEach(recs=>recs.forEach(r=>{ const d=String(r.date||'').slice(0,10); if(!d || d>=cutoff){ if((r&&r.id&&(seenIds[r.id]||everIds[r.id]!==undefined)) || _rcProvOk(r)) out.push(r); } }));
   return out;
 }
 
