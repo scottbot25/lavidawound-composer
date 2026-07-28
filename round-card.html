@@ -536,7 +536,13 @@ function applyProvChange(v){
     if(!ok){ paintProvSel(); return; }
     S.round.loadedProv=v;                              // they are this provider's now
   }
-  S.round.prov=v; save(); paintProvSel();
+  /* Through _rcRoundFieldChange, and BEFORE save(): save() calls _rcNoteWorkStarted(), which would
+     read the freshly shifted signatures as twelve edits and start a round nobody has charted.
+     Guarded by typeof for the same reason save() guards its own call - this runs long before the
+     helper is declared. */
+  if(typeof _rcRoundFieldChange==='function'){ _rcRoundFieldChange(function(){ S.round.prov=v; }); }
+  else { S.round.prov=v; }
+  save(); paintProvSel();
 }
 /* A sheet must only ever carry ONE facility's residents. The facility is round-level, so
    editing it after patients are on the card silently re-labels them — Facility A's resident
@@ -1461,6 +1467,40 @@ function _rcNoteWorkStarted(){
   }catch(e){ _rcUnstarted=false; }        // can't tell -> assume the round is real, never lose work
 }
 
+/* THE ROUND-LEVEL FIELDS RIDE INSIDE EVERY PATIENT SIGNATURE - look at _rcSig: it carries
+   f (facility), d (date) and pr (provider) alongside the patient's own fields. That is deliberate,
+   and it is what makes a date change re-file a round correctly.
+   But it means changing ONE round-level field moves EVERY patient's signature at once. On a
+   carried-forward round that is still unstarted, _rcNoteWorkStarted() then sees twelve "edits" it
+   cannot tell apart from real charting, clears the flag, and auto-save files the entire untouched
+   round: twelve records, the nurse's handoff sheet, and a QC count for visits nobody made.
+   That is the 2026-07-27 phantom round arriving through a different door than the one 2fb1543
+   closed - and it needs no typing to fire, because _autoFillProvider() writes the provider box
+   from the signed-in account on its own.
+   So re-seed instead. Correcting who you are, before you have charted anything, is not work. The
+   moment a PATIENT field changes, the signature diverges on its own and the round starts normally.
+   Only ever reached while _rcUnstarted: re-attributing a round that IS already filed must still
+   re-file it, and that keeps working because this returns early.
+
+   THE ORDER MATTERS AND IS THE WHOLE TRICK. We must ask "was there already real work?" BEFORE the
+   round-level field moves, because afterwards every signature differs and the question is
+   unanswerable. A first attempt at this re-seeded unconditionally and swallowed genuine charting:
+   chart a wound, then correct the provider, and the wound was absorbed into the new baseline and
+   never filed. That is data loss, which is worse than the phantom round it was fixing - caught by
+   this suite's own control before it went anywhere near a provider. */
+function _rcRoundFieldChange(apply){
+  if(!_rcUnstarted){ apply(); return; }               // an ordinary round: nothing special to do
+  let hadWork;
+  try{ hadWork=(S.pts||[]).some(p=>p && p.id && _rcCloudSig[p.id]!==_rcSig(p)); }
+  catch(e){ hadWork=true; }                           // can't tell -> assume real work, never lose it
+  apply();
+  if(hadWork){ _rcUnstarted=false; return; }          // charting already happened: this is a real round
+  try{
+    (S.pts||[]).forEach(p=>{ if(p && p.id) _rcCloudSig[p.id]=_rcSig(p); });
+    saveCloudSig();
+  }catch(e){ _rcUnstarted=false; }        // can't re-seed -> fall back to "the round is real"
+}
+
 function _loadCloudSig(raw, pts){
   try{
     if(!raw) return {};
@@ -1661,6 +1701,12 @@ async function qcAutoSave(force){
 }
 async function rcAutoSaveCloud(){
   if(_rcAutoBusy){ _rcAutoAgain=true; return; }
+  /* The same guard sheetAutoSave and qcAutoSave have both had all along - this one was relying
+     purely on the signature map, which is precisely why a wholesale signature shift could file a
+     round nobody had charted. An unstarted round writes NOTHING, whatever the signatures say.
+     The manual "Save to ClinicalVault" button is a different path (saveAll) and stays ungated:
+     that one is an explicit instruction, not an accident. */
+  if(_rcUnstarted) return;
   const named=(S.pts||[]).filter(p=>(p.name||'').trim() && p.send!==false);
   const dirty=named.filter(p=>{ if(!p.id) p.id=newId(); return _rcCloudSig[p.id]!==_rcSig(p); });
   if(!dirty.length) return;
