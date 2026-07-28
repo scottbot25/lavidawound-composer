@@ -328,15 +328,15 @@
 <div class="wrap">
   <div class="form" id="form"></div>
   <div class="side">
-    <h3>Composed note — use the Copy button on EACH box below, pasted into its own matching PCC field</h3>
+    <h3>Composed note — one click copies the whole note for PCC's single note box</h3>
     <div class="out-scroll" id="output"></div>
     <div class="btnrow">
       <button class="ghost" onclick="clearAll()">Clear all</button>
       <button class="ghost" onclick="copyAll()" title="Every section in one block with the same formatting as the per-section copies (bold labels, underlined headers, per-section headings) — paste into PCC's single note box. Counts as the visit's official copy (history commits). The per-section Copy buttons still work if a box-by-box paste is ever needed.">Copy entire note (one PCC paste)</button>
     </div>
-    <div class="foot"><b style="color:var(--warn)">Paste each box separately into PCC</b> — Subjective, Objective, A&amp;P, Procedures, MDM are separate EMR fields, so each needs its own Copy click. The "Copy entire note" button above combines everything into one block for review/printing only — pasting that into a single PCC field will put the whole note in the wrong place. Unfilled
+    <div class="foot"><b>Use “Copy entire note”</b> — PCC takes the whole note in one field, so one click and one paste is the normal way. The per-section Copy buttons are still there if you ever need to paste a single part on its own. Unfilled
       <span style="color:var(--warn)">[choices]</span> stay visible so nothing is missed. Reproduces the macro text exactly.
-      Entries autosave in this browser tab only and clear when you close it — nothing is stored on disk or sent anywhere.</div>
+      <b>Where your work is kept:</b> while you are signed in it autosaves to ClinicalVault, in your own <span class="mono">Drafts</span> folder that only you can see, so closing the tab or a flat battery does not lose it. Signed out, it stays in this browser tab only and clears when you close it.</div>
   </div>
 </div>
 <div id="handoffModal" style="display:none;position:fixed;inset:0;z-index:90;background:rgba(6,10,15,.75);align-items:flex-start;justify-content:center;padding:24px;overflow:auto">
@@ -2356,12 +2356,22 @@ async function rcList(facility){
     /* If the annotation is absent for ANY reason, read the file directly instead of dropping the
        record. Returning null here is what let a listing quirk become "the card never fills the
        note" with nothing anywhere saying so - one missing field silently emptied the whole pull. */
+    /* ONLY A SUCCESSFUL PARSE MAY BE CACHED. A failed read used to be cached as null, so one
+       transient 5xx, throttle or dropped connection removed that patient from the composer for the
+       WHOLE session: auto-pull runs again on open and on every card save, but each retry hit the
+       cache and got the failure back instantly. Every other patient on the round pulled in fine,
+       so the note simply had one patient missing with nothing to say why - which reads as "the
+       card never sent them" rather than "we could not read them".
+       A failure now stays a cache MISS, so the next pull genuinely retries. A record that parses
+       but is not roundcard.v1 IS still cached below - it will never become a record, so
+       re-downloading it is pure waste. */
     const read = dl
-      ? fetch(dl).then(c=>c.ok?c.json():null).catch(()=>null)
+      ? fetch(dl).then(c=>c.ok?c.json():Promise.reject(new Error('HTTP '+c.status)))
       : _gfetch('https://graph.microsoft.com/v1.0/drives/'+ctx.driveId+'/root:/'
           +_encPath(['RoundCards',seg,it.name].join('/'))+':/content', ctx.token)
-          .then(c=>c.ok?c.json():null).catch(()=>null);
-    return read.then(rec=>{ _rcCachePut(key, rec); return rec; });
+          .then(c=>c.ok?c.json():Promise.reject(new Error('HTTP '+c.status)));
+    return read.then(rec=>{ _rcCachePut(key, rec); return rec; })
+               .catch(()=>null);
   }));
   const out=got.filter(rec=>rec && rec.schema==='roundcard.v1');
   out.sort((a,b)=>String(b.savedAt||'').localeCompare(String(a.savedAt||'')));   // newest first
