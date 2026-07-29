@@ -2563,7 +2563,19 @@ async function openRecentRounds(){
          reopening genuinely retries. */
       +(_rrFailed>0 ? '<div class="muted" style="margin-top:8px;font-size:12.5px">⚠ '+_rrFailed+' record'
           +(_rrFailed===1?'' : 's')+' could not be read just now, so a round below may show fewer patients than it has. '
-          +'Nothing is lost — close this and open it again to retry.</div>' : '');
+          +'Nothing is lost — close this and open it again to retry.</div>' : '')
+      /* SAY WHEN RECORDS WERE FILTERED OUT, not only when EVERYTHING was. skippedOther has always
+         been counted, and until now it was rendered ONLY in the no-rounds-at-all branch above - so a
+         round that lost one patient to a provider mismatch simply showed one fewer and said nothing.
+         The provider cannot tell "16 patients" from "17, one of which is filed under another name",
+         and the record is not lost: it is in the vault, just not in this list.
+         That is exactly the shape of the 2026-07-28 "a patient isn't coming up" report. That one
+         turned out to be a different thing entirely, but it took an evening to establish, because
+         the screen offered nothing to reason from. */
+      +(skippedOther>0 && _rrGroups.length ? '<div class="muted" style="margin-top:8px;font-size:12.5px">'
+          +skippedOther+' record'+(skippedOther===1?' is':'s are')+' on file under a different provider, '
+          +'so '+(skippedOther===1?'it is':'they are')+' not listed here. Nothing is lost — set the '
+          +'Provider box to that name to see '+(skippedOther===1?'it':'them')+'.</div>' : '');
   }catch(e){
     list.innerHTML='<div class="muted">⚠ '+esc(e.message||'Couldn’t reach ClinicalVault')+'</div>';
   }
