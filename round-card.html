@@ -752,7 +752,7 @@ function delPt(i,btn){
       _rcDeleting.delete(doomedId);
       if(ok){
         _rcDeleted.add(doomedId);
-        try{ delete _rcCloudSig[doomedId]; saveCloudSig(); }catch(e){}
+        try{ delete _rcCloudSig[doomedId]; saveCloudSig(); _rcFiled.delete(doomedId); saveFiled(); }catch(e){}
       }else{
         // Do NOT put them back on screen - the provider asked for them gone and a surprise
         // reappearance is its own bug. Tell them the truth instead: the record is still there.
@@ -1655,6 +1655,37 @@ function _loadCloudSig(raw, pts){
 }
 const _rcCloudSig=_loadCloudSig((function(){ try{ return sessionStorage.getItem(SIGKEY); }catch(e){ return null; } })(), S.pts);
 
+/* ---------- IDS WE KNOW ARE IN THE VAULT (audit #2) ----------
+   The QC count counted what was ON SCREEN. An untouched carried-forward patient is on the list and
+   owes no note, and no record is ever filed for them - so the card could write patientCount 12 for a
+   day that produced 3 records. Ramil's Day Check then reads 12, finds 3 notes, and goes hunting for
+   9 that were never owed: the exact failure the carry-forward guard exists to prevent, arriving
+   through the PARTIAL case instead of the all-untouched one. The 23:00 job usually overwrites the
+   number before the morning read, so the damage is bounded - but not on a night the job does not
+   run, and not when the card writes after 23:00 (tab open late, tab hidden at 23:05, a facility
+   switch after the job). The 07:00 silence check cannot catch it either, because a count file for
+   that day does exist.
+
+   _rcCloudSig CANNOT answer "is this in the vault": carryForward seeds it for patients that were
+   never uploaded, and _rcRoundFieldChange re-seeds every patient on a provider correction. So this
+   is a separate set, and it only ever grows from an actual upload.
+
+   PERSISTED, for the same reason the unstarted gate is: S and _rcCloudSig both survive a reload. An
+   in-memory Set would come back EMPTY, every patient would look unfiled, and `if(!count) return`
+   would file nothing at all - the card would silently stop counting. That was the flaw in the first
+   version of this fix, caught before it shipped by a reload harness. Pruned to the patients actually
+   on the card, exactly like _loadCloudSig, so an id can never outlive the patient it describes. */
+const FILEDKEY = SIGKEY + '_filed';
+const _rcFiled = new Set((function(){
+  try{
+    const a=JSON.parse(sessionStorage.getItem(FILEDKEY)||'[]');
+    if(!Array.isArray(a)) return [];
+    const live=new Set((S.pts||[]).map(p=>p&&p.id).filter(Boolean));
+    return a.filter(id=>live.has(id));
+  }catch(e){ return []; }
+})());
+function saveFiled(){ try{ sessionStorage.setItem(FILEDKEY, JSON.stringify(Array.from(_rcFiled))); }catch(e){} }
+
 /* How many named patients are NOT yet in the vault.
    Clearing the card on a date or facility switch is only safe because the records are
    already filed - the card empties, the vault keeps them, and Recent rounds reopens them.
@@ -1853,7 +1884,14 @@ async function qcAutoSave(force){
      owe no note, so counting them sends the QC tracker chasing notes that should not exist.
      Must stay in step with Build-QcPlan in qc_count_nightly.ps1 - both write this same file,
      so if they disagree the number flips depending on which ran last. */
-  const count= pts.filter(isCounted).length;
+  /* COUNT WHAT THE VAULT WILL HOLD, NOT WHAT IS ON SCREEN (audit #2). An untouched carried-forward
+     patient is on the list and owes no note, and no record is ever filed for them - counting them
+     puts a number in the feed that nothing backs, and the nightly job then disagrees with the card
+     about the same file. _rcFiled = already uploaded; the signature test = dirty, so about to be.
+     Do NOT use the signature test alone: _rcRoundFieldChange re-seeds every signature on a provider
+     correction, which would read as "nobody charted anything" and file a zero. */
+  const count= pts.filter(isCounted)
+                  .filter(p => _rcFiled.has(p.id) || _rcCloudSig[p.id] !== _rcSig(p)).length;
   if(!count) return;                                    // attended, nobody available: no count is owed
   if(!force && new Date().getHours() < QC_AFTER_HOUR) return;   // rounds may still be running
   // Same split as the sheet above: pin the OWNER (which the exit path releases on the next line),
@@ -1942,8 +1980,9 @@ async function rcAutoSaveCloud(){
         patient:{name:p.name}, edu:p.edu||'', wounds:JSON.parse(JSON.stringify(p.wounds||[])) };
       const jb=new Blob([JSON.stringify(rec)],{type:'application/json'});
       await _netTmo(_vaultUpload(token,driveId,recSegs,id+'.json',jb,'application/json'), 30000);
-      _rcCloudSig[id]=sigNow; n++;
+      _rcCloudSig[id]=sigNow; _rcFiled.add(id); n++;   // this one really is in the vault now
     }
+    saveFiled();          // persist which ids really reached the vault - see _rcFiled
     _rcSyncErr='';
     _rcPaintSync('saved');
     // if we're inside the composer overlay, nudge it to pull the freshly-saved records
@@ -2025,8 +2064,9 @@ async function saveVault(){
         patient:{name:p.name}, edu:p.edu||'', wounds:JSON.parse(JSON.stringify(p.wounds||[])) };
       const jb=new Blob([JSON.stringify(rec)],{type:'application/json'});
       await _vaultUpload(token,driveId,recSegs,id+'.json',jb,'application/json');
-      try{ _rcCloudSig[id]=sigNow; }catch(e){}   // keep auto-save in step so it won't re-upload these
+      try{ _rcCloudSig[id]=sigNow; _rcFiled.add(id); }catch(e){}   // keep auto-save in step so it won't re-upload these
     }
+    saveFiled();          // persist which ids really reached the vault - see _rcFiled
     /* QC count feed (QC-COUNT-FEED-SPEC.md, Scott 2026-07-19): one COUNT-ONLY record per
        facility+provider+date so the QC program can catch visits that never became a PCC
        note. Deliberately no names — a bare count is not PHI, so this feed can later flow
@@ -2232,6 +2272,7 @@ function clearAll(btn){
   const clearedKey = (String(S.round.date||'').slice(0,10)||'undated') + '|' + (cleanSeg(S.round.fac)||'Unfiled');
   S=blank(); _sheetInvalidate(); try{ sessionStorage.removeItem(KEY); }catch(e){}
   Object.keys(_rcCloudSig).forEach(k=>delete _rcCloudSig[k]);
+  _rcFiled.clear(); saveFiled();          // the card is empty: nothing on it is in the vault any more
   /* The unstarted gate and the QC signature are per-ROUND, and this is the end of one. A stale
      unstarted flag would silently file NOTHING for the next round; a stale QC signature would skip
      a count that is genuinely owed. _sheetInvalidate above already resets the sheet's. */
@@ -2391,7 +2432,8 @@ async function rcRestoreFromVault(){
     // "seen" and re-inflate the count that was already filed for that day.
     S.pts=mine.map(r=>({ id:r.id||newId(), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], send:true, visitType:r.visitType||'', dispo:r.dispo||'' }));
     normalizePts(S); S.active=0;
-    S.pts.forEach(p=>{ try{ _rcCloudSig[p.id]=_rcSig(p); }catch(e){} });   // restored = already in the cloud; no re-upload
+    S.pts.forEach(p=>{ try{ _rcCloudSig[p.id]=_rcSig(p); _rcFiled.add(p.id); }catch(e){} });   // restored = already in the cloud; no re-upload
+    saveFiled();
     /* A round nobody has charted is not restored INTO an unstarted state - these records exist, so
        the round is real and its savers must not be gated. See _setUnstarted. */
     _setUnstarted(false);
@@ -2750,6 +2792,10 @@ async function carryForward(){
        do, so no record, sheet or count is written. The moment the provider changes anything, its
        signature stops matching, _rcNoteWorkStarted() clears the flag, and the round files itself
        normally from then on. Tapping the button to see last week's list now costs nothing. */
+    /* SEEDS THE SIGNATURE BUT NOT _rcFiled, AND THAT ASYMMETRY IS THE WHOLE POINT (audit #2).
+       These patients are on screen and nothing has been uploaded for them, so the QC count must not
+       include them until something actually reaches the vault. It reads like an oversight; it is
+       not. Adding them here puts the over-count straight back. */
     try{ S.pts.forEach(p=>{ if(p && p.id) _rcCloudSig[p.id]=_rcSig(p); }); }catch(e){}
     _setUnstarted(true);
     save(); paintRound(); render();
@@ -2799,7 +2845,8 @@ function loadRecentRound(i){
   // re-inflate a count that was already filed correctly.
   S.pts=mine.map(r=>({ id:r.id||newId(), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], send:true, visitType:r.visitType||'', dispo:r.dispo||'' }));
   normalizePts(S); S.active=0;
-  S.pts.forEach(p=>{ try{ _rcCloudSig[p.id]=_rcSig(p); }catch(e){} });   // loaded = already in the cloud; only edits re-upload
+  S.pts.forEach(p=>{ try{ _rcCloudSig[p.id]=_rcSig(p); _rcFiled.add(p.id); }catch(e){} });   // loaded = already in the cloud; only edits re-upload
+  saveFiled();
   save(); paintRound(); render();
   closeRecentRounds();
   toast('Loaded the '+g.date+' round ('+S.pts.length+' patient'+(S.pts.length===1?'':'s')+') — edits update the same round'+_ownerNote(owner));
@@ -2915,7 +2962,8 @@ async function rcLoadRoundFor(dateStr, facRaw){
        flag survives a reload, but it was always wrong. */
     _setUnstarted(false);
 
-    S.pts.forEach(p=>{ try{ _rcCloudSig[p.id]=_rcSig(p); }catch(e){} });   // loaded = already filed
+    S.pts.forEach(p=>{ try{ _rcCloudSig[p.id]=_rcSig(p); _rcFiled.add(p.id); }catch(e){} });   // loaded = already filed
+    saveFiled();
     _sheetInvalidate(); _sheetLastSig=''; _qcLastSig='';
     save(); paintRound(); render();
     toast('Loaded the '+date+' round ('+S.pts.length+' patient'+(S.pts.length===1?'':'s')+') — edits update the same round'+_ownerNote(owner));
