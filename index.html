@@ -2389,6 +2389,28 @@ const _RC_STATUS={ 'New':'new','Not healed':'not healed','Improving':'improving'
    time/review attestation only when no wound had a procedure, so a Yes here removes it. Correct, and
    exactly why this has to land on the real key rather than a parallel one. */
 const _RC_DEBRIDE={ 'Yes':'yes','No':'no' };
+/* THE PROCEDURES SECTION, card -> note. Every value on the right is the note's OWN option text, taken
+   from PROC(), because the select restores by exact string match.
+   THE KEYS WERE DERIVED BY RUNNING THE SHIPPED RENDERER, not by counting template lines — production
+   renders this section with `inheritDims`, which custom-renders the PRE-Debridement line and consumes
+   no keys, so hand-counting puts everything after it three slots off. Two of the keys are not numbers
+   at all (:debtype, :consent). The map that came out:
+     :0 (+:0:fill) tissue removed · :1/:2/:3 POST L/W/D · :4 deepest · :debtype type ·
+     :5 (+:5:fill) instrument · :6 blood loss · :7 controlled via · :consent · :8 anesthesia ·
+     :9 (+:9:fill) cleansing · :10 endpoint · :11 tolerance
+   PRE-Debridement and Total Surface Area have NO key: the note inherits them from the exam
+   measurements, which is why the card does not ask for them either. */
+const _RC_P_TISSUE   ={ 'Slough':'slough','Eschar':'eschar','Nonviable subcutaneous':'nonviable subcutaneous','Fibrin':'fibrin','Other':'other' };
+const _RC_P_DEEPEST  ={ 'Epidermis':'epidermis','Dermis':'dermis','Sq tissue':'sq tissue','Fascia':'fascia','Muscle':'muscle','Bone':'bone' };
+const _RC_P_TYPE     ={ 'Sharp excisional':'Sharp excisional','Selective':'selective' };
+const _RC_P_INSTR    ={ 'Curette':'curette','Curved scissors':'curved scissors','Scalpel':'scalpel','Forceps':'forceps','Other':'other' };
+const _RC_P_BLOOD    ={ 'Pressure':'pressure','Suture ligation':'suture ligation','Silver nitrate':'silver nitrate','Hemostatic agent':'hemostatic agent','Electrocautery':'electrocautery','None needed':'none needed' };
+const _RC_P_CONSENT  ={ 'Yes':'yes','No':'no' };
+const _RC_P_ANESTH   ={ 'Topical':'topical','Local lidocaine':'local lidocaine','None':'none' };
+// "other: ***" verbatim — that IS the option text on the Cleansing line, and the select matches exactly.
+const _RC_P_CLEANSE  ={ 'Wound cleanser':'wound cleanser','Saline':'saline','Other':'other: ***' };
+const _RC_P_ENDPOINT ={ 'Debrided to healthy bleeding tissue':'debrided to healthy bleeding tissue','Debrided to viable margins':'debrided to viable margins','Hemostasis achieved':'hemostasis achieved' };
+const _RC_P_TOLERANCE={ 'Tolerated well':'tolerated well','Tolerated with discomfort':'tolerated with discomfort','Procedure aborted':'procedure aborted' };
 /* The Procedures section's index, read off the LIVE template the same way _rcApKeyFor finds the A&P
    line. Hard-coding 3 would keep working right up until a section was added, then silently write the
    gate into the wrong section. */
@@ -2543,7 +2565,31 @@ function _rcWriteWound(S, wid, w, opts){
      before writing, rcMergeIntoPatient goes through switchPatient. Answering it from the bedside also
      clears the note's amber "needs an answer" bar, which is the whole point of it being a gate. */
   { const pi=_rcProcIdx(typeof MODE!=='undefined'?MODE:'new');
-    if(pi!=null && _RC_DEBRIDE[w.debride]) setK(pi+':w'+wid+':__done', _RC_DEBRIDE[w.debride]); }
+    if(pi!=null && _RC_DEBRIDE[w.debride]){
+      const PP=pi+':w'+wid;
+      setK(PP+':__done', _RC_DEBRIDE[w.debride]);
+      /* Only a YES carries the section. A "No" answers the gate and stops — writing procedure detail
+         for a procedure that did not happen would put it in the chart. */
+      if(_RC_DEBRIDE[w.debride]==='yes'){
+        const pset=(key,table,val,other)=>{ const mapped=table[val]; if(!mapped) return;
+          setK(PP+':'+key, mapped);
+          if(other!=null && /^other/i.test(String(mapped)) && String(other||'').trim()) setK(PP+':'+key+':fill', String(other).trim()); };
+        pset('0',  _RC_P_TISSUE,   w.tissueRemoved, w.tissueRemovedOther);
+        if(String(w.postL||'').trim()) setK(PP+':1', String(w.postL).trim());
+        if(String(w.postW||'').trim()) setK(PP+':2', String(w.postW).trim());
+        if(String(w.postD||'').trim()) setK(PP+':3', String(w.postD).trim());
+        pset('4',  _RC_P_DEEPEST,  w.deepest);
+        pset('debtype', _RC_P_TYPE, w.debType);
+        pset('5',  _RC_P_INSTR,    w.instrument, w.instrumentOther);
+        if(String(w.ebl||'').trim()) setK(PP+':6', String(w.ebl).trim());
+        pset('7',  _RC_P_BLOOD,    w.bloodCtl);
+        pset('consent', _RC_P_CONSENT, w.consent);
+        pset('8',  _RC_P_ANESTH,   w.anesthesia);
+        pset('9',  _RC_P_CLEANSE,  w.cleansing, w.cleansingOther);
+        pset('10', _RC_P_ENDPOINT, w.endpoint);
+        pset('11', _RC_P_TOLERANCE, w.tolerance);
+      }
+    } }
 }
 // Compose the A&P free text (orders per wound + patient education) — used by every pull path.
 function _rcComposeAP(ordLines, edu){
