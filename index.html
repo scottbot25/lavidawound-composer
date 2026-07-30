@@ -1630,7 +1630,12 @@ function handoffHTML(patients, facArg){
   b+='<div class="meta"><b>Date:</b> '+esc(hoVal(date))+' &nbsp; <b>Patients:</b> '+patients.length+(isPreview?' &nbsp;<i>(preview — current patient, not yet added)</i>':'')+'</div>';
   patients.forEach((p,i)=>{ b+='<div'+(i>0?' class="patient-break"':'')+'>'; if(patients.length>1) b+='<h2 class="ph">Patient '+(i+1)+'</h2>'; b+=renderPatient(p)+'</div>'; });
   b+='<div class="foot">Care-coordination handoff — for facility use only. Not an official medical record, provider note, or billing document; the signed EHR note is the authoritative record.</div>';
-  return '<html><head><meta charset="utf-8"><style>'+style+'</style></head><body>'+b+'</body></html>';
+  /* http-equiv AS WELL as <meta charset>. This HTML is served as application/msword, so Word opens it
+     through its legacy importer, which predates the HTML5 charset tag and often ignores it — falling
+     back to the system codepage, where a UTF-8 en dash renders as "a-euro-quote". Same fix as the Round
+     Card's sheet. It matters here because the note text this wraps contains → and cm² / cm³. */
+  return '<html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8">'
+       + '<meta charset="utf-8"><style>'+style+'</style></head><body>'+b+'</body></html>';
 }
 // Plain-text handoff — for the email body / clipboard (mailto can't carry the formatted .doc).
 // One facility group per call, same as handoffHTML.
@@ -4422,8 +4427,11 @@ async function copyRich(plainText, msg){
   try{
     if(navigator.clipboard && window.ClipboardItem){
       await navigator.clipboard.write([ new ClipboardItem({
-        'text/html': new Blob([html], {type:'text/html'}),
-        'text/plain': new Blob([clean], {type:'text/plain'})
+        // charset DECLARED on both clipboard flavours. The note carries → and cm² / cm³, and a receiver
+        // left to guess the encoding decodes those a byte at a time — which is how an arrow reaches the
+        // chart as mojibake. Costs nothing and removes the guess.
+        'text/html': new Blob([html], {type:'text/html;charset=utf-8'}),
+        'text/plain': new Blob([clean], {type:'text/plain;charset=utf-8'})
       })]);
       toast(msg); return;
     }
@@ -4450,8 +4458,11 @@ async function copyAll(){
   try{
     if(navigator.clipboard && window.ClipboardItem){
       await navigator.clipboard.write([ new ClipboardItem({
-        'text/html': new Blob([html], {type:'text/html'}),
-        'text/plain': new Blob([plain], {type:'text/plain'})
+        // charset DECLARED on both clipboard flavours. The note carries → and cm² / cm³, and a receiver
+        // left to guess the encoding decodes those a byte at a time — which is how an arrow reaches the
+        // chart as mojibake. Costs nothing and removes the guess.
+        'text/html': new Blob([html], {type:'text/html;charset=utf-8'}),
+        'text/plain': new Blob([plain], {type:'text/plain;charset=utf-8'})
       })]);
       toast('Whole note copied — paste into the PCC note box'); return;
     }
