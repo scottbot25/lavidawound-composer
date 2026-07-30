@@ -1014,13 +1014,23 @@ function woundHTML(w,i){
        is locked, and `prior` is exactly the "came from last visit" marker.
        This is a stopgap for the real fix (a permanent wound number owned by the card), not a substitute
        for it. To correct a genuinely wrong location, remove the wound and add it back. */
+    /* THE LOCATION IS EDITABLE AGAIN ONCE THE WOUND HAS A NUMBER (Scott 2026-07-30).
+       It was locked earlier the same day as a stopgap, because the composer decided "is this the same
+       wound as last week" by scoring this text — and one retyped word made it invent a duplicate. Wound
+       numbers removed that entirely: identity now travels as `num`, and the note matches on it, so the
+       wording is free to change. Keeping the lock would only trap a bad name forever, which is exactly
+       what happened — a whole measurement string ended up in one wound's location and carried over
+       every week with no way to correct it.
+       A wound with NO number is still locked, because for those the composer really does fall back to
+       location matching. That is the legacy path and it shrinks to nothing as records gain numbers. */
     + '<label>Where is it</label>'
-    + (pr
+    + ((pr && !w.num)
         ? '<input value="'+esc(w.loc)+'" readonly style="background:#f1f2f4;color:#555;cursor:not-allowed" '
-          + 'title="Locked because this wound carried over from last visit. Changing the wording makes the note treat it as a new wound.">'
-          + '<div class="muted" style="font-size:11px;margin-top:3px">Locked so the note matches it to the same wound. Wrong spot? Remove the wound and add it again.</div>'
+          + 'title="Locked: this wound predates wound numbering, so the note still identifies it by this text.">'
+          + '<div class="muted" style="font-size:11px;margin-top:3px">Locked — this one predates wound numbers, so the note still finds it by this text.</div>'
         : '<input value="'+esc(w.loc)+'" placeholder="e.g. right great toe, sacrum" '
-          + 'oninput="setW('+i+',\'loc\',this.value)">')
+          + 'oninput="setW('+i+',\'loc\',this.value)">'
+          + (pr ? '<div class="muted" style="font-size:11px;margin-top:3px">Safe to reword — the note tracks this wound by its number, not its name.</div>' : ''))
 
     + '<label>Type</label>'
     + multiField(i,w,'type',WOUND_TYPES)
@@ -1238,7 +1248,13 @@ function sheetHTML(list, roundOverride){
    +".edu-lab{font-size:8pt;text-transform:uppercase;letter-spacing:.6px;color:#8a7a52;font-weight:700}"
    +".edu-txt{font-size:10.5pt;white-space:pre-wrap}"
    +".ft{margin-top:20px;border-top:1px solid #e2ded4;padding-top:9px;color:#948f83;font-size:8.5pt;line-height:1.4}";
-  let b='<html><head><meta charset="utf-8"><title>Wound Care Orders</title><style>'+css+'</style></head><body>';
+  /* BOTH charset declarations on purpose. The sheet is served as application/msword, so Word opens it
+     through its LEGACY HTML importer, which predates the HTML5 <meta charset> form and frequently
+     ignores it — falling back to the system codepage. Read as Windows-1252, a UTF-8 en dash (E2 80 93)
+     renders as "â€“", which is the mangling Scott saw. The http-equiv form is the one that importer
+     honours; the Blob is already BOM-prefixed as a third signal. Cheap, and all three agree. */
+  let b='<html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8">'
+      + '<meta charset="utf-8"><title>Wound Care Orders</title><style>'+css+'</style></head><body>';
   // Document header: solid title band + one clean info strip (Word renders tables reliably; no chips).
   b += '<table width="100%" cellpadding="0" cellspacing="0">'
      + '<tr><td class="hdr-t" colspan="4">Wound Care Orders</td></tr>'
