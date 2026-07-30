@@ -379,7 +379,12 @@ function wbText(w){
    patients added in the same second can't collide; never derived from the name (two "Maria Garcia"
    stay distinct). */
 function newId(){ return 'rc-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,7); }
-function newPt(){ return { id:newId(), name:'', edu:'', wounds:[newWound()], send:true, visitType:'', dispo:'' }; }   // visitType: ''=Auto (history decides) | 'new' | 'fu'
+/* The first wound is numbered HERE, not left to normalizePts. addPt() calls save() immediately, and
+   save() schedules the vault auto-save — so a patient added and left alone would have filed their first
+   wound with num 0, which the composer reads as "no identity" and falls back to guessing from the
+   location text. That is the exact failure wound numbers exist to remove, on the most common path in
+   the app. Caught 2026-07-30 while checking whether the location lock was still reachable. */
+function newPt(){ return { id:newId(), name:'', edu:'', wounds:[Object.assign(newWound(),{num:1})], woundSeq:1, send:true, visitType:'', dispo:'' }; }   // visitType: ''=Auto (history decides) | 'new' | 'fu'
 function activePt(){ return S.pts[S.active] || null; }
 
 /* ---------- disposition: was this patient actually seen? (Scott 2026-07-27) ----------
@@ -1024,13 +1029,9 @@ function woundHTML(w,i){
        A wound with NO number is still locked, because for those the composer really does fall back to
        location matching. That is the legacy path and it shrinks to nothing as records gain numbers. */
     + '<label>Where is it</label>'
-    + ((pr && !w.num)
-        ? '<input value="'+esc(w.loc)+'" readonly style="background:#f1f2f4;color:#555;cursor:not-allowed" '
-          + 'title="Locked: this wound predates wound numbering, so the note still identifies it by this text.">'
-          + '<div class="muted" style="font-size:11px;margin-top:3px">Locked — this one predates wound numbers, so the note still finds it by this text.</div>'
-        : '<input value="'+esc(w.loc)+'" placeholder="e.g. right great toe, sacrum" '
-          + 'oninput="setW('+i+',\'loc\',this.value)">'
-          + (pr ? '<div class="muted" style="font-size:11px;margin-top:3px">Safe to reword — the note tracks this wound by its number, not its name.</div>' : ''))
+    + '<input value="'+esc(w.loc)+'" placeholder="e.g. right great toe, sacrum" '
+    + 'oninput="setW('+i+',\'loc\',this.value)">'
+    + (pr ? '<div class="muted" style="font-size:11px;margin-top:3px">Carried over. Safe to reword — the note tracks this wound by its number, not its name — but leave it alone unless it is wrong.</div>' : '')
 
     + '<label>Type</label>'
     + multiField(i,w,'type',WOUND_TYPES)
