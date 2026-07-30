@@ -1312,13 +1312,6 @@ function startFacility(fac){
 }
 // Re-stamp ONLY the active patient's facility, and remember it as the sticky default for the next new
 // patient. A follow-up's prior-visit lookup is keyed on facility, so refresh that banner when it changes.
-function onBarFacChange(v){ const p=activePt(); if(!p) return;
-  const nf=(v||'').trim(); if(nf===String(p.facility||'').trim()){ return; }   // no real change -> no work
-  p.facility=nf; WS.round=WS.round||{}; WS.round.facility=nf; persist();
-  renderPatientBar(); updateRosterBadge();
-  if(MODE==='fu'){ _whPrior=null; if(typeof whPaintBanner==='function') whPaintBanner();
-    if(typeof whApplyPrior==='function') whApplyPrior(); }
-}
 
 /* ============ UNDERMINING / TUNNELING CLOCK — writes into the wound's fields ============ */
 let clockTarget=null;   // {underInp, tunInp} of the wound whose 🕐 was clicked
@@ -1403,8 +1396,6 @@ function buildClock(){
     const t=tunnels.slice().sort((a,b)=>a.hour-b.hour).map(x=>{const d=x.depth?x.depth+' cm ':'';return d+'at '+x.hour+" o'clock";});
     return 'Undermining: '+(u.length?u.join('; ')+'.':'none.')+' Tunneling: '+(t.length?t.join('; ')+'.':'none.');
   }
-  function underminingText(){ if(!under.length) return 'none'; return under.map(x=>{const d=x.depth?x.depth+' cm ':'';return d+'from '+x.from+' to '+x.to+" o'clock";}).join('; '); }
-  function tunnelingText(){ if(!tunnels.length) return 'none'; return tunnels.slice().sort((a,b)=>a.hour-b.hour).map(x=>{const d=x.depth?x.depth+' cm ':'';return d+'at '+x.hour+" o'clock";}).join('; '); }
   function setBox(el,v){ if(el){ el.value=v; el.dispatchEvent(new Event('input',{bubbles:true})); } }
   function syncToNote(){ if(!interacted||!clockTarget) return;
     // undermining -> from/to boxes (first arc drives from/to; extra arcs append to 'to')
@@ -1445,13 +1436,6 @@ function buildClock(){
 /* ============ FACILITY HANDOFF — 100% local generate; download-first; allowlisted email only ============ */
 // Fill in real facility contacts here (name + secure address). This is an ALLOWLIST on purpose —
 // no free-typed recipient, so a typo can't send PHI to a stranger. Leave empty to hide email sending.
-const FACILITY_CONTACTS = [
-  // TEST PLACEHOLDER — points to Scott's admin inbox so testing can't email the real facility.
-  // AT GO-LIVE, replace the test address with the real approved facility contact(s) — kept in the
-  // private ops vault, not in this file (this repo is hosted publicly).
-  { name: 'University Heights (TEST → admin)', email: 'admin@lavidaheal.com' },
-  // add more approved facility contacts here, one line each — name + secure address
-];
 
 /* Facilities the provider PICKS from a dropdown (no free-typing). Canonical spelling matters: a typo or
    "Crestmoor" vs "Crestmore" would split that building's handoff group and scatter its wound-history
@@ -1568,7 +1552,6 @@ function rosterGet(){ refreshActiveSummary(); const r=WS.round||{};
     // Date + provider are still round-level, so overlay those to keep every patient current.
     return Object.assign({}, s, { facility:String(p.facility||s.facility||'').trim(), provider:r.provider||s.provider, dateVal:r.date||s.dateVal }); })
     .filter(s=>s && !hoBlank(s.patient)); }
-function rosterSet(){ /* the list IS the workspace now — no-op kept for call-site safety */ }
 
 /* ===== Facility grouping — a handoff is split into one sheet PER facility, never a flat mixed list.
    facKey normalizes for grouping/matching (case- and whitespace-insensitive; blank -> a reserved
@@ -1594,10 +1577,7 @@ function handoffGroups(){
 // un-saves all of them (conservative: re-sending is cheap, losing a sheet isn't).
 function _savedSet(){ try{ return new Set(JSON.parse(sessionStorage.getItem('lavida_handoff_saved')||'[]')); }catch(e){ return new Set(); } }
 function _savedStore(s){ try{ sessionStorage.setItem('lavida_handoff_saved', JSON.stringify(Array.from(s))); }catch(e){} }
-function facSaved(key){ return _savedSet().has(key); }
-function facSavedSet(key,v){ const s=_savedSet(); if(v) s.add(key); else s.delete(key); _savedStore(s); updateRosterBadge(); }
 // Every present facility group captured? (true when there's nothing to save.)
-function rosterSavedGet(){ const groups=rosterGroups(); if(!groups.length) return true; const s=_savedSet(); return groups.every(g=>s.has(g.key)); }
 function markWorkspaceEdited(){ const s=_savedSet(); if(s.size){ _savedStore(new Set()); updateRosterBadge(); } }   // any edit un-saves every facility
 function updateRosterBadge(){
   const el=document.getElementById('rosterCount'); if(!el) return;
@@ -1656,36 +1636,6 @@ function handoffHTML(patients, facArg){
 }
 // Plain-text handoff — for the email body / clipboard (mailto can't carry the formatted .doc).
 // One facility group per call, same as handoffHTML.
-function handoffText(patients, facArg){
-  const isPreview = !(patients && patients.length);
-  patients = isPreview ? [extractPatient()] : patients;
-  const fac = (facArg!=null && String(facArg).trim()) ? facArg : (patients.find(p=>p.facility&&!hoBlank(p.facility))||{}).facility;
-  const date=(patients.find(p=>p.dateVal&&!hoBlank(p.dateVal))||{}).dateVal;
-  const L=[]; const add=(lbl,v,pad)=>{ if(v!=null) v=String(v).replace(/\*\*\*/g,'').replace(/[ \t]{2,}/g,' ').trim(); if(!hoBlank(v)) L.push((pad||'')+lbl+': '+v); };
-  L.push('WOUND CARE HANDOFF'+(fac?' — '+fac:''));
-  L.push('Date: '+hoVal(date)+'    Patients: '+patients.length);
-  patients.forEach((p,i)=>{
-    L.push('');
-    if(patients.length>1) L.push('=== Patient '+(i+1)+' ===');
-    L.push('Patient: '+hoVal(p.patient)+'    Facility: '+hoVal(p.facility)+'    Date: '+hoVal(p.dateVal));
-    add('Provider',p.provider); add('Dx / ICD-10',p.dx);
-    p.wounds.forEach(w=>{ const s=w.s;
-      let et=s.etiology||''; if(s.stage&&!hoBlank(s.stage)) et+=(et?' — ':'')+'Stage '+s.stage; if(s.wagner&&!hoBlank(s.wagner)) et+=(et?' — ':'')+'Wagner '+s.wagner;
-      L.push('Wound '+w.n+((s.location&&!hoBlank(s.location))?' — '+s.location:''));
-      add('Etiology',et,'  '); add('Dimensions (L×W×D)',s.dims,'  ');
-      add('Surface area', hoBlank(s.sa)?'':s.sa+' cm²', '  '); add('Prior surface area', hoBlank(s.priorSA)?'':s.priorSA+' cm²', '  ');
-      add('Tissue (gran/slough/eschar/epith)',s.bed,'  '); add('Undermining',s.undermining,'  '); add('Tunneling',s.tunneling,'  ');
-      add('Drainage',s.drainage,'  '); add('Periwound',s.periwound,'  '); add('Progress',s.status,'  ');
-    });
-    const pr=p.procedure, pb=[['Tissue removed',pr.removed],['Type',pr.type],['Deepest tissue (DBT)',pr.dbt],['Instrument',pr.instrument],['Anesthetic',pr.anesthesia]].filter(x=>!hoBlank(x[1]));
-    if(pb.length){ L.push('  Procedure:'); pb.forEach(x=>L.push('    '+x[0]+': '+x[1])); }
-    const or=p.orders, ob=[['Dressings',or.dressings],['Offloading',or.offloading],['Re-evaluation',or.reeval]].filter(x=>!hoBlank(x[1]));
-    if(ob.length){ L.push('  Plan / Orders:'); ob.forEach(x=>L.push('    '+x[0]+': '+x[1])); }
-  });
-  L.push('');
-  L.push('— Care-coordination handoff, for facility use only. Not an official medical record, provider note, or billing document; the signed EHR note is the authoritative record. —');
-  return L.join('\n');
-}
 // Filename for ONE facility group. facArg is the group's label.
 function fileName(patients, facArg){
   if(patients && patients.length){
@@ -1697,61 +1647,6 @@ function fileName(patients, facArg){
 }
 // Resolve the group a per-facility button was rendered against. Indices are stable while the modal is
 // open (editing happens in the note view, not here), and re-resolving fresh keeps the data current.
-function _groupAt(gi){ const g=handoffGroups(); return g[gi]||null; }
-function downloadHandoff(gi){
-  const g=_groupAt(gi); if(!g) return;
-  const blob=new Blob(['﻿'+handoffHTML(g.patients,g.fac)],{type:'application/msword'});
-  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=fileName(g.patients,g.fac);
-  document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),1000); toast(g.fac+' handoff downloaded');
-  if(!g.preview) facSavedSet(g.key,true), markGroupSaved(gi);
-}
-function printHandoff(gi){
-  const g=_groupAt(gi); if(!g) return;
-  const html=handoffHTML(g.patients,g.fac);
-  // Normal path: print from a hidden same-page iframe. While Chrome's (false) site flag is up it can
-  // refuse ANY frame on this site (contentDocument null / write throws) — fall back to printing from
-  // a fresh blank popup, which the flag doesn't touch.
-  try{
-    const f=document.createElement('iframe'); f.style.cssText='position:fixed;right:0;bottom:0;width:0;height:0;border:0';
-    document.body.appendChild(f); const d=f.contentDocument;
-    if(!d) throw new Error('frame blocked');
-    d.open(); d.write(html); d.close();
-    f.contentWindow.focus(); setTimeout(()=>{ f.contentWindow.print(); setTimeout(()=>f.remove(),600); },250);
-  }catch(e){
-    const w=window.open('','_blank');
-    if(!w){ toast('Chrome blocked the print window — allow pop-ups for this site and try again'); return; }
-    w.document.open(); w.document.write(html); w.document.close();
-    setTimeout(()=>{ try{ w.focus(); w.print(); }catch(x){} },250);
-  }
-  if(!g.preview) facSavedSet(g.key,true), markGroupSaved(gi);
-}
-function emailHandoffSelected(gi){
-  const g=_groupAt(gi); if(!g) return;
-  const sel=document.getElementById('ho_contact_'+gi); const i=sel&&sel.value;
-  if(i===''||i==null||!FACILITY_CONTACTS[i]){ toast('Add facility contacts in the file first'); return; }
-  const c=FACILITY_CONTACTS[i], h=currentHeader();
-  const fac=g.fac||'';
-  const date=(g.patients.find(p=>p.dateVal&&!hoBlank(p.dateVal))||{}).dateVal||h.date;
-  const n=g.patients.length;
-  const subj='Wound care handoff — '+(fac||'')+' — '+(date||'')+' ('+n+' patient'+(n>1?'s':'')+')';
-  const full=handoffText(g.patients,g.fac);
-  const sig=h.provider?('\n\n'+h.provider):'';
-  // Always stage the full handoff on the clipboard — reliable no matter which mail app opens.
-  copyRaw(full+sig);
-  // Prefer the whole handoff right in the body. Older Outlook caps mailto length and silently
-  // fails to open if it's too long, so if the encoded draft is oversized we open a short draft
-  // and let the provider paste from the clipboard — the draft always opens either way.
-  const encode=s=>'mailto:'+encodeURIComponent(c.email)+'?subject='+encodeURIComponent(subj)+'&body='+encodeURIComponent(s);
-  const tryFull=encode(full+sig);
-  const shortBody='The wound care handoff is on your clipboard — click in the message body and press Ctrl+V to paste it.'+sig;
-  const usedClipboard = tryFull.length>1900;
-  const mailto = usedClipboard ? encode(shortBody) : tryFull;
-  const a=document.createElement('a'); a.href=mailto; document.body.appendChild(a); a.click(); a.remove();
-  toast(usedClipboard
-    ? 'Draft opened — press Ctrl+V in the body to paste the handoff (it’s on your clipboard). Check the recipient, then send.'
-    : 'Draft opened with the handoff filled in (also on your clipboard). Check the recipient, then send.');
-  if(!g.preview) facSavedSet(g.key,true), markGroupSaved(gi);
-}
 // Refresh every facility group's live preview iframe.
 function refreshHandoffPreview(){ if(!document.getElementById('handoffGroups')) return;   // no-op when the modal is closed
   handoffGroups().forEach((g,gi)=>{ const f=document.getElementById('ho_preview_'+gi); if(f) _hoSetPreview(f, handoffHTML(g.patients,g.fac)); }); }
@@ -1813,15 +1708,6 @@ async function _getPca(){
   await _pca.initialize();
   return _pca;
 }
-async function _vaultToken(){
-  const pca=await _getPca(), req={scopes:VAULT_CFG.scopes};
-  const acct=pca.getAllAccounts()[0];
-  if(acct){ try{ return (await pca.acquireTokenSilent(Object.assign({account:acct},req))).accessToken; }catch(e){} }
-  // no popup (unreliable on static hosting) — get consent via a full-page redirect; on return, click Save again
-  // SANDBOX ONLY: force the account picker on the consent redirect too, so it can't grab a real account.
-  await pca.acquireTokenRedirect(_CSANDBOX ? Object.assign({prompt:'select_account'},req) : req);
-  throw new Error('redirecting to grant ClinicalVault access…');
-}
 function _gfetch(url,token,opts){
   if(_CSANDBOX && /ClinicalVault/i.test(url)) throw new Error('SANDBOX guard: blocked a call to the real vault.');
   opts=opts||{}; opts.headers=Object.assign({Authorization:'Bearer '+token},opts.headers||{}); return fetch(url,opts);
@@ -1859,94 +1745,10 @@ async function _vaultEnsureFolders(token,driveId,segs){
   }
   _ensuredFolders.add(ck);   // all segments confirmed/created — skip the checks next time
 }
-async function _vaultUpload(token,driveId,segs,filename,blob){
-  const url='https://graph.microsoft.com/v1.0/drives/'+driveId+'/root:/'+_encPath(segs.join('/')+'/'+filename)+':/content';
-  const r=await _gfetch(url,token,{method:'PUT',headers:{'Content-Type':'application/msword'},body:blob});
-  if(!r.ok) throw new Error('Upload failed (HTTP '+r.status+').');
-  return await r.json();
-}
-function _vaultStatus(t,gi){ const b=document.getElementById('saveVaultBtn_'+gi); if(b) b.textContent=t; }
-function _vaultResult(ok,msg,url,gi){
-  const el=document.getElementById('vaultResult_'+gi); if(!el) return;
-  el.className='vault-result '+(ok?'vault-ok':'vault-err');
-  el.innerHTML=(ok?'✓ ':'⚠ ')+esc(msg)+(ok&&url?(' · <a href="'+esc(url)+'" target="_blank" rel="noopener">open in SharePoint</a>'):'');
-  el.style.display='';
-}
 // Folder path = Daily Handoffs / <facility> / <YYYY-MM-DD> for ONE facility group. Each facility lands
 // in its own folder, so a group can never be filed under another facility's name.
-function _vaultFacDate(g){
-  const patients=(g&&g.patients)||[];
-  let fac = (g&&g.fac) || (patients.find(p=>p.facility&&!hoBlank(p.facility))||{}).facility || '';
-  let date = (patients.find(p=>p.dateVal&&!hoBlank(p.dateVal))||{}).dateVal || (currentHeader().date||'');
-  fac = String(fac||'').replace(/[\\/:*?"<>|#%]/g,'').replace(/\s+/g,' ').trim();
-  if(/^\.+$/.test(fac)) fac='';          // neutralize a pure-dots segment (., .., …) — no traversal
-  fac = fac || 'Unfiled';
-  date = /^\d{4}-\d{2}-\d{2}/.test(String(date||'')) ? date.slice(0,10) : 'undated';
-  return { segs:['Daily Handoffs', fac, date] };
-}
-async function saveToVault(gi){
-  const g=_groupAt(gi); if(!g) return;
-  // require something to save so we don't create empty Unfiled/undated uploads
-  if(g.preview && hoBlank(currentHeader().patient)){ toast('Enter the patient name first'); return; }
-  const btn=document.getElementById('saveVaultBtn_'+gi); if(btn) btn.disabled=true;
-  const rel=document.getElementById('vaultResult_'+gi); if(rel) rel.style.display='none';
-  try{
-    _vaultStatus('Signing in…',gi);
-    const token=await _vaultToken();
-    const { segs }=_vaultFacDate(g);
-    _vaultStatus('Preparing folder…',gi);
-    const siteId=await _vaultSiteId(token);
-    const driveId=await _vaultDriveId(token,siteId);
-    await _vaultEnsureFolders(token,driveId,segs);
-    _vaultStatus('Uploading…',gi);
-    const blob=new Blob(['﻿'+handoffHTML(g.patients,g.fac)],{type:'application/msword'});
-    const item=await _vaultUpload(token,driveId,segs,fileName(g.patients,g.fac),blob);
-    _vaultStatus('✓ Saved',gi);
-    _vaultResult(true,'Saved to '+segs.join(' / ')+' — '+fileName(g.patients,g.fac),(item&&item.webUrl)||'',gi);
-    if(!g.preview){ facSavedSet(g.key,true); markGroupSaved(gi); }
-  }catch(e){
-    _vaultStatus('Save failed',gi);
-    _vaultResult(false,(e&&e.message)||String(e),'',gi);
-  }finally{
-    if(btn) btn.disabled=false;
-    setTimeout(()=>_vaultStatus('☁ Save to ClinicalVault',gi),4000);
-  }
-}
 // Save EVERY facility's sheet to ClinicalVault in one click — signs in once, then uploads each facility
 // to its OWN Daily Handoffs/<facility>/<date> folder. One facility failing doesn't stop the others.
-async function saveAllToVault(){
-  const groups=handoffGroups().filter(g=>!g.preview);
-  if(!groups.length){ toast('Add a named patient first'); return; }
-  const btn=document.getElementById('saveAllBtn'); const res=document.getElementById('saveAllResult');
-  const setStat=t=>{ if(btn) btn.textContent=t; };
-  if(btn) btn.disabled=true; if(res) res.style.display='none';
-  const done=[], fail=[];
-  try{
-    setStat('Signing in…');
-    const token=await _vaultToken();
-    const siteId=await _vaultSiteId(token); const driveId=await _vaultDriveId(token,siteId);
-    for(const g of groups){
-      try{
-        setStat('Saving '+g.fac+'…');
-        const { segs }=_vaultFacDate(g);
-        await _vaultEnsureFolders(token,driveId,segs);
-        const blob=new Blob(['﻿'+handoffHTML(g.patients,g.fac)],{type:'application/msword'});
-        await _vaultUpload(token,driveId,segs,fileName(g.patients,g.fac),blob);
-        facSavedSet(g.key,true); done.push(g.fac);
-      }catch(e){ fail.push(g.fac); }
-    }
-    setStat('✓ Done');
-    if(res){ res.className='vault-result '+(fail.length?'vault-err':'vault-ok');
-      res.innerHTML=(fail.length?'⚠ ':'✓ ')+'Saved '+done.length+' of '+groups.length+' facilit'+(groups.length===1?'y':'ies')+' to ClinicalVault'+(fail.length?(' — failed: '+esc(fail.join(', '))+'. Try those individually.'):'.');
-      res.style.display=''; }
-    handoffGroups().forEach((g,gi)=>{ if(!g.preview && facSaved(g.key)) markGroupSaved(gi); });   // refresh each ✓ chip without a full re-render
-  }catch(e){
-    setStat('Save failed');
-    if(res){ res.className='vault-result vault-err'; res.innerHTML='⚠ '+esc((e&&e.message)||String(e)); res.style.display=''; }
-  }finally{
-    if(btn) btn.disabled=false; setTimeout(()=>setStat('☁ Save ALL facilities to ClinicalVault'),4500);
-  }
-}
 
 /* ===== ClinicalVault DRAFTS — autosave + resume the day's workspace ==========================
    Solves "I'll lose my work if I close the window." The ENTIRE multi-patient workspace (WS) is
@@ -1980,7 +1782,6 @@ function _draftStatus(txt,kind){ const el=document.getElementById('draftStatus')
    ClinicalVault so PHI doesn't linger indefinitely (decided in the vault: ~7-day resume window, ~14-day
    purge). This is what the WoundHistory comment assumed already existed. Delete goes to SharePoint's
    recycle bin, so it is not a hard delete. Only ever touches Drafts/<user>/ — never handoffs or history. */
-const DRAFT_RESUME_DAYS = 7;
 const DRAFT_KEEP_DAYS = 14;
 function _draftAgeDays(name){ const m=String(name||'').match(/(\d{4})-(\d{2})-(\d{2})/); if(!m) return 0;
   const then=new Date(+m[1], +m[2]-1, +m[3]); const days=Math.floor((new Date() - then)/86400000); return isNaN(days)?0:days; }
@@ -2211,24 +2012,6 @@ function showResumeBanner(drafts){
 /* Fill each chip with the facilities inside that day's draft ("07-15 · Crestmoor 4") so the
    right day is recognizable by BUILDING, not just by date. Lazy + cached: downloads happen
    in-page inside the signed-in tenant, one by one, and never block the banner. */
-async function _enrichResumeChips(shown){
-  if(!DRAFTS_ENABLED()) return;
-  let changed=false;
-  for(const d of (shown||[])){
-    const key=d.name+'|'+(d.lastModifiedDateTime||'');
-    if(_draftSumCache[key]!==undefined) continue;
-    changed=true;
-    try{
-      const obj=await loadDraft(d.name);
-      _draftSumCache[key]=_draftFacSummary(obj&&obj.ws)||'';
-    }catch(e){ _draftSumCache[key]=''; }
-  }
-  // Repaint ONLY if we actually filled a new chip. Repainting calls showResumeBanner, which calls this
-  // again — without this guard, once every chip is cached the two functions call each other forever
-  // (stack overflow). It surfaces only when signed in with drafts present (this is a no-op otherwise),
-  // which is why ?preview=1 testing never hit it. (Fix 2026-07-20 — was blocking auto-pull + saving.)
-  if(changed) showResumeBanner(null);
-}
 function _draftFacSummary(ws){
   try{
     const counts={};
@@ -2241,24 +2024,6 @@ function _draftFacSummary(ws){
     return Object.keys(counts).map(f=>f+' '+counts[f]).join(' · ');
   }catch(e){ return ''; }
 }
-function dismissResume(){ const el=document.getElementById('draftBanner'); if(el){ el.style.display='none'; el.innerHTML=''; } }
-async function resumeDraft(name){
-  const day=name.replace(/\.json$/i,'');
-  // Opening a draft REPLACES what's on screen. Today's work is already autosaved to
-  // ClinicalVault (SharePoint keeps versions), but the switch still has to be deliberate.
-  if(_wsHasContent() && day!==WS.draftDay){
-    if(!confirm('Open '+day+'?\n\nIt will replace what\'s on screen. Today\'s work is saved in ClinicalVault, so nothing is lost — but make sure you meant to switch days.')) return;
-  }
-  _draftStatus('Opening…','busy');
-  const obj=await loadDraft(name);
-  if(obj && applyDraft(obj, day)){ showResumeBanner(null); toast('Opened '+day); _draftStatus('☁ restored '+_hm(),'ok');
-    // Re-list in the background so every chip label reflects the drafts as they are NOW, not as they
-    // were at page load (an autosave since then changes what a chip should say — 2026-07-20 PM).
-    listDrafts().then(l=>{ if(l && l.length) showResumeBanner(l); }).catch(()=>{});
-  }
-  else { toast('Could not open that draft'); _draftStatus('⚠ open failed','warn'); }
-}
-function openResume(){ if(!DRAFTS_ENABLED()){ toast('Sign in to see saved work'); return; } _draftStatus('☁ checking…','busy'); listDrafts().then(showResumeBanner).catch(()=>{}); }
 
 /* ---------- day banner: which DAY is on screen ----------
    Quiet when it's today. LOUD (amber, same family as the carry-forward banner) when a
@@ -2287,48 +2052,10 @@ function closeHandoff(){ document.getElementById('handoffModal').style.display='
   document.getElementById('handoffCard').innerHTML='';   // clear the ho_ fields so they can't be misread once the modal is closed
   renderPatientBar(); updateRosterBadge(); }             // reflect any facility/name edits made in the modal
 // Contact <select> options (shared by every facility group's email control).
-function _contactOpts(){ return FACILITY_CONTACTS.length
-    ? '<option value="">— choose facility contact —</option>'+FACILITY_CONTACTS.map((c,i)=>'<option value="'+i+'">'+esc(c.name)+'</option>').join('')
-    : '<option value="">— no facility contacts configured —</option>'; }
 // One send-card per facility group. A card only ever contains its own facility's patients and its own
 // contact picker, so a sheet can't be sent to the wrong facility. Rebuilt on open, on facility edits,
 // and after a save (to refresh the ✓ Saved chip).
-function renderHandoffGroups(){
-  const host=document.getElementById('handoffGroups'); if(!host) return;
-  const groups=handoffGroups(); const opts=_contactOpts();
-  const multi=groups.length>1 && !groups[0].preview;
-  let h='';
-  if(multi) h+='<div class="ho-note" style="margin:2px 0 4px"><b style="color:var(--accent)">'+groups.length+' facilities in today’s round.</b> Each gets its OWN sheet, folder and email below — a facility never receives another facility’s residents.</div>'+
-    '<div class="ho-saveall"><button class="primary" id="saveAllBtn" onclick="saveAllToVault()">☁ Save ALL facilities to ClinicalVault</button>'+
-    '<span id="saveAllResult" class="vault-result" style="display:none"></span>'+
-    '<span class="ho-note" style="flex:1 1 100%">Uploads every building above to its own folder in one go. You can still Save / Print / email each one individually below.</span></div>';
-  groups.forEach((g,gi)=>{
-    const n=g.patients.length; const saved=!g.preview && facSaved(g.key);
-    const savedChip = g.preview ? '' : '<span id="grpSaved_'+gi+'" class="ho-gsaved '+(saved?'is-saved':'')+'">'+(saved?'✓ Saved to ClinicalVault':'Not saved yet')+'</span>';
-    const chips=g.patients.map((p,i)=>'<span class="ho-rchip">'+(i+1)+'. '+esc(p.patient||'—')+'</span>').join('');
-    h+='<div class="ho-group">'+
-       '<div class="ho-ghead"><span class="ho-gname">'+esc(g.fac)+'</span>'+
-         '<span class="ho-gcount">'+n+' patient'+(n===1?'':'s')+'</span>'+savedChip+'</div>'+
-       (g.preview
-         ? '<div class="ho-note">Give each patient a name in the bar above the note and they’ll appear here, grouped by facility.</div>'
-         : '<div class="ho-rlist">'+chips+'</div>')+
-       '<div class="ho-actions">'+
-         '<button class="primary" onclick="downloadHandoff('+gi+')">Download (.doc)</button>'+
-         '<button class="ghost" onclick="printHandoff('+gi+')">Print / Save PDF</button>'+
-         (g.preview?'':'<button class="primary" id="saveVaultBtn_'+gi+'" onclick="saveToVault('+gi+')">☁ Save to ClinicalVault</button>'+
-           '<span id="vaultResult_'+gi+'" class="vault-result" style="display:none"></span>')+
-       '</div>'+
-       (g.preview?'':'<div class="ho-send"><label style="margin:0">Email to '+esc(g.fac)+'</label>'+
-         '<select id="ho_contact_'+gi+'" style="max-width:260px">'+opts+'</select>'+
-         '<button class="ghost" onclick="emailHandoffSelected('+gi+')">Open email draft</button></div>')+
-       '<iframe class="ho-preview" id="ho_preview_'+gi+'"></iframe>'+
-     '</div>';
-  });
-  host.innerHTML=h;
-  refreshHandoffPreview();
-}
 // After a save, flip just this group's chip without a full re-render (so the vault result link survives).
-function markGroupSaved(gi){ const el=document.getElementById('grpSaved_'+gi); if(el){ el.textContent='✓ Saved to ClinicalVault'; el.classList.add('is-saved'); } }
 /* Reassign patient = a dead-simple 2-step: pick the patient (they already exist — a dropdown, never
    free-typed), pick the building to move them to, Move. Facility is set on ADD (patient bar); this is
    purely the "oops, wrong building" fix. */
@@ -2966,7 +2693,6 @@ try{ if(localStorage.getItem(RC_EVER_KEY)===null) _rcSeenSave(_rcSeenLoad()); }c
 try{ if(new URLSearchParams(location.search).get('repull')==='1') localStorage.removeItem(RC_SEEN_KEY); }catch(e){}
 const RC_SEEN_TTL_MS=21*24*60*60*1000;       // tokens (no patient info), so this localStorage set is NOT PHI.
 function _rcRecentCutoff(){ const d=new Date(); d.setDate(d.getDate()-RC_LIST_DAYS);  return d.toISOString().slice(0,10); }   // perf bound on what we LIST
-function _rcCreateCutoff(){ const d=new Date(); d.setDate(d.getDate()-RC_PULL_DAYS);  return d.toISOString().slice(0,10); }   // what may auto-CREATE a patient
 
 /* ============ WHICH RECORDS BECOME NOTES (Scott 2026-07-30) ==========================================
    He opened the composer on 7/30 and 23 patients from three different dates loaded into his workspace.
