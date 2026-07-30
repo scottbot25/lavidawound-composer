@@ -297,6 +297,22 @@ function normalizePts(o){
   if(!o || !Array.isArray(o.pts)) return;
   o.pts.forEach(p=>{ if(!p.id) p.id=newId(); if(typeof p.send!=='boolean') p.send=true;
     if(typeof p.dispo!=='string') p.dispo='';   // absent means seen — see DISPO_OPTS
+    /* WOUND NUMBERS ARE ASSIGNED HERE AND NOWHERE ELSE (Scott 2026-07-30). Every load path — session
+       resume, restore-on-open, the round picker, carry-forward — funnels through normalizePts, so
+       putting it here means none of them can forget, which is exactly how `dispo` and `send` are
+       handled. Records written before numbers existed are backfilled positionally, once.
+       woundSeq is the HIGH-WATER MARK, and it is deliberately not the same as max(num): a resolved
+       wound that later stops carrying forward would otherwise take its spent number with it, and the
+       next new wound would silently reuse a number that is already in the chart. */
+    if(!Array.isArray(p.wounds)) p.wounds=[];
+    let seq=Number(p.woundSeq)||0;
+    p.wounds.forEach(w=>{ if(w && w.num>seq) seq=w.num; });   // never below a number already in use
+    p.wounds.forEach(w=>{ if(w && !w.num) w.num=++seq; });    // unnumbered take the next FREE number
+    p.woundSeq=seq;
+    /* Two passes, not one, and NOT positional. Backfilling an unnumbered wound with its array index
+       collides the moment a wound has been deleted: {num 2} plus a new wound would hand the new one
+       index 1+1=2, a number already in this patient's chart. A legacy record where nothing is numbered
+       still comes out 1,2,3 because seq starts at 0 — same answer, without the collision. */
   });
 }
 /* WHAT WE KNOW IS ALREADY IN THE VAULT, persisted alongside the round.
@@ -339,7 +355,16 @@ function v(s){ s=(s==null?'':String(s)).trim(); return s || '—'; }
 function toast(m){ const t=document.getElementById('toast'); t.textContent=m; t.classList.add('on');
   clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove('on'),2600); }
 
-function newWound(){ return { loc:'', type:[], stage:'', wagner:'', l:'', w:'', d:'', drain:'', odor:'', status:'', wbGran:'', wbSlough:'', wbFib:'', wbEpi:'', wbEschar:'', exposed:[], periwound:[], undermining:'', tunneling:'', orders:'' }; }
+/* `num` is the wound's PERMANENT number and its identity (Scott 2026-07-30). It is born on this card
+   the moment the wound is entered, and it never changes: never reused, never renumbered, never shifted
+   by deleting the wound above it. Before today the card had no wound number at all — every "Wound N"
+   was the array index at render time — so the note, which numbers by chart identity, could not help but
+   disagree the moment anything healed. 0 means "not yet assigned"; normalizePts backfills it. */
+function newWound(){ return { num:0, loc:'', type:[], stage:'', wagner:'', l:'', w:'', d:'', drain:'', odor:'', status:'', wbGran:'', wbSlough:'', wbFib:'', wbEpi:'', wbEschar:'', exposed:[], periwound:[], undermining:'', tunneling:'', orders:'' }; }
+/* The number to SHOW. Falls back to position only for a wound that somehow reached a renderer without
+   passing through normalizePts — display should never be blank, but the fallback is not an identity and
+   must never be written back into the record. */
+function wNum(w,i){ return (w && w.num) ? w.num : (i+1); }
 /* Wound bed = the composer's structured field: gran/slough/fibrin/epithelialization % + eschar yes/no.
    Compose the same "N% granulation, …, eschar: yes" string for the sheet; the composer pull maps each
    piece straight into its :wb: keys. */
@@ -779,11 +804,19 @@ function setPt(f,val){ const p=activePt(); if(!p) return; p[f]=val; save(); pain
 function setVisitType(v){ const p=activePt(); if(!p) return; p.visitType=v; save(); render(); }
 
 /* ---------- wounds ---------- */
-function addWound(){ const p=activePt(); if(!p) return; p.wounds.push(newWound()); save(); render(); }
+function addWound(){ const p=activePt(); if(!p) return;
+  // One past the HIGH-WATER MARK, never wounds.length+1. A number that has been used is spent for this
+  // patient forever, even if that wound has since been removed or resolved.
+  p.woundSeq=(Number(p.woundSeq)||0)+1;
+  p.wounds.push(Object.assign(newWound(),{num:p.woundSeq}));
+  save(); render(); }
 function delWound(i){
   const p=activePt(); if(!p) return;
   if(p.wounds.length===1){ toast('A patient needs at least one wound'); return; }
-  if(!confirm('Remove wound '+(i+1)+'?')) return;
+  if(!confirm('Remove wound '+wNum(p.wounds[i],i)+'?')) return;
+  /* The survivors KEEP their numbers and woundSeq is not lowered — deleting Wound 1 of {1,2} leaves a
+     Wound 2, it does not promote it. That promotion is exactly what made the card disagree with the
+     note, and a number that has been in a chart must never be handed to a different wound. */
   p.wounds.splice(i,1); save(); render();
 }
 function setW(i,f,val){
@@ -908,7 +941,7 @@ function woundHTML(w,i){
   const pr = w.prior || null;
   const priorWhen = pr && pr.date ? ' ('+esc(pr.date)+')' : '';
   return '<div class="card">'
-    + '<div class="wound-head"><b>Wound '+(i+1)+'</b>'
+    + '<div class="wound-head"><b>Wound '+wNum(w,i)+'</b>'
     + (pr?'<span class="muted" style="font-size:11px;margin-left:8px">carried from last visit</span>':'')
     + '<button class="tiny no-print" onclick="delWound('+i+')">Remove</button></div>'
 
@@ -1060,7 +1093,7 @@ function sheetText(list){
     L.push('PATIENT: '+v(p.name));
     p.wounds.forEach((w,i)=>{
       L.push('');
-      L.push('  Wound '+(i+1)+' — '+v(w.loc));
+      L.push('  Wound '+wNum(w,i)+' — '+v(w.loc));
       L.push('    Type:     '+v(disp(w,'type')) + (isPressure(w) ? '   Stage: '+v(disp(w,'stage')) : ''));
       L.push('    Size:     '+v(sizeText(w)));
       L.push('    Drainage: '+v(disp(w,'drain')));
@@ -1167,7 +1200,7 @@ function sheetHTML(list, roundOverride){
     p.wounds.forEach((w,i)=>{
       const odor=disp(w,'odor'), status=disp(w,'status');
       const stCls = status ? (String(status).toLowerCase().indexOf('improv')>=0?'b-imp':(String(status).toLowerCase().indexOf('wors')>=0?'b-wor':'b-stb')) : '';
-      b += '<div class="w'+(i===0?' w-first':'')+'"><div class="w-title">Wound '+(i+1)+' — <span class="loc">'+esc(v(w.loc))+'</span></div>'
+      b += '<div class="w'+(i===0?' w-first':'')+'"><div class="w-title">Wound '+wNum(w,i)+' — <span class="loc">'+esc(v(w.loc))+'</span></div>'
          + '<table>'
          + '<tr><td class="k">Type</td><td class="val">'+esc(v(disp(w,'type')))
          +   (isPressure(w) ? ' &nbsp;·&nbsp; <b>'+esc(v(disp(w,'stage')))+'</b>' : '')+'</td></tr>'
@@ -2005,7 +2038,10 @@ async function rcAutoSaveCloud(){
       const rec={ schema:'roundcard.v1', id:id, savedAt:new Date().toISOString(), key:ptSlug(p.name),
         facility:S.round.fac||'', date:date, provider:provNow,
         visitType:p.visitType||'', dispo:p.dispo||'',
-        patient:{name:p.name}, edu:p.edu||'', wounds:JSON.parse(JSON.stringify(p.wounds||[])) };
+        // woundSeq rides in the record: it is the only place a number spent by a since-resolved wound
+        // survives, and without it next week's card would reuse it. Each wound carries its own `num`.
+        patient:{name:p.name}, edu:p.edu||'', woundSeq:Number(p.woundSeq)||0,
+        wounds:JSON.parse(JSON.stringify(p.wounds||[])) };
       const jb=new Blob([JSON.stringify(rec)],{type:'application/json'});
       await _netTmo(_vaultUpload(token,driveId,recSegs,id+'.json',jb,'application/json'), 30000);
       _rcCloudSig[id]=sigNow; _rcFiled.add(id); n++;   // this one really is in the vault now
@@ -2089,7 +2125,10 @@ async function saveVault(){
       const rec={ schema:'roundcard.v1', id:id, savedAt:new Date().toISOString(), key:ptSlug(p.name),
         facility:S.round.fac||'', date:date, provider:provName,
         visitType:p.visitType||'', dispo:p.dispo||'',
-        patient:{name:p.name}, edu:p.edu||'', wounds:JSON.parse(JSON.stringify(p.wounds||[])) };
+        // woundSeq rides in the record: it is the only place a number spent by a since-resolved wound
+        // survives, and without it next week's card would reuse it. Each wound carries its own `num`.
+        patient:{name:p.name}, edu:p.edu||'', woundSeq:Number(p.woundSeq)||0,
+        wounds:JSON.parse(JSON.stringify(p.wounds||[])) };
       const jb=new Blob([JSON.stringify(rec)],{type:'application/json'});
       await _vaultUpload(token,driveId,recSegs,id+'.json',jb,'application/json');
       try{ _rcCloudSig[id]=sigNow; _rcFiled.add(id); }catch(e){}   // keep auto-save in step so it won't re-upload these
@@ -2458,7 +2497,7 @@ async function rcRestoreFromVault(){
     S.round.loadedProv=owner.name; S.round.loadedMixed=owner.mixed;
     // dispo has to come back too — reopening a round must not quietly reset everyone to
     // "seen" and re-inflate the count that was already filed for that day.
-    S.pts=mine.map(r=>({ id:r.id||newId(), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], send:true, visitType:r.visitType||'', dispo:r.dispo||'' }));
+    S.pts=mine.map(r=>({ id:r.id||newId(), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], woundSeq:Number(r.woundSeq)||0, send:true, visitType:r.visitType||'', dispo:r.dispo||'' }));
     normalizePts(S); S.active=0;
     S.pts.forEach(p=>{ try{ _rcCloudSig[p.id]=_rcSig(p); _rcFiled.add(p.id); }catch(e){} });   // restored = already in the cloud; no re-upload
     saveFiled();
@@ -2802,6 +2841,8 @@ async function carryForward(){
         return !healed;
       });
       const wounds=kept.map(w=>Object.assign(newWound(),{
+        // THE NUMBER IS THE WOUND'S IDENTITY — it carries, or next week renumbers and the note disagrees.
+        num: Number(w.num)||0,
         loc: w.loc||'',
         type: Array.isArray(w.type)?w.type.slice():[],
         typeOther: w.typeOther||'',
@@ -2821,8 +2862,12 @@ async function carryForward(){
                 wbEpi:w.wbEpi||'', wbEschar:w.wbEschar||'' }
       }));
       // dispo starts clean every visit: last week's "not seen" says nothing about this week.
+      /* woundSeq comes from the RECORD, never recomputed from the wounds that survived. `kept` drops
+         resolved wounds, so max(kept) would forget a spent number: heal Wound 3, carry forward, add a
+         wound, and it would be handed 3 again — a number already in this patient's chart. */
       return { id:newId(), name:((rec.patient&&rec.patient.name)||'').trim(), edu:'',
                priorEdu:String(rec.edu||''), wounds:wounds.length?wounds:[newWound()],
+               woundSeq:Number(rec.woundSeq)||0,
                send:true, visitType:'', dispo:'' };   // Auto — the composer decides Initial vs Follow-up from history
     });
     // a load replaces the list: disarm any half-finished two-tap first (see loadRecentRound)
@@ -2890,7 +2935,7 @@ function loadRecentRound(i){
   // dispo comes back too — see the same line in rcRestoreFromVault. Reopening a round must
   // not quietly reset everyone to "seen"; auto-save would then re-upload them as seen and
   // re-inflate a count that was already filed correctly.
-  S.pts=mine.map(r=>({ id:r.id||newId(), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], send:true, visitType:r.visitType||'', dispo:r.dispo||'' }));
+  S.pts=mine.map(r=>({ id:r.id||newId(), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], woundSeq:Number(r.woundSeq)||0, send:true, visitType:r.visitType||'', dispo:r.dispo||'' }));
   normalizePts(S); S.active=0;
   S.pts.forEach(p=>{ try{ _rcCloudSig[p.id]=_rcSig(p); _rcFiled.add(p.id); }catch(e){} });   // loaded = already in the cloud; only edits re-upload
   saveFiled();
@@ -2998,7 +3043,7 @@ async function rcLoadRoundFor(dateStr, facRaw){
        the whole round re-uploaded under whatever the box says. That is the 21-record re-file class. */
     const owner=_roundOwner(mine);
     S.pts=mine.map(r=>({ id:r.id||newId(), name:(r.patient&&r.patient.name)||'', edu:r.edu||'',
-      wounds:Array.isArray(r.wounds)?r.wounds:[], send:true, visitType:r.visitType||'', dispo:r.dispo||'' }));
+      wounds:Array.isArray(r.wounds)?r.wounds:[], woundSeq:Number(r.woundSeq)||0, send:true, visitType:r.visitType||'', dispo:r.dispo||'' }));
     normalizePts(S); S.active=0;
     S.round.facLock=facR;                                  // every vault-load path must set this
     S.round.loadedProv=owner.name; S.round.loadedMixed=owner.mixed;   // whose round this is - see applyProvChange
