@@ -912,9 +912,23 @@ function woundHTML(w,i){
     + (pr?'<span class="muted" style="font-size:11px;margin-left:8px">carried from last visit</span>':'')
     + '<button class="tiny no-print" onclick="delWound('+i+')">Remove</button></div>'
 
+    /* LOCATION IS LOCKED ON A CARRIED-OVER WOUND (Scott 2026-07-30). Not cosmetic — it is load-bearing.
+       The composer decides "is this the same wound as last week" by comparing this text to the location
+       stored in the note's history, and its scorer is plain word overlap with no stemming. "sacrum" vs
+       "sacral" scores ZERO, which the matcher then treats as CERTAINLY a new wound: last week's wound
+       carries forward BLANK as Wound 1 and this week's findings land on a duplicate Wound 2. Retyping a
+       location by a single word is all it takes.
+       A NEW wound stays freely editable — there is nothing yet to match it against. Only a carried one
+       is locked, and `prior` is exactly the "came from last visit" marker.
+       This is a stopgap for the real fix (a permanent wound number owned by the card), not a substitute
+       for it. To correct a genuinely wrong location, remove the wound and add it back. */
     + '<label>Where is it</label>'
-    + '<input value="'+esc(w.loc)+'" placeholder="e.g. right great toe, sacrum" '
-    + 'oninput="setW('+i+',\'loc\',this.value)">'
+    + (pr
+        ? '<input value="'+esc(w.loc)+'" readonly style="background:#f1f2f4;color:#555;cursor:not-allowed" '
+          + 'title="Locked because this wound carried over from last visit. Changing the wording makes the note treat it as a new wound.">'
+          + '<div class="muted" style="font-size:11px;margin-top:3px">Locked so the note matches it to the same wound. Wrong spot? Remove the wound and add it again.</div>'
+        : '<input value="'+esc(w.loc)+'" placeholder="e.g. right great toe, sacrum" '
+          + 'oninput="setW('+i+',\'loc\',this.value)">')
 
     + '<label>Type</label>'
     + multiField(i,w,'type',WOUND_TYPES)
