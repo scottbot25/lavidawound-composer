@@ -263,10 +263,6 @@
 
 /* RETIRED with the email button (Scott 2026-07-20) — kept only so nothing dangling references it.
    The send flow is now: Download the .doc sheet and attach it to an email at the end of rounds. */
-const FACILITY_CONTACTS = [
-  { name: 'TEST — Abby (abbs2118@gmail.com)', email: 'abbs2118@gmail.com' },   // test recipient for the handoff email — SYNTHETIC data only (Gmail is not a BAA inbox)
-  { name: 'TEST — admin inbox (not a real facility)', email: 'admin@lavidaheal.com' },
-];
 
 /* Option lists are kept in step with the Note Composer's note template on purpose:
    the card feeds the composer later (Phase 3), so a value picked here must map 1:1 to
@@ -458,7 +454,6 @@ function activePt(){ return S.pts[S.active] || null; }
    provider's call to document (there is a multi-year rule); the tool does not guess. */
 const DISPO_OPTS=[['','Seen'],['notSeen','Not seen'],['discharged','Discharged']];
 function isCounted(p){ const d=String((p&&p.dispo)||'').trim(); return d!=='notSeen' && d!=='discharged'; }
-function countedPts(){ return sentNamed().filter(isCounted); }
 function setDispo(v){ const p=activePt(); if(!p) return; p.dispo=v; save(); render(); }
 
 /* Drops discharged patients from carry-forward. Takes the map of patient-key -> their LATEST
@@ -1290,55 +1285,9 @@ function render(){
 }
 
 /* ---------- the sheet the nurse gets ---------- */
-function sheetText(list){
-  const r=S.round, L=[];
-  L.push('WOUND CARE ORDERS');
-  L.push('Facility: '+v(r.fac)+'    Date: '+v(r.date));
-  L.push('Provider: '+v(_fileProv()));   // whoever the round FILES under, same as the .doc renderer
-  L.push('');
-  const pts = list || S.pts.filter(p=>(p.name||'').trim());
-  pts.forEach(p=>{
-    L.push('----------------------------------------');
-    L.push('PATIENT: '+v(p.name));
-    p.wounds.forEach((w,i)=>{
-      L.push('');
-      /* A healed wound prints like every other one, with Status: Healed doing the talking (Scott
-         2026-07-30: "just leave it"). The earlier stripped one-liner hid findings the facility may
-         still want, and made it look like a different kind of record. */
-      L.push('  Wound '+wNum(w,i)+' — '+v(w.loc));
-      L.push('    Type:     '+v(disp(w,'type')) + (isPressure(w) ? '   Stage: '+v(disp(w,'stage')) : ''));
-      L.push('    Size:     '+v(sizeText(w)));
-      L.push('    Drainage: '+v(disp(w,'drain')));
-      L.push('    Odor:     '+v(disp(w,'odor')));
-      L.push('    Status:   '+v(disp(w,'status')));
-      { const wb=wbText(w); if(wb) L.push('    Wound bed:'+wb); }
-      { const exp=disp(w,'exposed'); if(exp) L.push('    Exposed:  '+exp); }
-      { const pw=disp(w,'periwound'); if(pw) L.push('    Periwound:'+pw); }
-      if((w.undermining||'').trim()) L.push('    Undermining: '+w.undermining.trim());
-      if((w.tunneling||'').trim())   L.push('    Tunneling:   '+w.tunneling.trim());
-      L.push('    ORDERS:   '+v(w.orders));
-    });
-    if((p.edu||'').trim()){
-      L.push('');
-      L.push('  Additional info, plan & education:');
-      L.push('    '+p.edu.trim());
-    }
-    L.push('');
-  });
-  L.push('----------------------------------------');
-  L.push('Care-coordination orders for facility use. Not an official medical record or');
-  L.push('billing document; the signed EHR note is the authoritative record.');
-  return L.join('\n');
-}
 /* Status as a colored badge (green improving / neutral stable / red worsening) so the nurse can scan
    the sheet at a glance. Inline background + color so it degrades to colored text if a mail/Word client
    ignores the background. */
-function statusBadge(w){
-  const s=disp(w,'status'); if(!s) return '<span class="val-muted">—</span>';
-  const t=String(s).toLowerCase();
-  const cls = t.indexOf('improv')>=0 ? 'b-imp' : (t.indexOf('wors')>=0 ? 'b-wor' : 'b-stb');
-  return '<span class="badge '+cls+'">'+esc(s)+'</span>';
-}
 /* The nurse's sheet — a real document, not a text dump: teal header band, one clean card per patient,
    and the orders called out so they can't be missed. Solid colors + real <table>s so it survives being
    saved as .doc and opened in Word (gradients/rounded corners degrade gracefully). */
