@@ -842,6 +842,23 @@ function rcApplyByCardNum(S, priorList, cardWounds, edu){
 }
 // Every card wound carries a number -> identity is known and the matcher is skipped entirely.
 function _rcAllNumbered(cardWounds){ return !!(cardWounds && cardWounds.length && cardWounds.every(w=>Number(w&&w.num)>0)); }
+/* A card-derived wid looks like c<number>. A prior visit committed BEFORE the card had wound numbers
+   uses NUMERIC wids from mintWid, and the two schemes cannot be mixed: seeding prior wid 0 and then
+   laying card wid c1 beside it puts BOTH in the note, so a patient with two wounds gets four.
+   That is not hypothetical — it is every patient already mid-treatment, which is exactly the group the
+   "backfill" was meant to protect.
+   So the numbered path is taken only when it is SAFE: no prior wounds at all, or a prior visit whose
+   wids are already card-derived. Everything else falls back to the location matcher, which reuses the
+   prior wid and therefore keeps the number the CHART already has — which is the right answer anyway,
+   because a number already committed to a note is an identity.
+   This self-migrates: the first note committed under the numbered scheme writes card-derived wids into
+   WoundHistory, and from that visit on the fast path takes over. No vault read from the card, and no
+   data correction to anyone's records. */
+function _rcCardWid(wid){ return /^c\d+$/.test(String(wid)); }
+function _rcNumberedSafe(cardWounds, priorList){
+  if(!_rcAllNumbered(cardWounds)) return false;
+  return !(priorList||[]).length || (priorList||[]).every(pw=>_rcCardWid(pw&&pw.wid));
+}
 // Free a wound's DISPLAY number when it's deleted before ever being committed (Scott, 2026-07-19: "a wound
 // shouldn't be stricken until it's committed"). Refined 2026-07-21 (Scott): deleting a never-committed wound
 // also RENUMBERS the remaining never-committed wounds down to close the gap — before the first copy-to-PCC,
@@ -2797,7 +2814,7 @@ async function rcPrefill(rec){
        construction. Location text stops mattering entirely — which is the whole point, because scoring
        it is what turned a retyped "sacral" into a phantom second wound. The matcher below survives only
        for legacy records written before the card had numbers. */
-    if(_rcAllNumbered(cardWounds)){
+    if(_rcNumberedSafe(cardWounds, priorList)){
       rcApplyByCardNum(S, priorList, cardWounds, edu);
     } else {
     const props=rcMatchWounds(cardWounds, priorList);
