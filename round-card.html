@@ -3020,10 +3020,19 @@ async function _cfFetchCandidates(facRaw, okProv){
     if(dl) return fetch(dl).then(r=>r.ok?r.json():null).catch(()=>null);
     return _vaultReadJson(token,driveId,'RoundCards/'+cleanSeg(facRaw)+'/'+f.name).catch(()=>null);
   }))).filter(Boolean);
+  return _cfPickCandidates(recs, okProv, today, activeFrom);
+}
+/* THE FOUR CORRECTNESS RULES, split from the network so they can actually be run in a test: whose
+   records these are, how far back still counts, one record per patient (their own latest), and
+   discharge. Everything above this line fetches; everything below decides.
+   Extracting carryForward's candidate-finding without this would have left a refactor of working code
+   with no execution coverage at all — the fetch still has none, because it needs a live Graph call,
+   but the fetch has no rules in it. The rules are here. */
+function _cfPickCandidates(recs, okProv, today, activeFrom){
   // MY patients only, still active, each at their OWN latest visit strictly BEFORE today
   const byPatient={};
   let skippedOtherProvider=0;
-  recs.forEach(rec=>{
+  (recs||[]).forEach(rec=>{
     if(!rec || rec.schema!=='roundcard.v1') return;
     const nm=((rec.patient&&rec.patient.name)||'').trim(); if(!nm) return;
     const d=String(rec.date||'').slice(0,10);
