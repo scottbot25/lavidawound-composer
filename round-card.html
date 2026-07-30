@@ -258,6 +258,11 @@ const FACILITY_CONTACTS = [
    (Etiology / Stage / Drainage / odor / Status lines). */
 const WOUND_TYPES = ['Pressure injury','Diabetic ulcer','Venous','Arterial','Surgical','Traumatic','MASD','Other'];
 const STAGES      = ['Stage 1','Stage 2','Stage 3','Stage 4','Unstageable','DTI'];
+/* Wagner grade is the diabetic-ulcer counterpart to Stage, and the note has always had a box for it
+   (`If diabetic ulcer -> Wagner grade`). Without it here the provider picks "Diabetic ulcer" at the
+   bedside and then grades it later in the note from memory. Shown only when a diabetic ulcer is
+   ticked, exactly as Stage is shown only for a pressure injury. Added 2026-07-29 (Scott). */
+const WAGNER      = ['0','1','2','3','4','5'];
 const DRAINAGE    = ['None','Scant','Small','Moderate','Large'];
 const ODOR        = ['None','Mild','Strong'];
 /* Checkbox (pick-multiple) fields — MATCH the composer note's checkbox lines exactly (Etiology =
@@ -269,7 +274,13 @@ const PERIWOUND   = ['Normal','Macerated','Erythematous','Indurated','Ecchymotic
 /* 'Healed' added 2026-07-26 for carry-forward: it is how the provider says "this one is done", and a
    healed wound must NOT be carried into next week's card (Scott's rule). It maps 1:1 onto the note's
    own Status option, so the composer pull is unaffected. */
-const STATUS      = ['Improving','Stable','Worsening','Healed'];
+/* 'New' and 'Not healed' added 2026-07-29: the note's Status line has always offered six values and
+   the card offered four, so those two could never come from the bedside. Scott: "if the note offers it
+   we offer it."
+   ⚠ 'Not healed' is a trap for any resolution test written as /healed/ - the substring is right there.
+   The composer now asks `_isResolvedStatus()`, which excludes it explicitly. Do not replace that with
+   a bare regex, in either file. */
+const STATUS      = ['New','Not healed','Improving','Stable','Worsening','Healed'];
 
 /* ---------- state: sessionStorage only, wipes on tab close ---------- */
 const KEY = 'lavida_roundcard';
@@ -328,7 +339,7 @@ function v(s){ s=(s==null?'':String(s)).trim(); return s || '—'; }
 function toast(m){ const t=document.getElementById('toast'); t.textContent=m; t.classList.add('on');
   clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove('on'),2600); }
 
-function newWound(){ return { loc:'', type:[], stage:'', l:'', w:'', d:'', drain:'', odor:'', status:'', wbGran:'', wbSlough:'', wbFib:'', wbEpi:'', wbEschar:'', exposed:[], periwound:[], undermining:'', tunneling:'', orders:'' }; }
+function newWound(){ return { loc:'', type:[], stage:'', wagner:'', l:'', w:'', d:'', drain:'', odor:'', status:'', wbGran:'', wbSlough:'', wbFib:'', wbEpi:'', wbEschar:'', exposed:[], periwound:[], undermining:'', tunneling:'', orders:'' }; }
 /* Wound bed = the composer's structured field: gran/slough/fibrin/epithelialization % + eschar yes/no.
    Compose the same "N% granulation, …, eschar: yes" string for the sheet; the composer pull maps each
    piece straight into its :wb: keys. */
@@ -417,6 +428,8 @@ function disp(w,field){
 }
 /* Stage only exists for pressure wounds — that's the nurses' own rule ("if pressure, what stage"). */
 function isPressure(w){ return (Array.isArray(w.type)?w.type:[]).some(t=>/^Pressure/.test(t)); }
+// Same shape as isPressure, and for the same reason: the note gates Wagner grade on "If diabetic ulcer".
+function isDiabetic(w){ return (Array.isArray(w.type)?w.type:[]).some(t=>/^Diabetic/.test(t)); }
 
 /* ---------- round header ---------- */
 /* Facility + Provider are DROPDOWNS (same reason as the composer, 2026-07-17): free-typing
@@ -779,7 +792,7 @@ function setW(i,f,val){
   /* Categorical selects re-render: Type toggles the Stage question, and any of them may now
      read "Other" (which reveals its free-text box) or leave it. Selects don't lose focus, so a
      repaint is safe here. */
-  if(['type','stage','drain','odor','status'].indexOf(f)>=0){ render(); return; }
+  if(['type','stage','wagner','drain','odor','status'].indexOf(f)>=0){ render(); return; }
   /* Size inputs are TEXT — never re-render (would drop the keyboard). Just refresh the live calc. */
   if(f==='l'||f==='w'||f==='d'){ const el=document.getElementById('calc_'+i); if(el) el.textContent=calcText(p.wounds[i]); }
 }
@@ -907,6 +920,7 @@ function woundHTML(w,i){
     + multiField(i,w,'type',WOUND_TYPES)
 
     + (isPressure(w) ? '<label>Stage</label>'+selField(i,w,'stage',STAGES) : '')
+    + (isDiabetic(w) ? '<label>Wagner grade</label>'+selField(i,w,'wagner',WAGNER) : '')
 
     + '<label>Size (cm)</label>'
     + '<div class="dims">'
@@ -2778,6 +2792,13 @@ async function carryForward(){
         type: Array.isArray(w.type)?w.type.slice():[],
         typeOther: w.typeOther||'',
         stage: w.stage||'',
+        stageOther: w.stageOther||'',
+        // Classification, not a weekly finding - it carries exactly as stage does. This rebuild is
+        // field-by-field through newWound(), so anything not named here is silently lost next week -
+        // which is why the *Other free text has to be named too, or next week's card opens showing
+        // "Other" with an empty box and the pull then writes nothing for the field at all.
+        wagner: w.wagner||'',
+        wagnerOther: w.wagnerOther||'',
         // flat snapshot — never a copy of the whole wound, or next week would nest priors forever
         prior:{ date:String(rec.date||'').slice(0,10),
                 l:w.l||'', w:w.w||'', d:w.d||'',
