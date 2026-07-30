@@ -894,10 +894,39 @@ function rcApplyByCardNum(S, priorList, cardWounds, edu){
      wid. A prior wound with no match on the card (a healed one the card has dropped) keeps its own key
      and still carries — Scott, 2026-07-29: "a resolved wound should carry into the note." */
   const byNum={}; (cardWounds||[]).forEach(cw=>{ const n=Number(cw&&cw.num)||0; if(n) byNum[n]=cw; });
+  const claimed={};
   (priorList||[]).forEach(pw=>{
     const n=Number(pw&&pw.num)||0;
-    if(n && byNum[n]){ const target=_rcWidFor(byNum[n]); if(target){ _rcAdoptPriorWid(pw.wid, target); pw.wid=target; } }
+    if(n && byNum[n]){ const target=_rcWidFor(byNum[n]); if(target){ _rcAdoptPriorWid(pw.wid, target); pw.wid=target; claimed[target]=1; } }
   });
+  /* REPAIRING WHAT ALREADY DRIFTED. A prior wound with NO number on the card is one of two things,
+     and until now they were indistinguishable — so a stray printed as a phantom extra wound:
+       - a HEALED wound the card has dropped. It carries, holding its number. Scott's rule.
+       - a wound mis-numbered by one of the defects fixed on 2026-07-30, whose real counterpart IS on
+         the card under a different number. Charting it separately gives one piece of anatomy two wound
+         blocks in the same note — which is the damage that has been carrying week to week.
+     Location tells them apart, and only when it is CERTAIN: an exact/contained match to a card wound
+     that this prior list has not already claimed. Anything less is left alone and reported rather than
+     guessed — a wrong merge would delete a real wound from a chart, which is far worse than a stray. */
+  const strays=[];
+  (priorList||[]).forEach(pw=>{
+    const n=Number(pw&&pw.num)||0;
+    if(!pw || (n && byNum[n]) || pw.resolved) return;   // matched, or a healed wound that rightly carries
+    let hit=null, ties=0;
+    (cardWounds||[]).forEach(cw=>{
+      const t=_rcWidFor(cw); if(!t || claimed[t]) return;
+      /* EXACT location only. Containment ("heel" ⊆ "right heel") is enough to SUGGEST a match but not
+         to MERGE two wounds in a chart — it is the same laterality trap rcMatchWounds already refuses
+         to auto-confirm, and here the cost of being wrong is a real wound disappearing from a note
+         rather than a reconcile prompt. */
+      if(_rcLocScore(pw.location, cw.loc)===1){ ties++; hit=t; }
+    });
+    if(hit && ties===1){ _rcAdoptPriorWid(pw.wid, hit); pw.wid=hit; claimed[hit]=1;
+      strays.push('folded a stray onto '+hit+' (was number '+n+')'); }
+    else if(!pw.resolved) strays.push('prior wound '+n+' is on no card wound and is not healed — left in place');
+  });
+  if(strays.length){ try{ const _p=activePt(); if(_p) (_p.numWarnings=_p.numWarnings||[]).push(strays.join('; '));
+    if(typeof console!=='undefined'&&console.warn) console.warn('wound carry-over: '+strays.join('; ')); }catch(e){} }
   (priorList||[]).forEach(pw=>{ const k=String(pw.wid); if(!seenW[k]){ seenW[k]=1; order.push(pw.wid); } });
   const W=S['__rcw']=(S['__rcw']&&typeof S['__rcw']==='object')?S['__rcw']:{};
   const ordLines=[];
