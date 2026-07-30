@@ -810,19 +810,94 @@ function woundMeta(wid, p){ p=p||activePt(); const R=wreg(p); woundNum(wid,p); r
    the same key by construction — no matching, no confidence, no reconcile screen. A committed number is
    never overwritten: the chart wins over a card that disagrees. */
 function _rcWidFor(w){ const n=Number(w&&w.num)||0; return n?('c'+n):null; }
+/* Record a card-over-chart correction. Kept on the patient so the UI can show it and a test can assert
+   it — a silent correction is indistinguishable from a bug, which is the lesson of the last seven. */
+function _rcNumOverride(p, wid, was, now){
+  try{ if(!p) return; (p.numFixes=p.numFixes||[]).push({wid:String(wid), was:was, now:now});
+    if(typeof console!=='undefined'&&console.warn) console.warn('wound number corrected from the card: '+wid+' '+was+' -> '+now);
+  }catch(e){}
+}
 function woundNumFromCard(wid, n, p){ p=p||activePt(); const R=wreg(p); const k=String(wid);
   n=Number(n)||0;
   if(!n) return woundNum(wid,p);                       // legacy record with no number — fall back
   if(!R.byId[k]) R.byId[k]={ num:n, label:'', openedOn:(typeof todayISO==='function'?todayISO():''), resolvedOn:null };
-  else if(!R.byId[k].committed && R.byId[k].num!==n) R.byId[k].num=n;
+  else if(R.byId[k].num!==n){
+    /* THE CARD WINS, even over a number already committed to a chart. Scott, 2026-07-30, asked which
+       one is right and answered it in one word: "card ." Previously a committed entry silently kept its
+       own number, so once the two disagreed the card could never correct it and the note printed the
+       wrong number forever — with nothing anywhere telling anyone the two tools disagreed. It is
+       recorded now, because a correction nobody can see is how this went unnoticed for seven rounds. */
+    if(R.byId[k].committed) _rcNumOverride(p, k, R.byId[k].num, n);
+    R.byId[k].num=n;
+  }
   if(R.seq<=n) R.seq=n+1;                              // nothing else may reuse this number
   try{ persist(); }catch(e){}
   return R.byId[k].num;
 }
 // Seed the prior wounds, then lay each card wound onto the wid its own number names. Ordered by number,
 // so the note reads 1, 2, 3 regardless of the order the card happened to list them in.
+/* Fold a prior visit's wound onto the card wid its NUMBER names, so one wound has one key everywhere.
+   Without this, admitting legacy (numeric-wid) history to the numbered path would put prior wid 0 and
+   card wid c1 both in the note — a two-wound patient charting four. That was the real defect behind the
+   "backfill", and it is why this reconcile, not the old wid-shape gate, is the safe way to migrate.
+   Everything keyed by the old wid moves with it: the registry entry (keeping committed/openedOn, so the
+   chart's history is preserved) and the prior-visit block the provider measures against. */
+function _rcAdoptPriorWid(oldWid, newWid, p){
+  p=p||activePt(); const R=wreg(p); const ok=String(oldWid), nk=String(newWid);
+  if(ok===nk) return;
+  const e=R.byId[ok];
+  if(e && !R.byId[nk]){ R.byId[nk]=e; }
+  else if(e && R.byId[nk]){                            // both exist — keep the chart's history on the survivor
+    if(e.committed) R.byId[nk].committed=true;
+    if(e.committedHere) R.byId[nk].committedHere=true;
+    if(e.openedOn && !R.byId[nk].openedOn) R.byId[nk].openedOn=e.openedOn;
+    if(e.resolvedOn && !R.byId[nk].resolvedOn) R.byId[nk].resolvedOn=e.resolvedOn;
+  }
+  if(e) delete R.byId[ok];
+  try{ const v=_whPrior && _whPrior.visit;              // the prior block must follow, or it reads blank
+    if(v && v.wounds && v.wounds[ok] && !v.wounds[nk]){ v.wounds[nk]=v.wounds[ok]; delete v.wounds[ok]; }
+  }catch(e2){}
+}
+/* THE INVARIANT, CHECKED IN THE APP AND NOT ONLY IN A TEST.
+   Every path that builds a note now ends here: the number each wound will PRINT must equal the number
+   the card issued, and for a card-owned wound its own key must decode to that same number. Tests only
+   cover the paths someone thought to write; this covers the ones nobody did — including whatever gets
+   added next. It reports rather than throws, because refusing to open a note at the bedside would be
+   worse than a wrong number, but the disagreement is no longer invisible, which is the whole reason
+   this drifted for seven rounds without anyone being able to point at it. */
+function _rcAssertNumbers(orderWids, cardWounds, p){
+  try{
+    p=p||activePt(); if(!p) return true;
+    const want={}; (cardWounds||[]).forEach(cw=>{ const w=_rcWidFor(cw); if(w) want[w]=Number(cw.num)||0; });
+    const bad=[]; const seen={};
+    (orderWids||[]).forEach(wid=>{
+      const k=String(wid), got=woundNum(wid,p);
+      if(seen[got]) bad.push('number '+got+' used by two wounds ('+seen[got]+' and '+k+')');
+      seen[got]=k;
+      if(want[k] && want[k]!==got) bad.push(k+' prints '+got+' but the card says '+want[k]);
+      const dec=_rcNumOfCardWid(k);                    // the key IS the number for a card wound
+      if(dec && dec!==got) bad.push(k+' decodes to '+dec+' but prints '+got);
+    });
+    if(bad.length){
+      (p.numWarnings=p.numWarnings||[]).push(bad.join('; '));
+      if(typeof console!=='undefined'&&console.error) console.error('WOUND NUMBERS DISAGREE WITH THE CARD: '+bad.join('; '));
+      if(typeof toast==='function') toast('Wound numbers disagree with the round card — check before copying');
+      return false;
+    }
+  }catch(e){}
+  return true;
+}
 function rcApplyByCardNum(S, priorList, cardWounds, edu){
   const order=[]; const seenW={};
+  /* Reconcile FIRST: any prior wound whose number matches a card wound is the SAME wound, so it adopts
+     the card's key. Only then is it safe to seed, because after this no prior wid can duplicate a card
+     wid. A prior wound with no match on the card (a healed one the card has dropped) keeps its own key
+     and still carries — Scott, 2026-07-29: "a resolved wound should carry into the note." */
+  const byNum={}; (cardWounds||[]).forEach(cw=>{ const n=Number(cw&&cw.num)||0; if(n) byNum[n]=cw; });
+  (priorList||[]).forEach(pw=>{
+    const n=Number(pw&&pw.num)||0;
+    if(n && byNum[n]){ const target=_rcWidFor(byNum[n]); if(target){ _rcAdoptPriorWid(pw.wid, target); pw.wid=target; } }
+  });
   (priorList||[]).forEach(pw=>{ const k=String(pw.wid); if(!seenW[k]){ seenW[k]=1; order.push(pw.wid); } });
   const W=S['__rcw']=(S['__rcw']&&typeof S['__rcw']==='object')?S['__rcw']:{};
   const ordLines=[];
@@ -836,6 +911,7 @@ function rcApplyByCardNum(S, priorList, cardWounds, edu){
       ordLines.push(line); W['__ap:w'+wid]=line; }
   });
   order.sort((a,b)=>woundNum(a)-woundNum(b));
+  _rcAssertNumbers(order, cardWounds);
   S['__wc_1']=order;
   if(String(edu||'').trim()) W['__ap:edu']='Additional info / education: '+String(edu).trim();
   _rcSetAP(S, _rcComposeAP(ordLines, edu));
@@ -855,9 +931,27 @@ function _rcAllNumbered(cardWounds){ return !!(cardWounds && cardWounds.length &
    WoundHistory, and from that visit on the fast path takes over. No vault read from the card, and no
    data correction to anyone's records. */
 function _rcCardWid(wid){ return /^c\d+$/.test(String(wid)); }
+/* THE NUMBER A CARD WID CARRIES. For a card-linked wound the key IS the number — c4 is Wound 4 — so
+   identity and number are ONE fact stored ONCE and cannot drift apart. That is the whole repair. */
+function _rcNumOfCardWid(wid){ const m=/^c(\d+)$/.exec(String(wid)); return m?Number(m[1]):0; }
+/* ONE PREDICATE FOR "THIS NUMBER MAY NEVER BE REASSIGNED", used by every site that could move a number.
+   Scott, 2026-07-30, after this drifted for the seventh time: "how do we sync these im tired of going
+   back and forth on it." It kept coming back because each site had its OWN idea of what was safe to
+   renumber — compactWoundNums tested `committed`, releaseWoundNum tested `committedHere`, and neither
+   had heard of the card. A card-owned wound is pinned no matter what those flags say. */
+function _rcPinned(k, e){ return !!(e && (e.committed || e.committedHere)) || _rcCardWid(k); }
+/* Can the card's numbers be trusted as identity for this patient?
+   It used to demand every prior wid be card-SHAPED (c<n>), which is a proxy for the real question and a
+   bad one: a patient whose history predates numbering — i.e. everyone mid-treatment — failed it forever
+   and fell to the location matcher, which is what printed Scott's card 1,2,4 as note 1,2,5.
+   The real question is whether every prior wound CARRIES A NUMBER. If it does, rcApplyByCardNum can
+   reconcile it onto the card wid by number and no duplicate is possible. Note `!=null` rather than a
+   truthiness test: a legacy wid can legitimately be the integer 0. */
 function _rcNumberedSafe(cardWounds, priorList){
   if(!_rcAllNumbered(cardWounds)) return false;
-  return !(priorList||[]).length || (priorList||[]).every(pw=>_rcCardWid(pw&&pw.wid));
+  return !(priorList||[]).length ||
+    (priorList||[]).every(pw=>pw && pw.wid!=null && String(pw.wid)!=='' &&
+      (_rcCardWid(pw.wid) || Number(pw.num)>0));
 }
 // Free a wound's DISPLAY number when it's deleted before ever being committed (Scott, 2026-07-19: "a wound
 // shouldn't be stricken until it's committed"). Refined 2026-07-21 (Scott): deleting a never-committed wound
@@ -871,7 +965,8 @@ function _rcNumberedSafe(cardWounds, priorList){
 function releaseWoundNum(wid, p){ p=p||activePt(); const R=wreg(p); const k=String(wid); const e=R.byId[k];
   // Committed IN THIS SESSION (committedHere): the number is already in today's chart — never freed or moved.
   if(!e || e.committedHere) return null;
-  const wasCommitted=!!e.committed;
+  // A card-owned number is an identity the moment the card mints it — never freed, never handed on.
+  const wasCommitted=_rcPinned(k, e);
   const delNum=e.num||0;
   delete R.byId[k];
   if(wasCommitted){
@@ -909,8 +1004,13 @@ function _rcStripApLines(p, num){ if(!num) return false; let changed=false;
 // byId, but its number stays part of the chart's history.
 function compactWoundNums(p){ p=p||activePt(); const R=wreg(p);
   let base=R.committedMax||0;
-  Object.keys(R.byId).forEach(k=>{ const e=R.byId[k]; if(e&&e.committed) base=Math.max(base, e.num||0); });
-  const un=Object.keys(R.byId).filter(k=>!(R.byId[k]&&R.byId[k].committed))
+  /* _rcPinned, not `.committed`. A card-owned wound's number was minted at the bedside and is already
+     on the nurse's orders sheet, so compaction must treat it as immovable even before it is committed —
+     otherwise one Remove in the note slides the survivors down and the note starts printing numbers the
+     card never issued. Both lines must use the SAME predicate: pinning a wound without also lifting the
+     high-water mark past it lets a hand-added wound compact straight onto a pinned number. */
+  Object.keys(R.byId).forEach(k=>{ const e=R.byId[k]; if(_rcPinned(k,e)) base=Math.max(base, e.num||0); });
+  const un=Object.keys(R.byId).filter(k=>!_rcPinned(k, R.byId[k]))
     .sort((a,b)=>((R.byId[a].num||0)-(R.byId[b].num||0)));
   const ren={};                                        // oldNum -> newNum
   un.forEach((k,i)=>{ const e=R.byId[k]; const want=base+1+i;
@@ -1096,14 +1196,17 @@ function _isResolvedStatus(s){
   if(/\bnot\s+healed\b/.test(s)) return false;          // "not healed" is the OPPOSITE claim
   return s==='healed' || s==='resolved';
 }
-/* Which wids a fresh follow-up opens with: every prior wound that is not resolved.
-   ⚠ Scott's 2026-07-29 rule is that a resolved wound DOES carry forward, marked resolved and holding
-   its number. That is NOT built yet - the filter below still drops it. Written as a warning rather
-   than as a claim, because a comment describing an intended end state as though it were current
-   behaviour is the exact mistake that hid the Healed bug for three days. */
+/* Which wids a fresh follow-up opens with: EVERY prior wound, resolved ones included, in number order.
+   Scott's 2026-07-29 rule — a resolved wound carries forward marked resolved and holding its number —
+   is built now. It used to be a filter that DROPPED healed wounds, which is what printed a card showing
+   1,2,3,4,5 as "Wound 1, Wound 2, Wound 5": the numbers were spent but the blocks were never rendered.
+   _isResolvedStatus is a LABEL, not an exclusion. Its only job is to mark; whoever hides a wound on the
+   strength of it reintroduces the gap. Ordering is by permanent number, not by Object.keys insertion
+   order, or the note reads in whatever sequence the history file happened to be written. */
 function whSeedIds(){
   const v=_whPrior && _whPrior.visit; if(!v || !v.wounds) return null;
-  const ids=Object.keys(v.wounds).filter(wid=>!_isResolvedStatus(v.wounds[wid].status));
+  const ids=Object.keys(v.wounds)
+    .sort((a,b)=>((Number(v.wounds[a]&&v.wounds[a].num)||woundNum(a))-(Number(v.wounds[b]&&v.wounds[b].num)||woundNum(b))));
   return ids.length?ids:null;
 }
 function whPriorFor(wid){ const v=_whPrior&&_whPrior.visit; return (v&&v.wounds&&v.wounds[String(wid)])||null; }
@@ -2479,13 +2582,24 @@ function rcApplyMapping(S, priorList, cardWounds, mapping, edu){
   const ordLines=[];
   const W=S['__rcw']=(S['__rcw']&&typeof S['__rcw']==='object')?S['__rcw']:{};
   (cardWounds||[]).forEach((cw,ci)=>{
+    /* TAKE THE CARD'S NUMBER. This branch used to call woundNum(wid), which reads the note's OWN
+       counter and never looks at cw.num — so a wound the matcher failed to recognise was stamped with
+       a number the card never showed. That is precisely what turned Scott's card 1,2,4 into a note
+       reading 1,2,5. The matcher may still be wrong about IDENTITY here; it is not allowed to be the
+       author of a NUMBER. */
     let wid=mapping[ci];
-    if(wid==null){ wid=mintWid(); woundNum(wid); orderWids.push(wid); } else { woundNum(wid); }
+    const _cn=Number(cw&&cw.num)||0;
+    if(wid==null){ wid=(_cn && _rcWidFor(cw))||mintWid(); orderWids.push(wid); }
+    if(_cn) woundNumFromCard(wid, _cn); else woundNum(wid);
     _rcWriteWound(S, wid, cw);
     const o=String(cw.orders||'').trim();
     if(o){ const line='Wound '+woundNum(wid)+(String(cw.loc||'').trim()?' ('+String(cw.loc).trim()+')':'')+': '+o;
       ordLines.push(line); W['__ap:w'+wid]=line; }   // card-owned line — a later card edit may replace it
   });
+  // Number order, same as the numbered path — or the note reads in whatever order the matcher happened
+  // to return and the card's 1,2,4 prints as 2,4,1.
+  orderWids.sort((a,b)=>woundNum(a)-woundNum(b));
+  _rcAssertNumbers(orderWids, cardWounds);
   S['__wc_1']=orderWids;
   if(String(edu||'').trim()) W['__ap:edu']='Additional info / education: '+String(edu).trim();
   _rcSetAP(S, _rcComposeAP(ordLines, edu));
@@ -2530,10 +2644,14 @@ async function rcPrefill(rec){
   const edu=String(rec.edu||'').trim();
 
   if(nt==='fu' && pv && pv.wounds){
-    // Carry-forward: seed every UNHEALED prior wound (reuse its wid -> permanent number + prior block).
+    /* Carry-forward: seed EVERY prior wound — healed ones too — reusing its wid, so it keeps its
+       permanent number and its prior block. The filter that used to drop resolved wounds here did more
+       damage than leave a gap: with the wound hidden from the list, rcMatchWounds below scored the
+       card's continuing wound against nothing, declared it brand new, and minted it a SECOND number.
+       Card 1,2,3,4,5 charted as 1,2,5,6,7 — one piece of anatomy carrying two numbers. */
     const priorList=Object.keys(pv.wounds)
-      .filter(k=>!_isResolvedStatus(pv.wounds[k].status))
-      .map(k=>{ const wid=isNaN(+k)?k:+k; return {wid, location:pv.wounds[k].location||'', num:(pv.wounds[k].num||woundNum(wid))}; })
+      .map(k=>{ const wid=isNaN(+k)?k:+k; return {wid, location:pv.wounds[k].location||'',
+        num:(pv.wounds[k].num||woundNum(wid)), resolved:_isResolvedStatus(pv.wounds[k].status)}; })
       .sort((a,b)=>(a.num||0)-(b.num||0));
     priorList.forEach(pw=>woundNum(pw.wid));
     /* THE CARD NUMBERED THEM, SO THERE IS NOTHING TO GUESS. Identity comes from the number, the wid is
