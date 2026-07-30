@@ -320,6 +320,13 @@ function normalizePts(o){
        collides the moment a wound has been deleted: {num 2} plus a new wound would hand the new one
        index 1+1=2, a number already in this patient's chart. A legacy record where nothing is numbered
        still comes out 1,2,3 because seq starts at 0 — same answer, without the collision. */
+    /* KEEP THE LIST IN NUMBER ORDER. Scott hit a real handoff sheet printing "Wound 2" above
+       "Wound 1". Everything that renders wounds — the card, the sheet text, the .doc — walks the
+       array, and once the label is a permanent NUMBER rather than the array index, array order and
+       number order can disagree. Sorting here, in the one place every load path already funnels
+       through, means they never can. A new wound always takes the highest number, so it still lands
+       at the bottom of the list where the provider expects it. */
+    p.wounds.sort((a,b)=>(Number(a&&a.num)||0)-(Number(b&&b.num)||0));
   });
 }
 /* WHAT WE KNOW IS ALREADY IN THE VAULT, persisted alongside the round.
@@ -817,6 +824,13 @@ function setVisitType(v){ const p=activePt(); if(!p) return; p.visitType=v; save
 
 /* ---------- wounds ---------- */
 function addWound(){ const p=activePt(); if(!p) return;
+  /* NUMBER WHAT IS ALREADY THERE FIRST. A patient loaded from a record saved before wound numbers
+     existed arrives with no `num` and no `woundSeq` — so taking the next number straight away handed
+     the BRAND NEW wound number 1, and left the older wound to be numbered 2 when normalizePts next
+     ran. The newer wound with the lower number, and the sheet printing "Wound 2" above "Wound 1".
+     That is not hypothetical: Scott found it on a real handoff sheet, 2026-07-30.
+     normalizePts lifts woundSeq above every wound already present, so the new one is always highest. */
+  normalizePts(S);
   // One past the HIGH-WATER MARK, never wounds.length+1. A number that has been used is spent for this
   // patient forever, even if that wound has since been removed or resolved.
   p.woundSeq=(Number(p.woundSeq)||0)+1;
