@@ -559,12 +559,12 @@ L: *** cm W: *** cm D: *** cm
 Surface area (auto): *** cm²
 Volume (auto): *** cm³
 Etiology/classification: [pressure injury / diabetic ulcer / venous / arterial / surgical / traumatic / MASD / other].
-If pressure injury → Stage: [1 / 2 / 3 / 4 / unstageable / DTI].
-If diabetic ulcer → Wagner grade: [0 / 1 / 2 / 3 / 4 / 5].
-Status: [new/not healed/improving/stable/worsening/healed].
+If pressure injury → Stage: [1 / 2 / 3 / 4 / unstageable / DTI / other].
+If diabetic ulcer → Wagner grade: [0 / 1 / 2 / 3 / 4 / 5 / other].
+Status: [new/not healed/improving/stable/worsening/healed/other].
 Wound bed: [ ]% granulation, [ ]% slough, [ ]% eschar, [ ]% epithelialization, [ ]% fibrin/exudate, [ ]% exposed structure.
 Exposed structures: [none/subcutaneous tissue/tendon/muscle/bone/hardware].
-Drainage: [none/scant/small/moderate/large], color [ ], consistency [thin/thick], odor [none/mild/strong].
+Drainage: [none/scant/small/moderate/large/other], color [ ], consistency [thin/thick], odor [none/mild/strong/other].
 Undermining: [none/present from clock position/depth].
 Tunneling/sinus tract: [none/present location/depth].
 Periwound: [normal/macerated/erythematous/indurated/ecchymotic/callused/fluctuant/warm/tender].`],
@@ -629,12 +629,12 @@ L: *** cm W: *** cm D: *** cm
 Surface area (auto): *** cm²
 Volume (auto): *** cm³
 Etiology/classification: [pressure injury / diabetic ulcer / venous / arterial / surgical / traumatic / MASD / other].
-If pressure injury → Stage: [1 / 2 / 3 / 4 / unstageable / DTI].
-If diabetic ulcer → Wagner grade: [0 / 1 / 2 / 3 / 4 / 5].
-Status: [new/not healed/improving/stable/worsening/healed].
+If pressure injury → Stage: [1 / 2 / 3 / 4 / unstageable / DTI / other].
+If diabetic ulcer → Wagner grade: [0 / 1 / 2 / 3 / 4 / 5 / other].
+Status: [new/not healed/improving/stable/worsening/healed/other].
 Wound bed: [ ]% granulation, [ ]% slough, [ ]% eschar, [ ]% epithelialization, [ ]% fibrin/exudate, [ ]% exposed structure.
 Exposed structures: [none/subcutaneous tissue/tendon/muscle/bone/hardware].
-Drainage: [none/scant/small/moderate/large], color [ ], consistency [thin/thick], odor [none/mild/strong].
+Drainage: [none/scant/small/moderate/large/other], color [ ], consistency [thin/thick], odor [none/mild/strong/other].
 Undermining: [none/present from clock position/depth].
 Tunneling/sinus tract: [none/present location/depth].
 Periwound: [normal/macerated/erythematous/indurated/ecchymotic/callused/fluctuant/warm/tender].`],
@@ -1016,11 +1016,35 @@ async function whRefreshPrior(){
   finally{ _whLoading=false; }
   return _whPrior;
 }
-// Which wids a fresh follow-up should open with: every wound from the prior visit that is NOT healed.
-// A healed wound stops carrying forward and its number is retired permanently.
+/* IS THIS WOUND RESOLVED? One predicate, used everywhere, because the naive test is wrong.
+   Two sites used to ask this with an inline `/healed|resolved/i`, which reads "NOT HEALED" as healed -
+   the substring is right there. The card's Status list gained 'Not healed' on 2026-07-29 (the note has
+   always offered it), so the inline test would have retired a wound the provider had just said was
+   still open. That is the worst direction to be wrong in: the wound stops carrying forward and its
+   number is spent, silently.
+   Deliberately a shared function rather than a repeated regex - the same copy-paste is exactly how the
+   PHI judge ended up pasted into ten scripts with only two of them fixed. */
+/* EXACT match on the controlled words, not a substring search. My first version of this asked
+   /\bhealed\b/ with a "not healed" rescue, and an adversarial review measured what that does once the
+   Status box can hold free text: "nearly healed", "not fully healed yet" and "mostly healed except a
+   small area" all came back RESOLVED. Both callers then drop the wound and spend its permanent number -
+   on a wound the provider had just said was still open. Verified against the shipped predicate before
+   changing it.
+   Matches what the Round Card already does (Round-Card.html, carry-forward). Trailing period stripped
+   because the stored status is harvested out of the resolved note text, which ends the sentence. */
+function _isResolvedStatus(s){
+  s=String(s||'').trim().toLowerCase().replace(/[.\s]+$/,'');
+  if(/\bnot\s+healed\b/.test(s)) return false;          // "not healed" is the OPPOSITE claim
+  return s==='healed' || s==='resolved';
+}
+/* Which wids a fresh follow-up opens with: every prior wound that is not resolved.
+   ⚠ Scott's 2026-07-29 rule is that a resolved wound DOES carry forward, marked resolved and holding
+   its number. That is NOT built yet - the filter below still drops it. Written as a warning rather
+   than as a claim, because a comment describing an intended end state as though it were current
+   behaviour is the exact mistake that hid the Healed bug for three days. */
 function whSeedIds(){
   const v=_whPrior && _whPrior.visit; if(!v || !v.wounds) return null;
-  const ids=Object.keys(v.wounds).filter(wid=>!/healed|resolved/i.test(String(v.wounds[wid].status||'')));
+  const ids=Object.keys(v.wounds).filter(wid=>!_isResolvedStatus(v.wounds[wid].status));
   return ids.length?ids:null;
 }
 function whPriorFor(wid){ const v=_whPrior&&_whPrior.visit; return (v&&v.wounds&&v.wounds[String(wid)])||null; }
@@ -2297,10 +2321,23 @@ function doReassign(){
    follow-up carry-forward uses), auto-creates the patient, and pre-fills the wound
    fields. It's a HEAD START — the provider completes the full note. */
 const _RC_ETIO={ 'Pressure injury':'pressure injury','Diabetic ulcer':'diabetic ulcer','Venous':'venous','Arterial':'arterial','Surgical':'surgical','Traumatic':'traumatic','MASD':'MASD','Other':'other' };
-const _RC_STAGE={ 'Stage 1':'1','Stage 2':'2','Stage 3':'3','Stage 4':'4','Unstageable':'unstageable','DTI':'DTI' };
-const _RC_STATUS={ 'Improving':'improving','Stable':'stable','Worsening':'worsening' };
-const _RC_DRAIN={ 'None':'none','Scant':'scant','Small':'small','Moderate':'moderate','Large':'large' };
-const _RC_ODOR={ 'None':'none','Mild':'mild','Strong':'strong' };
+/* 'Other' is on every one of these because selField (Round-Card.html) APPENDS it to any list lacking
+   one, so the provider can pick it whether we planned for it or not. The key is exactly 'Other' with a
+   capital O - that is the literal string selField appends, so it is what lands on the wound. Scott's
+   call, 2026-07-29: rather than take the escape hatch off the card, give the note somewhere to put it.
+   Each of these five now also has a ':fill' sink in _rcWriteWound for the typed text. */
+const _RC_STAGE={ 'Stage 1':'1','Stage 2':'2','Stage 3':'3','Stage 4':'4','Unstageable':'unstageable','DTI':'DTI','Other':'other' };
+// Wagner grade — the card gained this field 2026-07-29; the note has always had the box (:6).
+const _RC_WAGNER={ '0':'0','1':'1','2':'2','3':'3','4':'4','5':'5','Other':'other' };
+/* 'Healed' was added to the card's STATUS list on 2026-07-26 and this table was not updated, so
+   `if(_RC_STATUS[w.status])` below was false and a wound marked Healed at the bedside reached the note
+   with NO status at all - silently. That blank then went into WoundHistory, so the carry-forward filter
+   (/healed|resolved/i) never matched it and the healed wound came back as an active wound every week
+   after, while the card had already dropped it. Same root cause as the wound-number drift.
+   wound-contract-test.js now compares both files' option lists so this cannot drift again. */
+const _RC_STATUS={ 'New':'new','Not healed':'not healed','Improving':'improving','Stable':'stable','Worsening':'worsening','Healed':'healed','Other':'other' };
+const _RC_DRAIN={ 'None':'none','Scant':'scant','Small':'small','Moderate':'moderate','Large':'large','Other':'other' };
+const _RC_ODOR={ 'None':'none','Mild':'mild','Strong':'strong','Other':'other' };
 const _RC_EXPOSED={ 'None':'none','Subcutaneous tissue':'subcutaneous tissue','Tendon':'tendon','Muscle':'muscle','Bone':'bone','Hardware':'hardware' };
 const _RC_PERIWOUND={ 'Normal':'normal','Macerated':'macerated','Erythematous':'erythematous','Indurated':'indurated','Ecchymotic':'ecchymotic','Callused':'callused','Fluctuant':'fluctuant','Warm':'warm','Tender':'tender' };
 /* Match the Round Card's own folder sanitizer (cleanSeg) so we read the same path it wrote. */
@@ -2402,10 +2439,29 @@ function _rcWriteWound(S, wid, w, opts){
   const types=Array.isArray(w.type)?w.type:(w.type?[w.type]:[]);
   const ets=types.map(t=>_RC_ETIO[t]).filter(Boolean);
   if(ets.length){ setK(P+':4',ets); if(ets.indexOf('other')>=0 && String(w.typeOther||'').trim()) setK(P+':4:fill',String(w.typeOther).trim()); }
-  if(types.some(t=>/^Pressure/.test(t)) && _RC_STAGE[w.stage]) setK(P+':5',_RC_STAGE[w.stage]);
-  if(_RC_STATUS[w.status]) setK(P+':7',_RC_STATUS[w.status]);
-  if(_RC_DRAIN[w.drain])   setK(P+':9',_RC_DRAIN[w.drain]);
-  if(_RC_ODOR[w.odor])     setK(P+':12',_RC_ODOR[w.odor]);
+  /* All five of these dropdowns can come back as 'Other' with typed text, because selField appends that
+     option to any list lacking one whether we planned for it or not. The mapped value goes to :N and the
+     typed text to :N:fill - the same pairing etiology has always used at :4 / :4:fill.
+     ONE helper, not five near-identical blocks: repeated logic with one copy left unfixed is precisely
+     how the 'Healed' gap survived, and how the PHI judge ended up pasted into ten scripts.
+     Always setK, never a bare S[k]= : setK records the write in S['__rcw'], which is how a later bedside
+     correction is told apart from something the provider typed into the note herself.
+     The .trim() guard is load-bearing. Without it an empty box writes a bare 'other' PLUS an empty :fill
+     key, and an empty key in this store has already caused a draft-restore bug. With it, an empty box
+     writes only the bare 'other' and the note's specify box shows red - which is the right prompt, and
+     the note now drops the field cleanly rather than charting a dangling label. */
+  const setSel=(key, table, val, other)=>{
+    const mapped=table[val]; if(!mapped) return;
+    setK(P+':'+key, mapped);
+    if(mapped==='other' && String(other||'').trim()) setK(P+':'+key+':fill', String(other).trim());
+  };
+  // Stage and Wagner stay INSIDE their etiology gates, matching the note's own "If pressure injury →" /
+  // "If diabetic ulcer →" wording. Writing a stage onto a non-pressure wound is worse than losing text.
+  if(types.some(t=>/^Pressure/.test(t))) setSel('5',  _RC_STAGE,  w.stage,  w.stageOther);
+  if(types.some(t=>/^Diabetic/.test(t))) setSel('6',  _RC_WAGNER, w.wagner, w.wagnerOther);
+  setSel('7',  _RC_STATUS, w.status, w.statusOther);
+  setSel('9',  _RC_DRAIN,  w.drain,  w.drainOther);   // NOT drainageOther - setWOther builds <field>+'Other'
+  setSel('12', _RC_ODOR,   w.odor,   w.odorOther);
   const exps=(Array.isArray(w.exposed)?w.exposed:[]).map(x=>_RC_EXPOSED[x]).filter(Boolean); if(exps.length) setK(P+':8',exps);
   const pws=(Array.isArray(w.periwound)?w.periwound:[]).map(x=>_RC_PERIWOUND[x]).filter(Boolean); if(pws.length) setK(P+':17',pws);
   // Undermining/tunneling are free text on the Round Card -> the composer's "from" box (:13 undermining,
@@ -2418,6 +2474,12 @@ function _rcWriteWound(S, wid, w, opts){
   if(String(w.wbFib||'').trim())    setK(P+':wb:fib',String(w.wbFib).trim());
   if(String(w.wbEpi||'').trim())    setK(P+':wb:epi',String(w.wbEpi).trim());
   if(w.wbEschar==='yes'||w.wbEschar==='no') setK(P+':wb:eschar',w.wbEschar);
+  /* Wound bed "exposed structure" yes/no (:wb:exposed) — DERIVED, deliberately not a new bedside field.
+     The card already collects the far more specific Exposed structures checkbox list (:8), so asking
+     again as a yes/no would be a second tap for strictly less information. Anything other than "None"
+     means yes; "None" on its own means no; nothing ticked stays unanswered. Scott 2026-07-29. */
+  { const ex=Array.isArray(w.exposed)?w.exposed:[];
+    if(ex.length) setK(P+':wb:exposed', ex.some(x=>String(x).trim().toLowerCase()!=='none')?'yes':'no'); }
 }
 // Compose the A&P free text (orders per wound + patient education) — used by every pull path.
 function _rcComposeAP(ordLines, edu){
@@ -2616,7 +2678,7 @@ async function rcPrefill(rec){
   if(nt==='fu' && pv && pv.wounds){
     // Carry-forward: seed every UNHEALED prior wound (reuse its wid -> permanent number + prior block).
     const priorList=Object.keys(pv.wounds)
-      .filter(k=>!/healed|resolved/i.test(String(pv.wounds[k].status||'')))
+      .filter(k=>!_isResolvedStatus(pv.wounds[k].status))
       .map(k=>{ const wid=isNaN(+k)?k:+k; return {wid, location:pv.wounds[k].location||'', num:(pv.wounds[k].num||woundNum(wid))}; })
       .sort((a,b)=>(a.num||0)-(b.num||0));
     priorList.forEach(pw=>woundNum(pw.wid));
@@ -3268,7 +3330,12 @@ function renderLines(text, container, keyPrefix, opts){
       sink.push(()=>{ if(!sel.value) return tk.raw; if(!isFillOpt(sel.value)) return sel.value;
         const t=fillInp&&fillInp.value.trim();
         // "other" / "other: ***" -> emit ONLY the free text (no "other:" prefix); empty -> drop it entirely
-        if(/^other\b/i.test(sel.value)) return t || '';
+        /* Empty box -> behave EXACTLY like an unset dropdown (tk.raw, the line above), not like an
+           empty string. cleanForCopy strips a leftover bracket; it cannot strip a label whose value
+           vanished. The Drainage line is the proof: four tokens with literal text between them, so
+           returning '' charted "Drainage: none, odor." and "Drainage:, odor mild." An empty '' also
+           made the HPI line at :512 chart "It is believed to be secondary to." Both now drop cleanly. */
+        if(/^other\b/i.test(sel.value)) return t || tk.raw;
         // "Label: ***" (e.g. Family History "Known: ***") -> keep the label, drop the *** in place
         if(/\*\*\*/.test(sel.value)) return t ? sel.value.replace(/\*\*\*/, t)
           : sel.value.replace(/:?\s*\*\*\*\s*$/,'').replace(/\*\*\*/,'').trim();  // empty box -> drop the ***, no leftover placeholder
