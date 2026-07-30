@@ -288,6 +288,24 @@ const STATUS      = ['New','Not healed','Improving','Stable','Worsening','Healed
    Deliberately NOT carried forward: a debridement is something done at THIS visit, like the
    measurements, not a standing property of the wound. */
 const DEBRIDE     = ['Yes','No'];
+/* THE WHOLE PROCEDURES SECTION, at the bedside (provider request via Scott, 2026-07-30: "the questions
+   for that whole procedures section should now be added to the wound card... Same sections same
+   options"). Every list below is the note's own PROC() bracket group, in the note's own order, so an
+   answer maps straight across and the composer's tables only have to translate case.
+   Shown ONLY when Debridement = Yes, so an ordinary wound is untouched by any of it.
+   Two of the note's lines are deliberately absent: PRE-Debridement measurements, which the note
+   INHERITS from the exam L/W/D this card already collects, and Total Surface Area, which is
+   auto-calculated. Asking for either again would invite two different answers to one fact. */
+const PROC_TISSUE     = ['Slough','Eschar','Nonviable subcutaneous','Fibrin','Other'];
+const PROC_DEEPEST    = ['Epidermis','Dermis','Sq tissue','Fascia','Muscle','Bone'];
+const PROC_TYPE       = ['Sharp excisional','Selective'];
+const PROC_INSTRUMENT = ['Curette','Curved scissors','Scalpel','Forceps','Other'];
+const PROC_BLOODCTL   = ['Pressure','Suture ligation','Silver nitrate','Hemostatic agent','Electrocautery','None needed'];
+const PROC_CONSENT    = ['Yes','No'];
+const PROC_ANESTH     = ['Topical','Local lidocaine','None'];
+const PROC_CLEANSE    = ['Wound cleanser','Saline','Other'];
+const PROC_ENDPOINT   = ['Debrided to healthy bleeding tissue','Debrided to viable margins','Hemostasis achieved'];
+const PROC_TOLERANCE  = ['Tolerated well','Tolerated with discomfort','Procedure aborted'];
 
 /* ---------- state: sessionStorage only, wipes on tab close ---------- */
 const KEY = 'lavida_roundcard';
@@ -374,7 +392,12 @@ function toast(m){ const t=document.getElementById('toast'); t.textContent=m; t.
    by deleting the wound above it. Before today the card had no wound number at all — every "Wound N"
    was the array index at render time — so the note, which numbers by chart identity, could not help but
    disagree the moment anything healed. 0 means "not yet assigned"; normalizePts backfills it. */
-function newWound(){ return { num:0, loc:'', type:[], stage:'', wagner:'', l:'', w:'', d:'', drain:'', odor:'', status:'', wbGran:'', wbSlough:'', wbFib:'', wbEpi:'', wbEschar:'', exposed:[], periwound:[], undermining:'', tunneling:'', debride:'', orders:'' }; }
+/* The procedure fields all live on the wound, alongside everything else, so one wound is still one
+   object — the record shape, carry-forward and the composer's writer all keep working without a second
+   container to keep in step. They stay empty unless a debridement was actually done. */
+function newWound(){ return { num:0, loc:'', type:[], stage:'', wagner:'', l:'', w:'', d:'', drain:'', odor:'', status:'', wbGran:'', wbSlough:'', wbFib:'', wbEpi:'', wbEschar:'', exposed:[], periwound:[], undermining:'', tunneling:'', debride:'',
+  tissueRemoved:'', postL:'', postW:'', postD:'', deepest:'', debType:'', instrument:'', ebl:'', bloodCtl:'', consent:'', anesthesia:'', cleansing:'', endpoint:'', tolerance:'',
+  orders:'' }; }
 /* The number to SHOW. Falls back to position only for a wound that somehow reached a renderer without
    passing through normalizePts — display should never be blank, but the fallback is not an identity and
    must never be written back into the record. */
@@ -870,7 +893,10 @@ function setW(i,f,val){
   /* Categorical selects re-render: Type toggles the Stage question, and any of them may now
      read "Other" (which reveals its free-text box) or leave it. Selects don't lose focus, so a
      repaint is safe here. */
-  if(['type','stage','wagner','drain','odor','status','debride'].indexOf(f)>=0){ render(); return; }
+  /* Every categorical select repaints. `debride` reveals or hides the whole Procedures block, and each
+     procedure select may now read "Other" and need its free-text box — so they belong here too. */
+  if(['type','stage','wagner','drain','odor','status','debride',
+      'tissueRemoved','deepest','debType','instrument','bloodCtl','consent','anesthesia','cleansing','endpoint','tolerance'].indexOf(f)>=0){ render(); return; }
   /* Size inputs are TEXT — never re-render (would drop the keyboard). Just refresh the live calc. */
   if(f==='l'||f==='w'||f==='d'){ const el=document.getElementById('calc_'+i); if(el) el.textContent=calcText(p.wounds[i]); }
 }
@@ -984,6 +1010,55 @@ function useSameEdu(){
 }
 // A wound the provider has marked Healed. Scott 2026-07-30: "healed = resolved" — one word, one state.
 function isHealedWound(w){ return String(w&&w.status||'').trim().toLowerCase()==='healed'; }
+
+/* THE PROCEDURES BLOCK — the note's PROC() section, asked at the bedside, and ONLY once a debridement
+   has actually been recorded. Hidden entirely otherwise, so a wound nobody debrided is exactly as short
+   as it was before.
+   Hand-rolled selects rather than selField: selField appends an "Other" escape to every list, and most
+   of these lists have no "other" in the note, so it would silently discard whatever was typed — the
+   same defect that ate 'Healed' for three days. The three lists that DO have an "other" get their own
+   free-text box wired to <field>Other, matching the note's :fill sinks. */
+function procSel(i,w,field,list,label){
+  const cur=w[field]||'';
+  const hasOther=list.indexOf('Other')>=0;
+  let h='<label>'+esc(label)+'</label>'
+    + '<select onchange="setW('+i+',\''+field+'\',this.value)"><option value=""></option>'
+    + list.map(o=>'<option value="'+esc(o)+'"'+(o===cur?' selected':'')+'>'+esc(o)+'</option>').join('')
+    + '</select>';
+  if(hasOther && cur==='Other'){
+    h+='<input class="other-box" value="'+esc(w[field+'Other']||'')+'" placeholder="type it" '
+      +'oninput="setWOther('+i+',\''+field+'\',this.value)">';
+  }
+  return h;
+}
+function procHTML(w,i){
+  if(String(w&&w.debride||'')!=='Yes') return '';
+  return '<div class="card" style="margin-top:8px;border-left:3px solid var(--accent)">'
+    + '<div class="muted" style="font-size:11px;font-weight:650;letter-spacing:.4px;text-transform:uppercase;margin-bottom:6px">Procedure — wound '+wNum(w,i)+'</div>'
+    + procSel(i,w,'tissueRemoved',PROC_TISSUE,'Tissue type removed')
+    /* PRE-debridement measurements are NOT asked here: the note inherits them from the exam L/W/D
+       above, and the total surface area debrided is auto-calculated from them. Two boxes for one fact
+       is how two different answers get recorded. */
+    + '<label>POST-debridement size (cm)</label>'
+    + '<div class="dims">'
+    +   '<input inputmode="decimal" value="'+esc(w.postL||'')+'" placeholder="length" oninput="setW('+i+',\'postL\',this.value)">'
+    +   '<input inputmode="decimal" value="'+esc(w.postW||'')+'" placeholder="width"  oninput="setW('+i+',\'postW\',this.value)">'
+    +   '<input inputmode="decimal" value="'+esc(w.postD||'')+'" placeholder="depth"  oninput="setW('+i+',\'postD\',this.value)">'
+    + '</div>'
+    + '<div class="muted" style="font-size:11px;margin-top:2px">Pre-debridement size and the area debrided come from the measurements above.</div>'
+    + procSel(i,w,'deepest',PROC_DEEPEST,'Deepest tissue debrided')
+    + procSel(i,w,'debType',PROC_TYPE,'Type of debridement')
+    + procSel(i,w,'instrument',PROC_INSTRUMENT,'Instrument used')
+    + '<label>Estimated blood loss (mL)</label>'
+    + '<input inputmode="decimal" value="'+esc(w.ebl||'')+'" placeholder="e.g. 2" oninput="setW('+i+',\'ebl\',this.value)">'
+    + procSel(i,w,'bloodCtl',PROC_BLOODCTL,'Blood loss controlled via')
+    + procSel(i,w,'consent',PROC_CONSENT,'Consent — risks, benefits & alternatives discussed and agreed?')
+    + procSel(i,w,'anesthesia',PROC_ANESTH,'Anesthesia')
+    + procSel(i,w,'cleansing',PROC_CLEANSE,'Cleansing / prep')
+    + procSel(i,w,'endpoint',PROC_ENDPOINT,'Endpoint')
+    + procSel(i,w,'tolerance',PROC_TOLERANCE,'Tolerance of procedure')
+    + '</div>';
+}
 /* Rebuild one record's wounds for NEXT week's card. Pulled out of carryForward as a pure function
    because a mutation sweep proved the point: the card could go back to dropping healed wounds, or stop
    carrying their status, and every suite stayed green — nothing could reach this logic to test it.
@@ -1131,6 +1206,7 @@ function woundHTML(w,i){
     + '<select onchange="setW('+i+',\'debride\',this.value)"><option value=""></option>'
     +   DEBRIDE.map(o=>'<option value="'+esc(o)+'"'+(w.debride===o?' selected':'')+'>'+esc(o)+'</option>').join('')
     + '</select>'
+    + procHTML(w,i)
 
     + '<label>Orders</label>'
     + '<textarea placeholder="what the nurse should do — dressing, frequency, offloading, re-check" '
