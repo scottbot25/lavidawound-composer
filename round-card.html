@@ -145,6 +145,8 @@
     <div class="row no-print" style="gap:6px;margin-top:8px">
       <button class="tiny" id="cfBtn" onclick="carryForward()">⤴ Start from last visit</button>
       <button class="tiny" onclick="openRecentRounds()">↩ Load a recent round</button>
+      <!-- One patient, not the whole panel: the recovery path for someone who did not get pulled. -->
+      <button class="tiny" id="addPtBtn" onclick="openAddPatient()">＋ Add one patient</button>
       <!-- shown only at ?maintenance=1 (see the gate in the idle-lock block) -->
       <button class="tiny" id="maintBtn" style="display:none" onclick="purgePreview()">🧹 Clean up old records</button>
     </div>
@@ -185,6 +187,20 @@
     </div>
     <div class="muted" style="margin-top:6px">Your most recent rounds saved to ClinicalVault. Loading one replaces what’s on screen; re-saving updates the same round.</div>
     <div id="rrList" style="margin-top:10px"></div>
+  </div>
+</div>
+
+<!-- ADD ONE PATIENT — the recovery path when somebody did not come across with the rest.
+     Deliberately ADDITIVE: unlike "Load a recent round" this never replaces what is on screen, so it
+     is safe to reach for mid-round. -->
+<div class="modal" id="addPatient">
+  <div class="sheet">
+    <div class="row" style="justify-content:space-between">
+      <b>Add one patient from a recent visit</b>
+      <button class="tiny" onclick="closeAddPatient()">Close</button>
+    </div>
+    <div class="muted" style="margin-top:6px">Your patients at this building from the last 21 days, each at their own most recent visit. Adding one brings their wounds across with measurements blank — it does not touch anyone already on the round.</div>
+    <div id="addPatientBody" style="margin-top:10px"></div>
   </div>
 </div>
 
@@ -2985,6 +3001,120 @@ function closePurge(){ document.getElementById('purgeModal').classList.remove('o
    them because it is same-day and almost certainly yours, but reaching back weeks across a shared
    building is exactly how another provider's patients land on your card. */
 const CF_ACTIVE_DAYS=21;   // 3 weeks — covers a missed week plus a buffer (Scott 2026-07-26); retention (45d) sits above it
+/* WHO COULD COME BACK — shared by "Start from last visit" (all of them) and "Add one patient" (one).
+   Extracted rather than copied: the provider test, the 21-day window, the latest-record-per-patient
+   rule and the discharge drop are four separate correctness rules, and a second copy of them is a
+   second thing to forget when one changes. Returns the candidates sorted by name, plus the two counts
+   the caller needs in order to explain an empty result honestly. */
+async function _cfFetchCandidates(facRaw, okProv){
+  const token=await _vaultToken();
+  const {driveId}=await _vaultCtx(token);
+  const today=todayISO();
+  const cut=Date.now()-CF_ACTIVE_DAYS*24*3600*1000;
+  const activeFrom=(function(){ const d=new Date(); d.setDate(d.getDate()-CF_ACTIVE_DAYS); return d.toISOString().slice(0,10); })();
+  const files=(await _vaultList(token,driveId,'RoundCards/'+cleanSeg(facRaw)))
+    .filter(f=>/\.json$/i.test(f.name||''))
+    .filter(f=>{ const t=Date.parse(f.lastModifiedDateTime||''); return !isNaN(t) && t>=cut; });
+  const recs=(await Promise.all(files.map(f=>{
+    const dl=f['@microsoft.graph.downloadUrl'];
+    if(dl) return fetch(dl).then(r=>r.ok?r.json():null).catch(()=>null);
+    return _vaultReadJson(token,driveId,'RoundCards/'+cleanSeg(facRaw)+'/'+f.name).catch(()=>null);
+  }))).filter(Boolean);
+  // MY patients only, still active, each at their OWN latest visit strictly BEFORE today
+  const byPatient={};
+  let skippedOtherProvider=0;
+  recs.forEach(rec=>{
+    if(!rec || rec.schema!=='roundcard.v1') return;
+    const nm=((rec.patient&&rec.patient.name)||'').trim(); if(!nm) return;
+    const d=String(rec.date||'').slice(0,10);
+    if(!d || d>=today) return;                       // today's own round is not a "last visit"
+    if(d<activeFrom) return;                         // dormant — not on the panel any more
+    // allowBlank FALSE here: these become patients on the card without review (see _cardProvOk)
+    if(!_cardProvOk(rec, okProv, false)){ skippedOtherProvider++; return; }
+    const k=_cfNameKey(nm);
+    if(!byPatient[k] || d>String(byPatient[k].date||'').slice(0,10)) byPatient[k]=rec;
+  });
+  // AFTER latest-record selection, never during it — see _cfDropDischarged.
+  const dischargedDropped=_cfDropDischarged(byPatient);
+  const chosen=Object.keys(byPatient).map(k=>byPatient[k])
+    .sort((a,b)=>String((a.patient&&a.patient.name)||'').toLowerCase()
+                 .localeCompare(String((b.patient&&b.patient.name)||'').toLowerCase()));
+  return { chosen, skippedOtherProvider, dischargedDropped };
+}
+
+/* ============ ADD ONE PATIENT (Scott 2026-07-30) ====================================================
+   "add a button on the round card load a recent patient (so they dont have to pull every patient).
+   That'll add a use case if someone accidentally didnt get pulled. If they are already in the round
+   card just give them a banner that says they cant add this patient because they are already in the
+   round card."
+   The decision of what each row may do is a PURE function so it can be tested without a network or a
+   DOM — which is the only reason the "already on the card" rule can be asserted at all. */
+function _apRows(candidates, existing){
+  const have=new Set((existing||[]).map(p=>_cfNameKey((p&&p.name)||'')).filter(Boolean));
+  return (candidates||[]).map(rec=>{
+    const name=((rec.patient&&rec.patient.name)||'').trim();
+    const key=_cfNameKey(name);
+    return { key, name, date:String(rec.date||'').slice(0,10), rec,
+             already: !!key && have.has(key) };
+  });
+}
+let _apCache=[];
+function closeAddPatient(){ const m=document.getElementById('addPatient'); if(m) m.classList.remove('on'); }
+async function openAddPatient(){
+  const facRaw=(S.round.fac||'').trim();
+  if(!facRaw){ toast('Pick the facility first'); return; }
+  await _autoFillProvider();
+  const _pv=_cardProvSet(); const okProv=_pv.set; const who=_pv.who;
+  if(!okProv.size){ toast('Set the Provider first so it knows whose patients to look for'); return; }
+  const btn=document.getElementById('addPtBtn'); const lab=btn?btn.textContent:'';
+  if(btn){ btn.disabled=true; btn.textContent='Checking…'; }
+  try{
+    const { chosen, skippedOtherProvider } = await _cfFetchCandidates(facRaw, okProv);
+    _apCache=_apRows(chosen, S.pts);
+    const body=document.getElementById('addPatientBody');
+    if(!_apCache.length){
+      body.innerHTML='<div class="muted">'+esc(skippedOtherProvider
+        ? 'No recent visits for '+who+' at '+facRaw+' — the ones on file are another provider’s.'
+        : 'No visits for '+who+' at '+facRaw+' in the last '+CF_ACTIVE_DAYS+' days.')+'</div>';
+    } else {
+      body.innerHTML='<div id="apBanner"></div>'+_apCache.map((r,ix)=>
+        '<div class="w" style="display:flex;align-items:center;gap:10px;justify-content:space-between">'
+        + '<div><b>'+esc(r.name)+'</b><div class="muted" style="font-size:11px">last visit '+esc(r.date||'—')+'</div></div>'
+        + (r.already
+            ? '<span class="muted" style="font-size:11.5px">already on this round</span>'
+              + '<button class="tiny" onclick="addOnePatient('+ix+')">Why?</button>'
+            : '<button class="primary tiny" onclick="addOnePatient('+ix+')">Add</button>')
+        + '</div>').join('');
+    }
+    document.getElementById('addPatient').classList.add('on');
+  }catch(e){
+    toast('Couldn’t reach ClinicalVault'+(e&&e.message?' ('+e.message+')':''));
+  }finally{ if(btn){ btn.disabled=false; btn.textContent=lab||'＋ Add one patient'; } }
+}
+function addOnePatient(ix){
+  const r=_apCache[ix]; if(!r) return;
+  const bn=document.getElementById('apBanner');
+  /* THE BANNER, not a silent no-op and not a duplicate. Adding the same person twice would file two
+     records under one id-per-patient scheme and split their wounds across two cards. */
+  if(r.already){
+    if(bn) bn.innerHTML='<div class="warn" style="margin-bottom:8px"><b>'+esc(r.name)+'</b> is already on this round, '
+      + 'so they can’t be added again. Scroll to them in the patient list to keep charting.</div>';
+    return;
+  }
+  const built=cfRebuildWounds(r.rec);
+  S.pts.push({ id:newId(), name:r.name, edu:'', priorEdu:String(r.rec.edu||''),
+               wounds:built.wounds.length?built.wounds:[newWound()],
+               woundSeq:Number(r.rec.woundSeq)||0, send:true, visitType:'', dispo:'' });
+  normalizePts(S);
+  S.active=S.pts.length-1;
+  save(); render();
+  // Refresh the list in place so the row they just used now reads "already on this round".
+  _apCache=_apRows(_apCache.map(x=>x.rec), S.pts);
+  if(bn) bn.innerHTML='<div class="muted" style="margin-bottom:8px">Added <b>'+esc(r.name)+'</b> — measurements start blank.</div>';
+  const rowBtns=document.querySelectorAll('#addPatientBody .w button');
+  if(rowBtns[ix]){ rowBtns[ix].outerHTML='<span class="muted" style="font-size:11.5px">added</span>'; }
+}
+
 async function carryForward(){
   const facRaw=(S.round.fac||'').trim();
   if(!facRaw){ toast('Pick the facility first'); return; }
@@ -2996,38 +3126,7 @@ async function carryForward(){
   const btn=document.getElementById('cfBtn'); const lab=btn?btn.textContent:'';
   if(btn){ btn.disabled=true; btn.textContent='Checking…'; }
   try{
-    const token=await _vaultToken();
-    const {driveId}=await _vaultCtx(token);
-    const today=todayISO();
-    const cut=Date.now()-CF_ACTIVE_DAYS*24*3600*1000;
-    const activeFrom=(function(){ const d=new Date(); d.setDate(d.getDate()-CF_ACTIVE_DAYS); return d.toISOString().slice(0,10); })();
-    const files=(await _vaultList(token,driveId,'RoundCards/'+cleanSeg(facRaw)))
-      .filter(f=>/\.json$/i.test(f.name||''))
-      .filter(f=>{ const t=Date.parse(f.lastModifiedDateTime||''); return !isNaN(t) && t>=cut; });
-    const recs=(await Promise.all(files.map(f=>{
-      const dl=f['@microsoft.graph.downloadUrl'];
-      if(dl) return fetch(dl).then(r=>r.ok?r.json():null).catch(()=>null);
-      return _vaultReadJson(token,driveId,'RoundCards/'+cleanSeg(facRaw)+'/'+f.name).catch(()=>null);
-    }))).filter(Boolean);
-    // MY patients only, still active, each at their OWN latest visit strictly BEFORE today
-    const byPatient={};
-    let skippedOtherProvider=0;
-    recs.forEach(rec=>{
-      if(!rec || rec.schema!=='roundcard.v1') return;
-      const nm=((rec.patient&&rec.patient.name)||'').trim(); if(!nm) return;
-      const d=String(rec.date||'').slice(0,10);
-      if(!d || d>=today) return;                       // today's own round is not a "last visit"
-      if(d<activeFrom) return;                         // dormant — not on the panel any more
-      // allowBlank FALSE here: these become patients on the card without review (see _cardProvOk)
-      if(!_cardProvOk(rec, okProv, false)){ skippedOtherProvider++; return; }
-      const k=_cfNameKey(nm);
-      if(!byPatient[k] || d>String(byPatient[k].date||'').slice(0,10)) byPatient[k]=rec;
-    });
-    // AFTER latest-record selection, never during it — see _cfDropDischarged.
-    const dischargedDropped=_cfDropDischarged(byPatient);
-    const chosen=Object.keys(byPatient).map(k=>byPatient[k])
-      .sort((a,b)=>String((a.patient&&a.patient.name)||'').toLowerCase()
-                   .localeCompare(String((b.patient&&b.patient.name)||'').toLowerCase()));
+    const { chosen, skippedOtherProvider, dischargedDropped } = await _cfFetchCandidates(facRaw, okProv);
     if(!chosen.length){
       toast(skippedOtherProvider
         ? 'No recent visits for '+who+' at '+facRaw+' (the ones on file are another provider’s)'
