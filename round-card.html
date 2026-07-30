@@ -281,6 +281,13 @@ const PERIWOUND   = ['Normal','Macerated','Erythematous','Indurated','Ecchymotic
    The composer now asks `_isResolvedStatus()`, which excludes it explicitly. Do not replace that with
    a bare regex, in either file. */
 const STATUS      = ['New','Not healed','Improving','Stable','Worsening','Healed'];
+/* Debridement / procedure performed on this wound (Abby, 2026-07-30). Feeds the note's OWN per-wound
+   gate — "Procedure / debridement performed on this wound?" — rather than a parallel field, so the two
+   can never disagree. That gate is billing-relevant: the note prints the E&M time attestation only when
+   NO wound had a procedure, so a Yes here removes it, which is correct and is why it must be exact.
+   Deliberately NOT carried forward: a debridement is something done at THIS visit, like the
+   measurements, not a standing property of the wound. */
+const DEBRIDE     = ['Yes','No'];
 
 /* ---------- state: sessionStorage only, wipes on tab close ---------- */
 const KEY = 'lavida_roundcard';
@@ -360,7 +367,7 @@ function toast(m){ const t=document.getElementById('toast'); t.textContent=m; t.
    by deleting the wound above it. Before today the card had no wound number at all — every "Wound N"
    was the array index at render time — so the note, which numbers by chart identity, could not help but
    disagree the moment anything healed. 0 means "not yet assigned"; normalizePts backfills it. */
-function newWound(){ return { num:0, loc:'', type:[], stage:'', wagner:'', l:'', w:'', d:'', drain:'', odor:'', status:'', wbGran:'', wbSlough:'', wbFib:'', wbEpi:'', wbEschar:'', exposed:[], periwound:[], undermining:'', tunneling:'', orders:'' }; }
+function newWound(){ return { num:0, loc:'', type:[], stage:'', wagner:'', l:'', w:'', d:'', drain:'', odor:'', status:'', wbGran:'', wbSlough:'', wbFib:'', wbEpi:'', wbEschar:'', exposed:[], periwound:[], undermining:'', tunneling:'', debride:'', orders:'' }; }
 /* The number to SHOW. Falls back to position only for a wound that somehow reached a renderer without
    passing through normalizePts — display should never be blank, but the fallback is not an identity and
    must never be written back into the record. */
@@ -830,7 +837,7 @@ function setW(i,f,val){
   /* Categorical selects re-render: Type toggles the Stage question, and any of them may now
      read "Other" (which reveals its free-text box) or leave it. Selects don't lose focus, so a
      repaint is safe here. */
-  if(['type','stage','wagner','drain','odor','status'].indexOf(f)>=0){ render(); return; }
+  if(['type','stage','wagner','drain','odor','status','debride'].indexOf(f)>=0){ render(); return; }
   /* Size inputs are TEXT — never re-render (would drop the keyboard). Just refresh the live calc. */
   if(f==='l'||f==='w'||f==='d'){ const el=document.getElementById('calc_'+i); if(el) el.textContent=calcText(p.wounds[i]); }
 }
@@ -1084,6 +1091,15 @@ function woundHTML(w,i){
     + '<label>Tunneling / sinus tract</label>'
     + '<input value="'+esc(w.tunneling||'')+'" placeholder="e.g. 6 o’clock, 1.2 cm — or none" '
     + 'oninput="setW('+i+',\'tunneling\',this.value)">'
+
+    /* Hand-rolled, NOT selField — selField appends an "Other" escape to any list lacking one, and
+       "Other" is meaningless on a yes/no that feeds a billing gate. Same shape as the Eschar control
+       just above. Sits directly before Orders because that is the order of the visit: what you did,
+       then what the nurse should do. */
+    + '<label>Debridement / procedure performed?</label>'
+    + '<select onchange="setW('+i+',\'debride\',this.value)"><option value=""></option>'
+    +   DEBRIDE.map(o=>'<option value="'+esc(o)+'"'+(w.debride===o?' selected':'')+'>'+esc(o)+'</option>').join('')
+    + '</select>'
 
     + '<label>Orders</label>'
     + '<textarea placeholder="what the nurse should do — dressing, frequency, offloading, re-check" '

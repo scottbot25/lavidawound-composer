@@ -2383,6 +2383,17 @@ const _RC_WAGNER={ '0':'0','1':'1','2':'2','3':'3','4':'4','5':'5','Other':'othe
    after, while the card had already dropped it. Same root cause as the wound-number drift.
    wound-contract-test.js now compares both files' option lists so this cannot drift again. */
 const _RC_STATUS={ 'New':'new','Not healed':'not healed','Improving':'improving','Stable':'stable','Worsening':'worsening','Healed':'healed','Other':'other' };
+/* Debridement (Abby, 2026-07-30). The card's yes/no feeds the note's OWN per-wound gate — "Procedure /
+   debridement performed on this wound?" — rather than any field of our own, so the two can never
+   disagree about whether a procedure happened. That gate is BILLING-RELEVANT: MDM prints the E&M
+   time/review attestation only when no wound had a procedure, so a Yes here removes it. Correct, and
+   exactly why this has to land on the real key rather than a parallel one. */
+const _RC_DEBRIDE={ 'Yes':'yes','No':'no' };
+/* The Procedures section's index, read off the LIVE template the same way _rcApKeyFor finds the A&P
+   line. Hard-coding 3 would keep working right up until a section was added, then silently write the
+   gate into the wrong section. */
+function _rcProcIdx(mode){ const secs=(TEMPLATES[mode]||{}).sections||[];
+  const i=secs.findIndex(s=>s&&s[0]==='Procedures'); return i<0?null:i; }
 const _RC_DRAIN={ 'None':'none','Scant':'scant','Small':'small','Moderate':'moderate','Large':'large','Other':'other' };
 const _RC_ODOR={ 'None':'none','Mild':'mild','Strong':'strong','Other':'other' };
 const _RC_EXPOSED={ 'None':'none','Subcutaneous tissue':'subcutaneous tissue','Tendon':'tendon','Muscle':'muscle','Bone':'bone','Hardware':'hardware' };
@@ -2527,6 +2538,12 @@ function _rcWriteWound(S, wid, w, opts){
      means yes; "None" on its own means no; nothing ticked stays unanswered. Scott 2026-07-29. */
   { const ex=Array.isArray(w.exposed)?w.exposed:[];
     if(ex.length) setK(P+':wb:exposed', ex.some(x=>String(x).trim().toLowerCase()!=='none')?'yes':'no'); }
+  /* Debridement lands in the PROCEDURES section, not this one — it is the only field here that does.
+     Safe because every caller sets MODE to match the store it passes in: rcPrefill assigns MODE=nt
+     before writing, rcMergeIntoPatient goes through switchPatient. Answering it from the bedside also
+     clears the note's amber "needs an answer" bar, which is the whole point of it being a gate. */
+  { const pi=_rcProcIdx(typeof MODE!=='undefined'?MODE:'new');
+    if(pi!=null && _RC_DEBRIDE[w.debride]) setK(pi+':w'+wid+':__done', _RC_DEBRIDE[w.debride]); }
 }
 // Compose the A&P free text (orders per wound + patient education) — used by every pull path.
 function _rcComposeAP(ordLines, edu){
