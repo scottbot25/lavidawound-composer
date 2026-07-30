@@ -845,9 +845,28 @@ function delWound(i){
      note, and a number that has been in a chart must never be handed to a different wound. */
   p.wounds.splice(i,1); save(); render();
 }
+/* Healed wounds the provider has started editing THIS SESSION. Deliberately not part of the record —
+   it drives a warning, not data, and it must not travel to the vault or to next week's card. Keyed by
+   patient id plus wound number so it can never leak onto another patient or follow a renumber. */
+const _healedEdited = new Set();
+function _healedKey(i){ const p=activePt(); const w=p&&p.wounds&&p.wounds[i];
+  return (p&&p.id?p.id:'?')+':'+((w&&w.num)||('idx'+i)); }
 function setW(i,f,val){
   const p=activePt(); if(!p) return;
+  /* WARN ON THE ACT OF CHANGING IT, not on the wound existing (Scott 2026-07-30). A healed wound now
+     renders and prints like any other; what deserves a second look is editing one the chart has
+     already closed. Changing the STATUS itself is exempt — that is how a mistaken "Healed" gets
+     corrected, and blocking it would trap the error. */
+  const wasHealed=isHealedWound(p.wounds[i]);
+  const firstTouch = wasHealed && f!=='status' && !_healedEdited.has(_healedKey(i));
+  if(firstTouch){ _healedEdited.add(_healedKey(i)); toast('Wound '+wNum(p.wounds[i],i)+' is recorded as healed — see the note on it'); }
   p.wounds[i][f]=val; save();
+  // Status moved off Healed: the warning no longer applies, so drop it rather than leave it nagging.
+  if(f==='status' && !isHealedWound(p.wounds[i])) _healedEdited.delete(_healedKey(i));
+  /* The first touch of a healed wound repaints even for a text field, so the banner appears at the
+     moment it is relevant. It costs one lost keystroke focus, once, on a wound that should not be
+     edited without thinking — which is the entire point. */
+  if(firstTouch){ render(); return; }
   /* Categorical selects re-render: Type toggles the Stage question, and any of them may now
      read "Other" (which reveals its free-text box) or leave it. Selects don't lose focus, so a
      repaint is safe here. */
@@ -1009,26 +1028,24 @@ function cfRebuildWounds(rec){
 function woundHTML(w,i){
   const pr = w.prior || null;
   const priorWhen = pr && pr.date ? ' ('+esc(pr.date)+')' : '';
-  /* A HEALED WOUND STAYS ON THE CARD, GREYED AND READ-ONLY. It is history the provider can see, and its
-     number is spent forever — which is the whole reason it must not disappear. If the site breaks down
-     again that is a BRAND NEW wound with a new number (Scott), so there is deliberately no way to
-     re-open this one. Everything below the header is suppressed: there is nothing to measure and
-     nothing to order. */
-  if(isHealedWound(w)){
-    return '<div class="card" style="opacity:.62;background:#f7f8f9">'
-      + '<div class="wound-head"><b>Wound '+wNum(w,i)+'</b>'
-      + '<span class="muted" style="font-size:11px;margin-left:8px">healed — closed '
-      + (pr && pr.date ? 'on or before '+esc(pr.date) : 'at the last visit') + '</span>'
-      + '<button class="tiny no-print" onclick="delWound('+i+')">Remove</button></div>'
-      + '<div style="font-size:13px;margin-top:4px">'+esc(v(w.loc))+'</div>'
-      + '<div class="muted" style="font-size:11px;margin-top:4px">Number '+wNum(w,i)
-      + ' stays with this wound. If this site opens again, add it as a new wound.</div>'
-      + '</div>';
-  }
+  /* A HEALED WOUND IS JUST A WOUND WHOSE STATUS IS HEALED (Scott 2026-07-30: "dont make resolved grey
+     it out just leave it and put a banner if they try to change it"). It renders normally, every field
+     editable, and prints on the nurse's sheet like any other — the greyed read-only version made it
+     look like a different kind of object and hid findings the facility may still want to see.
+     The one thing that must not happen quietly is EDITING a wound the chart already closed, so the
+     warning is attached to the act of changing it rather than to the wound sitting there. */
+  const healedWarn = isHealedWound(w) && _healedEdited.has(_healedKey(i))
+    ? '<div class="warn" style="margin:6px 0">This wound is recorded as <b>healed</b>. '
+      + 'Changing it edits a wound the chart has already closed. '
+      + 'If this site has opened again, that is a <b>new wound</b> — remove this edit and use '
+      + '“+ Add another wound”, which will give it the next number.</div>'
+    : '';
   return '<div class="card">'
     + '<div class="wound-head"><b>Wound '+wNum(w,i)+'</b>'
+    + (isHealedWound(w)?'<span class="muted" style="font-size:11px;margin-left:8px">healed</span>':'')
     + (pr?'<span class="muted" style="font-size:11px;margin-left:8px">carried from last visit</span>':'')
     + '<button class="tiny no-print" onclick="delWound('+i+')">Remove</button></div>'
+    + healedWarn
 
     /* LOCATION IS LOCKED ON A CARRIED-OVER WOUND (Scott 2026-07-30). Not cosmetic — it is load-bearing.
        The composer decides "is this the same wound as last week" by comparing this text to the location
@@ -1193,10 +1210,9 @@ function sheetText(list){
     L.push('PATIENT: '+v(p.name));
     p.wounds.forEach((w,i)=>{
       L.push('');
-      /* A HEALED wound stays on the nurse's sheet (Scott 2026-07-30) — the facility needs to know it
-         closed, so they stop dressing it and the record is complete. One line, not a block of dashes:
-         everything else about it is deliberately blank, because there is nothing to measure or order. */
-      if(isHealedWound(w)){ L.push('  Wound '+wNum(w,i)+' — '+v(w.loc)+'   ** HEALED — no orders **'); return; }
+      /* A healed wound prints like every other one, with Status: Healed doing the talking (Scott
+         2026-07-30: "just leave it"). The earlier stripped one-liner hid findings the facility may
+         still want, and made it look like a different kind of record. */
       L.push('  Wound '+wNum(w,i)+' — '+v(w.loc));
       L.push('    Type:     '+v(disp(w,'type')) + (isPressure(w) ? '   Stage: '+v(disp(w,'stage')) : ''));
       L.push('    Size:     '+v(sizeText(w)));
@@ -1310,16 +1326,6 @@ function sheetHTML(list, roundOverride){
     p.wounds.forEach((w,i)=>{
       const odor=disp(w,'odor'), status=disp(w,'status');
       const stCls = status ? (String(status).toLowerCase().indexOf('improv')>=0?'b-imp':(String(status).toLowerCase().indexOf('wors')>=0?'b-wor':'b-stb')) : '';
-      /* HEALED prints on the nurse's sheet too (Scott 2026-07-30) — the facility needs to know it
-         closed so they stop dressing it. A single line rather than a table of blanks: there is nothing
-         to measure and no order to carry out. The number is kept visible because it is the wound's
-         permanent identity and the note will show the same one. */
-      if(isHealedWound(w)){
-        b += '<div class="w'+(i===0?' w-first':'')+'" style="opacity:.7">'
-           + '<div class="w-title">Wound '+wNum(w,i)+' — <span class="loc">'+esc(v(w.loc))+'</span>'
-           + ' &nbsp;·&nbsp; <b>HEALED</b> — no orders</div></div>';
-        return;
-      }
       b += '<div class="w'+(i===0?' w-first':'')+'"><div class="w-title">Wound '+wNum(w,i)+' — <span class="loc">'+esc(v(w.loc))+'</span></div>'
          + '<table>'
          + '<tr><td class="k">Type</td><td class="val">'+esc(v(disp(w,'type')))
