@@ -2787,7 +2787,11 @@ function applyRcReconcile(){
    RC_LIST_DAYS is neither of those: it is only a perf bound on how much of the (never-purged) RoundCards
    folder we download per pull. Generous enough that no real amendment falls outside it. */
 const RC_LIST_DAYS=60;                       // perf bound on the listing — NOT a behavior window
-const RC_PULL_DAYS=3;                        // an UNSEEN card only auto-creates a patient this recently
+/* ⚠ NO LONGER GOVERNS WHAT BECOMES A NOTE. Superseded 2026-07-30 by _rcSelectForPull, which pulls the
+   LAST VISIT rather than a rolling window. Kept only because RC_LIST_DAYS-style bounds are referenced in
+   the data contract; do not reintroduce it as a creation rule. A stale constant that still reads as
+   current behaviour is how the 'Healed' gap survived three days. */
+const RC_PULL_DAYS=3;                        // (historic) an UNSEEN card only auto-created a patient this recently
 const RC_SEEN_KEY='rc_pulled_v1';            // durable set of already-pulled round-card IDs. IDs are random
 /* ONE KEY WAS DOING TWO UNRELATED JOBS, AND THE VALVE BELOW CLEARED BOTH (found 2026-07-28).
    rc_pulled_v1 answers "which records have I already pulled" — that is dedupe/version state, and
@@ -2826,6 +2830,59 @@ try{ if(new URLSearchParams(location.search).get('repull')==='1') localStorage.r
 const RC_SEEN_TTL_MS=21*24*60*60*1000;       // tokens (no patient info), so this localStorage set is NOT PHI.
 function _rcRecentCutoff(){ const d=new Date(); d.setDate(d.getDate()-RC_LIST_DAYS);  return d.toISOString().slice(0,10); }   // perf bound on what we LIST
 function _rcCreateCutoff(){ const d=new Date(); d.setDate(d.getDate()-RC_PULL_DAYS);  return d.toISOString().slice(0,10); }   // what may auto-CREATE a patient
+
+/* ============ WHICH RECORDS BECOME NOTES (Scott 2026-07-30) ==========================================
+   He opened the composer on 7/30 and 23 patients from three different dates loaded into his workspace.
+   The old rule was "any unseen record dated within RC_PULL_DAYS (3)". That is a rolling WINDOW, not a
+   visit: it mixes days by construction, and on a browser that has never pulled it dumps every day in
+   range at once. Scott: "it needs to sweep in the LAST visit."
+
+   The rule now:
+   • THE LAST VISIT. Take the most recent date that has records for you and pull that day — every
+     building, since a two-SNF day is still one visit's worth of notes owed.
+   • NOT SEEN REACHES BACK. A patient marked notSeen has a record but NO VISIT, so a note for them would
+     document something that did not happen — the same phantom-visit error the QC count had, which was
+     fixed on the card and never here (this file had zero references to `dispo` before today). For those,
+     walk back to their most recent EARLIER record where they WERE seen and pull that instead: that is the
+     visit whose note is still owed. Bounded by RC_REACHBACK_DAYS so a patient not seen for two months
+     cannot open a note for a visit long past writing.
+   • THE REACHED-BACK RECORD KEEPS ITS OWN DATE. The note is dated the day of the actual visit, never
+     today. A note dated the wrong day is a billing and record problem, not a preference.
+   • DISCHARGED never reaches back. They are gone; there is no visit to capture.
+   • ANYTHING OLDER IS NOT CREATED SILENTLY. It is counted and announced, so a missed day is visible
+     rather than dropped on the floor — this vault has been bitten four times by a check that reported
+     fine while something needed doing.
+   Returns {create:[records], olderSkipped:n, lastDate}. Pure function of its input: no DOM, no network,
+   no clock beyond the reach-back cutoff — so it is testable, which the old inline filter was not. */
+const RC_REACHBACK_DAYS=21;   // matches the card's CF_ACTIVE_DAYS ("still on my panel") — Scott 2026-07-30
+function _rcReachbackCutoff(){ const d=new Date(); d.setDate(d.getDate()-RC_REACHBACK_DAYS); return d.toISOString().slice(0,10); }
+function _rcDispo(r){ return String((r&&r.dispo)||'').trim(); }
+// Absent or '' means SEEN — see the data contract. Anything UNRECOGNISED also counts as seen, matching
+// the card and the nightly job: months of already-filed records carry no dispo at all.
+function _rcWasSeen(r){ const d=_rcDispo(r); return d!=='notSeen' && d!=='discharged'; }
+// Patient identity ACROSS rounds. Record ids are per-round (carry-forward mints a fresh id every week),
+// so an id cannot answer "is this the same person as last week". Name + building can.
+function _rcPtKey(r){ return whNameKey((r&&r.patient&&r.patient.name)||'')+'|'+_rcFacSeg((r&&r.facility)||''); }
+function _rcSelectForPull(unseen, reachCut){
+  const day=r=>String((r&&r.date)||'').slice(0,10);
+  const dated=(unseen||[]).filter(r=>day(r));
+  const undated=(unseen||[]).filter(r=>!day(r));          // legacy, no date to reason about — unchanged
+  if(!dated.length) return {create:undated, olderSkipped:0, lastDate:''};
+  const back=reachCut||_rcReachbackCutoff();
+  const lastDate=dated.map(day).sort().pop();
+  const create=[];
+  dated.filter(r=>day(r)===lastDate).forEach(r=>{
+    if(_rcDispo(r)==='discharged') return;                // gone — nothing to capture
+    if(_rcWasSeen(r)){ create.push(r); return; }          // the ordinary case
+    const k=_rcPtKey(r);
+    const prior=dated.filter(x=>_rcPtKey(x)===k && day(x)<lastDate && day(x)>=back && _rcWasSeen(x))
+                     .sort((a,b)=>day(a).localeCompare(day(b))).pop();
+    if(prior) create.push(prior);                         // the visit whose note is actually owed
+  });
+  const chosen=new Set(create.map(r=>r));
+  const olderSkipped=dated.filter(r=>day(r)!==lastDate && !chosen.has(r)).length;
+  return {create:create.concat(undated), olderSkipped, lastDate};
+}
 function _rcKey(rec){ return (rec&&rec.id) || [_rcFacSeg(rec&&rec.facility), String((rec&&rec.patient&&rec.patient.name)||'').toLowerCase().trim(), String((rec&&rec.date)||'').slice(0,10)].join('|'); }
 function _rcSeenLoad(){ try{ const o=JSON.parse(localStorage.getItem(RC_SEEN_KEY)||'{}'); return (o&&typeof o==='object')?o:{}; }catch(e){ return {}; } }
 function _rcEverLoad(){ try{ const o=JSON.parse(localStorage.getItem(RC_EVER_KEY)||'{}'); return (o&&typeof o==='object')?o:{}; }catch(e){ return {}; } }
@@ -2867,18 +2924,34 @@ function _rcRenamePrompt(oldName, newName){
    card's restore-on-open: the record's provider must match the signed-in account, the note header's
    provider, or this device's remembered card provider — and UNATTRIBUTED records (blank provider,
    old saves) are accepted so nothing silently vanishes. */
+/* Set by _rcProvOk when it refused every record because it could not tell who you are. A pull that
+   quietly returns nothing looks identical to a day with no rounds, and "cannot decide automatically" is
+   not "nothing to do" — so the pull reads this and says so on screen. */
+let _rcPullBlocked=false;
 function _rcProvOk(rec){
   try{
     const nk=s=>String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim().split(' ').filter(Boolean).sort().join(' ');
-    const rp=nk(rec&&rec.provider); if(!rp) return true;
+    /* FAILS CLOSED, three ways, after 2026-07-30: Scott opened the composer and 23 of Abby's patients
+       loaded into his workspace. Each `return true` below used to be a `return`-everything path.
+
+       1. NO PROVIDER STAMPED no longer means "everyone gets it". The data contract §2 already says
+          blank-provider records are "not allowed where records become patients unreviewed", and
+          auto-pull is exactly that — the rule and the code simply disagreed.
+       2. NO IDENTITY READABLE no longer means "don't filter". Pulling nothing is recoverable; pulling
+          every provider's patients into one workspace is not. _rcPullBlocked lets the caller SAY SO,
+          because a silent empty pull is its own bug.
+       3. rc_last_prov IS GONE from this set. It exists so a shared tablet running the CARD does not
+          strand a round; the composer has a signed-in account and never needed it. It was the widest
+          door here — one colleague's name, remembered on a device forever, admitting all their records. */
+    const rp=nk(rec&&rec.provider); if(!rp) return false;
     const ok=new Set();
     try{ const a=_pca&&_pca.getAllAccounts&&_pca.getAllAccounts()[0]; if(a){ ok.add(nk(a.name)); ok.add(nk(a.username)); } }catch(e){}
     try{ const c=JSON.parse(sessionStorage.getItem('id_claims')||'{}'); if(c.name) ok.add(nk(c.name)); }catch(e){}
     try{ if(WS.round&&WS.round.provider) ok.add(nk(WS.round.provider)); }catch(e){}
-    try{ const lp=localStorage.getItem('rc_last_prov'); if(lp) ok.add(nk(lp)); }catch(e){}
     ok.delete('');
-    return ok.size ? ok.has(rp) : true;   // no identity known at all -> don't filter (never strand a round)
-  }catch(e){ return true; }
+    if(!ok.size){ _rcPullBlocked=true; return false; }
+    return ok.has(rp);
+  }catch(e){ return false; }
 }
 /* Every recent roundcard.v1 record across all buildings. Auto-discovers buildings by listing the
    RoundCards/ folder's children — no roster needed, and it works for a provider covering 2–3 buildings. */
@@ -3014,6 +3087,7 @@ async function rcAutoPull(reason){
   // when this one finishes (the card fires rc-saved per upload; back-to-back saves raced this guard).
   if(_rcPulling){ _rcPullAgain=true; return; }
   _rcPulling=true;
+  _rcPullBlocked=false;                 // fresh verdict per pull, or a stale one alarms forever
   try{
     const recs=await rcListAllRecent();
     WS.rcPulled=WS.rcPulled||{};                                // session-only dedup for legacy records that predate stable ids
@@ -3030,21 +3104,31 @@ async function rcAutoPull(reason){
     const entrySa=e=>(typeof e==='object'&&e)?(e.sa==null?null:String(e.sa)):null;
     const isUpdate=r=>{ const e=seen[r.id]; const sa=entrySa(e);
       return !!(e && sa!==null && r.savedAt && String(r.savedAt)>sa); };
-    const createCut=_rcCreateCutoff();
-    const fresh=recs.filter(r=>{
+    /* SPLIT, don't filter. An UPDATE to a record this workspace already pulled must always flow — that
+       is the ?repull fix from the E2E audit, where a late order change belongs to the patient it already
+       created — and that is decided one record at a time.
+       Which NEW records become notes is a decision about the whole SET (what was the last visit, who was
+       actually seen on it), so it cannot be made per record. Hence two lists, not one predicate. */
+    const updates=[], candidates=[];
+    recs.forEach(r=>{
       if(r&&r.id){
-        // Already pulled → an edit reaches the note regardless of the round's age (see RC_LIST_DAYS).
-        if(seen[r.id]) return isUpdate(r);
-        // Never seen → only auto-create from a recent round, so a fresh browser can't dump history.
-        const d=String(r.date||'').slice(0,10);
-        return !d || d>=createCut;
+        if(seen[r.id]){ if(isUpdate(r)) updates.push(r); return; }
+        candidates.push(r); return;
       }
-      const k=_rcKey(r); return k && !WS.rcPulled[k];           // legacy no-id record: name-based, this session only
+      const k=_rcKey(r); if(k && !WS.rcPulled[k]) candidates.push(r);   // legacy no-id: name-based, this session only
     });
+    const sel=_rcSelectForPull(candidates);
+    const fresh=updates.concat(sel.create);
     // Lazily baseline legacy numeric entries so FUTURE card edits become detectable updates.
     let baselined=false;
     recs.forEach(r=>{ if(r&&r.id && typeof seen[r.id]==='number'){ seen[r.id]={t:seen[r.id], sa:String(r.savedAt||''), k:String(r.key||'')}; baselined=true; } });
-    if(!fresh.length){ if(baselined) _rcSeenSave(seen); return; }
+    if(!fresh.length){
+      if(baselined) _rcSeenSave(seen);
+      // Nothing came in. Say WHY when the reason is "I could not tell who you are" — silence here reads
+      // as "no rounds today", which is a different and much more comforting thing.
+      if(_rcPullBlocked) toast('Couldn’t tell who you are, so no Round Card patients were brought in. Sign in, or set the Provider box, then reopen.');
+      return;
+    }
     // Don't yank a provider off a note they're mid-way through: remember where they were, go back after.
     const returnPid=activePid, returnNamed=!!((((WS.patients[returnPid]||{}).name)||'').trim());
     const now=Date.now(), byFac={};
@@ -3155,7 +3239,13 @@ async function rcAutoPull(reason){
     // merges already announced themselves individually above.
     const total=Object.keys(byFac).reduce((a,f)=>a+byFac[f],0);
     if(total){ const parts=Object.keys(byFac).map(f=>f+': '+byFac[f]).join(' · ');
-      toast('Brought in '+total+' patient'+(total===1?'':'s')+' from Round Cards ('+parts+')'); }
+      /* Name the DAY, not just the count. "Brought in 12 patients" gave no way to notice they came from
+         three different dates, which is exactly how 2026-07-30 went unnoticed until Scott counted them.
+         And say what was left behind: an older round nobody pulled is a note still owed, so it must be
+         visible rather than dropped on the floor. */
+      const when=sel.lastDate ? ' from '+sel.lastDate : '';
+      const older=sel.olderSkipped ? ' · '+sel.olderSkipped+' older record'+(sel.olderSkipped===1?'':'s')+' not brought in' : '';
+      toast('Brought in '+total+' patient'+(total===1?'':'s')+when+' ('+parts+')'+older); }
   }catch(e){}
   finally{ _rcPulling=false; _rcLastPull=Date.now();
     if(_rcPullAgain){ _rcPullAgain=false; setTimeout(()=>{ try{ rcAutoPull('queued'); }catch(e){} },0); } }
