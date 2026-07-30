@@ -937,9 +937,68 @@ function useSameEdu(){
   const p=activePt(); if(!p||!p.priorEdu) return;
   p.edu=String(p.priorEdu||''); save(); render();
 }
+// A wound the provider has marked Healed. Scott 2026-07-30: "healed = resolved" — one word, one state.
+function isHealedWound(w){ return String(w&&w.status||'').trim().toLowerCase()==='healed'; }
+/* Rebuild one record's wounds for NEXT week's card. Pulled out of carryForward as a pure function
+   because a mutation sweep proved the point: the card could go back to dropping healed wounds, or stop
+   carrying their status, and every suite stayed green — nothing could reach this logic to test it.
+   Untestable code inside a closure is exactly how these defects survive.
+
+   A HEALED WOUND CARRIES FORWARD, GREYED. It is not dropped (Scott: "healed = resolved", and a resolved
+   wound stays visible holding its number). Dropping it is half of why the card and the note disagreed:
+   the card lost the wound and slid every number below it up, while the note kept the gap.
+   `status` is carried for healed wounds and ONLY for them — every other wound starts each visit with a
+   clean status, because last week's finding is not this week's. For a healed wound the status IS the
+   reason it is still on screen.
+   Field-by-field through newWound(), so anything not named here is silently lost next week. */
+function cfRebuildWounds(rec){
+  const src=Array.isArray(rec&&rec.wounds)?rec.wounds:[];
+  let healed=0;
+  const wounds=src.map(w=>{
+    const wasHealed=isHealedWound(w); if(wasHealed) healed++;
+    return Object.assign(newWound(),{
+      // THE NUMBER IS THE WOUND'S IDENTITY — it carries, or next week renumbers and the note disagrees.
+      num: Number(w.num)||0,
+      status: wasHealed ? 'Healed' : '',
+      loc: w.loc||'',
+      type: Array.isArray(w.type)?w.type.slice():[],
+      typeOther: w.typeOther||'',
+      stage: w.stage||'',
+      stageOther: w.stageOther||'',
+      // Classification, not a weekly finding — carries exactly as stage does. The *Other free text has
+      // to be named too, or next week opens showing "Other" with an empty box and the pull writes
+      // nothing at all for the field.
+      wagner: w.wagner||'',
+      wagnerOther: w.wagnerOther||'',
+      // flat snapshot — never a copy of the whole wound, or next week would nest priors forever
+      prior:{ date:String((rec&&rec.date)||'').slice(0,10),
+              l:w.l||'', w:w.w||'', d:w.d||'',
+              status:w.status||'', orders:w.orders||'',
+              wbGran:w.wbGran||'', wbSlough:w.wbSlough||'', wbFib:w.wbFib||'',
+              wbEpi:w.wbEpi||'', wbEschar:w.wbEschar||'' }
+    });
+  });
+  return { wounds, healed };
+}
 function woundHTML(w,i){
   const pr = w.prior || null;
   const priorWhen = pr && pr.date ? ' ('+esc(pr.date)+')' : '';
+  /* A HEALED WOUND STAYS ON THE CARD, GREYED AND READ-ONLY. It is history the provider can see, and its
+     number is spent forever — which is the whole reason it must not disappear. If the site breaks down
+     again that is a BRAND NEW wound with a new number (Scott), so there is deliberately no way to
+     re-open this one. Everything below the header is suppressed: there is nothing to measure and
+     nothing to order. */
+  if(isHealedWound(w)){
+    return '<div class="card" style="opacity:.62;background:#f7f8f9">'
+      + '<div class="wound-head"><b>Wound '+wNum(w,i)+'</b>'
+      + '<span class="muted" style="font-size:11px;margin-left:8px">healed — closed '
+      + (pr && pr.date ? 'on or before '+esc(pr.date) : 'at the last visit') + '</span>'
+      + '<button class="tiny no-print" onclick="delWound('+i+')">Remove</button></div>'
+      + '<div style="font-size:13px;margin-top:4px">'+esc(v(w.loc))+'</div>'
+      + '<div class="muted" style="font-size:11px;margin-top:4px">Number '+wNum(w,i)
+      + ' stays with this wound. If this site opens again, add it as a new wound.</div>'
+      + '</div>';
+  }
   return '<div class="card">'
     + '<div class="wound-head"><b>Wound '+wNum(w,i)+'</b>'
     + (pr?'<span class="muted" style="font-size:11px;margin-left:8px">carried from last visit</span>':'')
@@ -1093,6 +1152,10 @@ function sheetText(list){
     L.push('PATIENT: '+v(p.name));
     p.wounds.forEach((w,i)=>{
       L.push('');
+      /* A HEALED wound stays on the nurse's sheet (Scott 2026-07-30) — the facility needs to know it
+         closed, so they stop dressing it and the record is complete. One line, not a block of dashes:
+         everything else about it is deliberately blank, because there is nothing to measure or order. */
+      if(isHealedWound(w)){ L.push('  Wound '+wNum(w,i)+' — '+v(w.loc)+'   ** HEALED — no orders **'); return; }
       L.push('  Wound '+wNum(w,i)+' — '+v(w.loc));
       L.push('    Type:     '+v(disp(w,'type')) + (isPressure(w) ? '   Stage: '+v(disp(w,'stage')) : ''));
       L.push('    Size:     '+v(sizeText(w)));
@@ -1200,6 +1263,16 @@ function sheetHTML(list, roundOverride){
     p.wounds.forEach((w,i)=>{
       const odor=disp(w,'odor'), status=disp(w,'status');
       const stCls = status ? (String(status).toLowerCase().indexOf('improv')>=0?'b-imp':(String(status).toLowerCase().indexOf('wors')>=0?'b-wor':'b-stb')) : '';
+      /* HEALED prints on the nurse's sheet too (Scott 2026-07-30) — the facility needs to know it
+         closed so they stop dressing it. A single line rather than a table of blanks: there is nothing
+         to measure and no order to carry out. The number is kept visible because it is the wound's
+         permanent identity and the note will show the same one. */
+      if(isHealedWound(w)){
+        b += '<div class="w'+(i===0?' w-first':'')+'" style="opacity:.7">'
+           + '<div class="w-title">Wound '+wNum(w,i)+' — <span class="loc">'+esc(v(w.loc))+'</span>'
+           + ' &nbsp;·&nbsp; <b>HEALED</b> — no orders</div></div>';
+        return;
+      }
       b += '<div class="w'+(i===0?' w-first':'')+'"><div class="w-title">Wound '+wNum(w,i)+' — <span class="loc">'+esc(v(w.loc))+'</span></div>'
          + '<table>'
          + '<tr><td class="k">Type</td><td class="val">'+esc(v(disp(w,'type')))
@@ -2834,33 +2907,8 @@ async function carryForward(){
     }
     let healedDropped=0;
     const pts=chosen.map(rec=>{
-      const src=Array.isArray(rec.wounds)?rec.wounds:[];
-      const kept=src.filter(w=>{
-        const healed=String(w&&w.status||'').trim().toLowerCase()==='healed';
-        if(healed) healedDropped++;
-        return !healed;
-      });
-      const wounds=kept.map(w=>Object.assign(newWound(),{
-        // THE NUMBER IS THE WOUND'S IDENTITY — it carries, or next week renumbers and the note disagrees.
-        num: Number(w.num)||0,
-        loc: w.loc||'',
-        type: Array.isArray(w.type)?w.type.slice():[],
-        typeOther: w.typeOther||'',
-        stage: w.stage||'',
-        stageOther: w.stageOther||'',
-        // Classification, not a weekly finding - it carries exactly as stage does. This rebuild is
-        // field-by-field through newWound(), so anything not named here is silently lost next week -
-        // which is why the *Other free text has to be named too, or next week's card opens showing
-        // "Other" with an empty box and the pull then writes nothing for the field at all.
-        wagner: w.wagner||'',
-        wagnerOther: w.wagnerOther||'',
-        // flat snapshot — never a copy of the whole wound, or next week would nest priors forever
-        prior:{ date:String(rec.date||'').slice(0,10),
-                l:w.l||'', w:w.w||'', d:w.d||'',
-                status:w.status||'', orders:w.orders||'',
-                wbGran:w.wbGran||'', wbSlough:w.wbSlough||'', wbFib:w.wbFib||'',
-                wbEpi:w.wbEpi||'', wbEschar:w.wbEschar||'' }
-      }));
+      const built=cfRebuildWounds(rec);
+      const wounds=built.wounds; healedDropped+=built.healed;
       // dispo starts clean every visit: last week's "not seen" says nothing about this week.
       /* woundSeq comes from the RECORD, never recomputed from the wounds that survived. `kept` drops
          resolved wounds, so max(kept) would forget a spent number: heal Wound 3, carry forward, add a
@@ -2893,7 +2941,7 @@ async function carryForward(){
     save(); paintRound(); render();
     toast('Brought forward '+pts.length+' of '+who+'’s patient'+(pts.length===1?'':'s')+' from their last visit'
       +(dischargedDropped?' · '+dischargedDropped+' discharged patient'+(dischargedDropped===1?'':'s')+' left off':'')
-      +(healedDropped?' · '+healedDropped+' healed wound'+(healedDropped===1?'':'s')+' left off':'')
+      +(healedDropped?' · '+healedDropped+' healed wound'+(healedDropped===1?'':'s')+' carried over greyed':'')
       +' — measurements start blank. Nothing is filed until you start charting.');
   }catch(e){
     toast('Couldn’t reach ClinicalVault'+(e&&e.message?' ('+e.message+')':''));
