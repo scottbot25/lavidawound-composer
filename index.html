@@ -459,7 +459,7 @@ window.addEventListener('message', async function(e){
     if(!_rcFrameOK){ _rcFrameOK=true; _rcShowState('ok'); } }
   // The overlay card just saved patients to the vault. While the card is OPEN, only make a note to
   // pull — the pull's merges + full note rebuilds run on this same main thread and were freezing the
-  // card mid-charting on phones (Abby, rounds morning 2026-07-22: "page unresponsive"). The provider
+  // card mid-charting on phones (the NP, rounds morning 2026-07-22: "page unresponsive"). The provider
   // can't see the composer behind the overlay anyway; closing the card runs the deferred pull, so the
   // patients still land with no extra step.
   if(d && d.type==='rc-saved'){
@@ -582,7 +582,7 @@ Plans:
       ["Procedures", PROC()],
       ["Total Time", TIME()],
       /* MDM: deleted 7/16 (separate PCC box, .sktime owned it) — REINSTATED 2026-07-23 for the
-         one-box-note flow per Shevie's email. Custom-built in buildSection: the attestation prints
+         one-box-note flow per the practice lead's email. Custom-built in buildSection: the attestation prints
          only on no-procedure visits; the DON line always. See MDM_ATTEST()/MDM_DON(). */
       ["MDM", ""]
     ]
@@ -593,7 +593,7 @@ Plans:
       /* "Prior subjective: Please copy from my previous on the EMR" DELETED (Scott, 2026-07-16).
          It was an instruction to the provider that PASTED INTO THE CHART on every follow-up note —
          authoring scaffolding sitting in a patient record, the same family as the "drop down" text and
-         "Per-wound findings below." Abby copies her prior subjective from the EMR either way; the
+         "Per-wound findings below." the NP copies her prior subjective from the EMR either way; the
          sentence never belonged in the note itself. */
       ["Subjective", `date ***
 ***`],
@@ -670,14 +670,14 @@ Cleansing / prep: [wound cleanser / saline / other: ***]
 Endpoint: [debrided to healthy bleeding tissue / debrided to viable margins / hemostasis achieved]
 Procedure note: The wound was cleansed with wound cleaner. Topical anesthetic was applied. A curette was used to loosen the slough, exudate, and to remove underlying nonviable tissues over the entire surface of the wound. Once I reached pink, healthy, bleeding tissues, I stopped and applied pressure. There was no evidence of tunneling, purulent drainage, fluctuance or induration otherwise.
 Tolerance of Procedure: [tolerated well / tolerated with discomfort / procedure aborted]`;}
-/* MDM REINSTATED as a live section (Shevie + Abby email 2026-07-22/23) — the 7/16 deletion was right
+/* MDM REINSTATED as a live section (the practice lead + the NP email 2026-07-22/23) — the 7/16 deletion was right
    for its time (the boilerplate was hand-copied into PCC's SEPARATE MDM box; .sktime filled it there),
    but the flow changed: PCC is moving to a ONE-BOX note the composer pastes whole, so the MDM content
-   has to ride in the note itself. Shevie's rules: (1) the E&M time/review attestation belongs ONLY on
+   has to ride in the note itself. the practice lead's rules: (1) the E&M time/review attestation belongs ONLY on
    visits with NO procedure ("when a procedure is done, time documentation is irrelevant… you bill for
-   THINKING"); (2) "Assessment and plan discussed with DON and staff" should always be there (Abby was
+   THINKING"); (2) "Assessment and plan discussed with DON and staff" should always be there (the NP was
    free-texting it every visit). The attestation below is the practice's own preserved wording — kept
-   unreferenced since 7/16 exactly so it could be reused; swap it for Shevie's full .sktime text when
+   unreferenced since 7/16 exactly so it could be reused; swap it for the practice lead's full .sktime text when
    she sends it. The minutes themselves stay in the Total Time section (drops when unfilled). */
 function MDM_ATTEST(){return `I evaluated the patient, reviewed relevant facility records, medications, wound history, nursing documentation, and available labs/imaging. I assessed wound etiology, infection risk, perfusion, pressure/offloading, edema, nutrition, and barriers to healing. Orders and return precautions were communicated to facility staff.`;}
 function MDM_DON(){return `Assessment and plan discussed with DON and staff.`;}
@@ -762,10 +762,10 @@ function onPatientInput(v){ setPatient(v); paintPatient(); renderPatientBar(); u
 
 /* ============ PERMANENT WOUND IDENTITY ============
    A wound's NUMBER is its identity for the life of the wound — NOT its position in a list.
-   Decided with Abby + Shevie on the 2026-07-16 Zoom: Wound 1 stays Wound 1 until it resolves; when it
+   Decided with the NP + the practice lead on the 2026-07-16 Zoom: Wound 1 stays Wound 1 until it resolves; when it
    resolves the others NEVER slide up to fill the gap; a reopened wound is a NEW wound with a NEW number.
    Scott's reasoning: "if not, you have no way to — you're pulling numbers and you're going to end up
-   conflating them." Abby has patients with "wound 106".
+   conflating them." the NP has patients with "wound 106".
 
    This matters because carry-forward matches THIS week's wound to LAST week's BY NUMBER. A silent
    renumber would compare the wrong pair — which is exactly the "wound looks bigger than it is" error
@@ -1081,7 +1081,7 @@ function compactWoundNums(p){ p=p||activePt(); const R=wreg(p);
 }
 
 /* ============ WOUND HISTORY — the carry-forward store ============
-   Abby (7/16 Zoom): on a follow-up she needs LAST visit's wound bed + measurements sitting next to
+   the NP (7/16 Zoom): on a follow-up she needs LAST visit's wound bed + measurements sitting next to
    this week's blank fields, per wound — because she measures partly by gestalt and a sloppy number
    makes a healing wound look like a worsening one. "I need the numbers to actually show that it's
    getting better." Vasquez's old sheet did this, which is the bar.
@@ -1090,7 +1090,7 @@ function compactWoundNums(p){ p=p||activePt(); const R=wreg(p);
    - COMMIT POINT = the copy-to-PCC event. Copying the wound section is the signal that the data is
      real. Last copy wins; a same-day recopy OVERWRITES that date's record; once the day passes the
      record is immutable. A note that is never copied never becomes history. PCC stays the legal truth.
-   - PULL THE PREVIOUS COMMITTED VISIT — never a date window. Abby's Epic analogy: ".data doesn't pull
+   - PULL THE PREVIOUS COMMITTED VISIT — never a date window. the NP's Epic analogy: ".data doesn't pull
      a CBC based on a certain date, it just pulls the last 10." Survives a skipped week, a Wed-then-Thu
      visit, a biweekly facility.
    - PRIOR DATA IS REFERENCE ONLY (Scott): it must NEVER print into the note. Enforced STRUCTURALLY —
@@ -1323,7 +1323,7 @@ function whPaintPrior(){
     const p=showFor?whPriorFor(w.id):null;
     if(!p){ el.style.display='none'; el.innerHTML=''; return; }
     const v=_whPrior.visit;
-    // Auto-fill the Prior SA box from history — this is the number Abby types by hand today, and the
+    // Auto-fill the Prior SA box from history — this is the number the NP types by hand today, and the
     // existing "changed >50% from prior" check keys off it. Only fill when it's empty, so a value the
     // provider deliberately typed is never overwritten.
     try{ const pk=w.keyPrefix+':priorSA';
@@ -1345,7 +1345,7 @@ function whPaintPrior(){
     // patient's history is ever shown, it must be visible at a glance, not silent. (Scott's #1 feared
     // failure.) The date also makes a stale/skipped week obvious instead of looking like "last week".
     // Last visit's LOCATION is the human check that this is the same wound. "Wound 106" means nothing
-    // to the eye; "right lower extremity, great toe" does. Abby free-texts it, so it's the natural label.
+    // to the eye; "right lower extremity, great toe" does. the NP free-texts it, so it's the natural label.
     const loc=p.location?'<span class="pb-loc">'+esc(p.location)+'</span>':'';
     el.innerHTML='<div class="pb-head">↩ LAST VISIT · '+esc(v.date)+' · '+esc(_whPrior.name||'—')+loc
       +'<span class="pb-tag">reference only — does not print</span></div>'+rows.join('');
@@ -1709,7 +1709,7 @@ function hoBlank(v){ return !v || v==='[ ]' || /^\s*\*\*\*/.test(v) || /\[[^\]]*
 function hoVal(v){ return hoBlank(v) ? '—' : v; }
 function dimsOf(t){ const m=t.match(/L:\s*(\S+)\s*cm\s*W:\s*(\S+)\s*cm\s*D:\s*(\S+)\s*cm/);
   if(!m || (m[1]==='***'&&m[2]==='***'&&m[3]==='***')) return ''; return m[1]+' × '+m[2]+' × '+m[3]+' cm'; }
-/* Volume = L × W × D. Surface area = L × W (confirmed with Abby 7/16 — Scott had briefly conflated
+/* Volume = L × W × D. Surface area = L × W (confirmed with the NP 7/16 — Scott had briefly conflated
    them). Both are wanted so a wound that deepens while narrowing still trends honestly: "it's good to
    have both surface area and volume." */
 function volOf(t){ const m=t.match(/L:\s*(\S+)\s*cm\s*W:\s*(\S+)\s*cm\s*D:\s*(\S+)\s*cm/); if(!m) return '';
@@ -1822,7 +1822,7 @@ function handoffHTML(patients, facArg){
   patients = isPreview ? [extractPatient()] : patients;
   const fac = (facArg!=null && String(facArg).trim()) ? facArg : (patients.find(p=>p.facility&&!hoBlank(p.facility))||{}).facility;
   const date=(patients.find(p=>p.dateVal&&!hoBlank(p.dateVal))||{}).dateVal;
-  // Each patient prints on its own page (Abby: multi-patient handoffs got cut off / mis-formatted when
+  // Each patient prints on its own page (the NP: multi-patient handoffs got cut off / mis-formatted when
   // patients flowed together). .patient-break carries the Word/print page-break; .w blocks avoid being
   // split mid-table across a page boundary (the "cut off" symptom). First patient has no leading break.
   // Print/Word pagination: a "Patient N" heading (and its meta) must never be left alone at the bottom of
@@ -2360,7 +2360,7 @@ function doReassign(){
                a string reads as nothing ticked and the whole line is dropped from the chart), else
                'scalar'. _rcWriteWound DERIVES its Procedures shape map from this field, so the block
                is load-bearing rather than documentation: get `shape` wrong here and the answer stops
-               reaching the chart, which is exactly the defect Abby reported on 2026-07-30
+               reaching the chart, which is exactly the defect the NP reported on 2026-07-30
      key       the Procedures STATE key this field writes, so the writer can look the shape up
    ================================================================================================ */
 const WOUND_CONTRACT = [
@@ -2402,7 +2402,7 @@ const _RC_WAGNER={ '0':'0','1':'1','2':'2','3':'3','4':'4','5':'5','Other':'othe
    after, while the card had already dropped it. Same root cause as the wound-number drift.
    wound-contract-test.js now compares both files' option lists so this cannot drift again. */
 const _RC_STATUS={ 'New':'new','Not healed':'not healed','Improving':'improving','Stable':'stable','Worsening':'worsening','Healed':'healed','Other':'other' };
-/* Debridement (Abby, 2026-07-30). The card's yes/no feeds the note's OWN per-wound gate — "Procedure /
+/* Debridement (the NP, 2026-07-30). The card's yes/no feeds the note's OWN per-wound gate — "Procedure /
    debridement performed on this wound?" — rather than any field of our own, so the two can never
    disagree about whether a procedure happened. That gate is BILLING-RELEVANT: MDM prints the E&M
    time/review attestation only when no wound had a procedure, so a Yes here removes it. Correct, and
@@ -2633,7 +2633,7 @@ function _rcWriteWound(S, wid, w, opts){
                const getSel=()=> Array.isArray(STATE[k]) ? STATE[k] : [];
            A string in those keys reads as NOTHING TICKED, the sink returns the raw bracket list, and
            cleanForCopy then deletes the whole line — so four of the eleven bedside Procedures answers
-           silently never reached the chart on any debrided wound. This is what Abby was seeing when she
+           silently never reached the chart on any debrided wound. This is what the NP was seeing when she
            said the card was not carrying into the note. The seven plain selects always worked, which is
            exactly why it looked like it mostly did.
            The exam section above avoids this only by accident: it happens to write arrays for :4/:8/:17.
@@ -2762,7 +2762,7 @@ function _migrateWoundData(p, fromMode, toMode){
 /* ===== Card→Follow-up WOUND MATCHING (Scott 2026-07-20) =========================================
    When a RETURNING patient is pulled, this visit's bedside wounds must land on the SAME wound the
    provider tracked last week — not a fresh number that would duplicate or (worse) silently conflate a
-   wound (Abby's stated fear). We match by LOCATION, and — following the identity rule already settled
+   wound (the NP's stated fear). We match by LOCATION, and — following the identity rule already settled
    for patients ("suggest, never auto-apply") — we only auto-apply a match when it is unambiguous:
      • one wound on each side  → match,
      • an EXACT location match to exactly one prior wound → match,
@@ -3183,7 +3183,7 @@ function _rcRenamePrompt(oldName, newName){
 }
 
 /* THIS provider's records only (Scott 2026-07-22, first two-provider morning: "why am I seeing the
-   patients Abby is adding?" — the pull took EVERY provider's records). Same acceptance rule as the
+   patients the NP is adding?" — the pull took EVERY provider's records). Same acceptance rule as the
    card's restore-on-open: the record's provider must match the signed-in account, the note header's
    provider, or this device's remembered card provider — and UNATTRIBUTED records (blank provider,
    old saves) are accepted so nothing silently vanishes. */
@@ -3208,7 +3208,7 @@ function _rcProvOk(rec){
       if(c>=0){ const flip=nk(raw.slice(c+1)+' '+raw.slice(0,c)); if(flip && out.indexOf(flip)<0) out.push(flip); }
       return out.filter(Boolean);
     };
-    /* FAILS CLOSED, three ways, after 2026-07-30: Scott opened the composer and 23 of Abby's patients
+    /* FAILS CLOSED, three ways, after 2026-07-30: Scott opened the composer and 23 of the NP's patients
        loaded into his workspace. Each `return true` below used to be a `return`-everything path.
 
        1. NO PROVIDER STAMPED no longer means "everyone gets it". The data contract §2 already says
@@ -3554,7 +3554,7 @@ function _rcRoundOverlap(recs, date, patients){
 
 /* "Reload patients from the card" — with a round to choose, because the newest is not always the one.
  *
- * WHY THIS EXISTS. Abby, 2026-07-31: her Crestmoor round from yesterday is on the card and the note
+ * WHY THIS EXISTS. the NP, 2026-07-31: her Crestmoor round from yesterday is on the card and the note
  * opens empty. A pulled record is remembered forever so it cannot duplicate, and clearing patients out
  * of the note does not clear that memory — so a cleanup makes them permanently unloadable. Deliberate,
  * but with no way to undo it: the valve's own comment says "the no-resurrect rule has no UI to undo it",
@@ -3953,7 +3953,7 @@ function renderLines(text, container, keyPrefix, opts){
       if(preDims){ const d=preDims()||{}; const L=fp(d.L), W=fp(d.W); saField.value=(L>0&&W>0)?(L*W).toFixed(1):''; }
       else if(Lfield && Wfield){ const L=fp(Lfield.value), W=fp(Wfield.value); saField.value=(L>0&&W>0)?(L*W).toFixed(1):''; }
     }
-    // Volume = L × W × D. Abby wants BOTH numbers in the note: surface area alone can't show a wound
+    // Volume = L × W × D. the NP wants BOTH numbers in the note: surface area alone can't show a wound
     // that's deepening, and volume alone can't show one that's spreading. "It's good to have both."
     if(volField && Lfield && Wfield && Dfield){
       const L=fp(Lfield.value), W=fp(Wfield.value), D=fp(Dfield.value);
@@ -3965,13 +3965,13 @@ function renderLines(text, container, keyPrefix, opts){
     const L=fp(Lfield&&Lfield.value), W=fp(Wfield&&Wfield.value), D=fp(Dfield&&Dfield.value);
     const sa=(L>0&&W>0)?L*W:NaN, warns=[];
     // Show surface area AND volume together — the old ternary showed volume INSTEAD of surface area
-    // once a depth was entered, which is why Abby couldn't find the surface area on screen.
+    // once a depth was entered, which is why the NP couldn't find the surface area on screen.
     measFlags._calc.textContent = (L>0&&W>0&&D>0) ? 'Surface area '+sa.toFixed(1)+' cm²  ·  Volume '+(L*W*D).toFixed(1)+' cm³'
       : (L>0&&W>0) ? 'Surface area '+sa.toFixed(1)+' cm²  ·  add D for volume' : 'Enter L × W for auto surface area.';
     if(L>30||W>30) warns.push('L/W over 30 cm is unusual — check for a missed decimal or mm↔cm.');
     if(D>10) warns.push('Depth over 10 cm is unusual — verify.');
     // Deliberately worded as a sanity-check, not an error: this fired on a real 1×1×3 tunneling wound
-    // and made Abby doubt a correct measurement. A deep narrow wound is unusual but entirely valid.
+    // and made the NP doubt a correct measurement. A deep narrow wound is unusual but entirely valid.
     if(D>0&&L>0&&W>0&&D>L&&D>W) warns.push('Deeper than it is wide — unusual but valid for a tunneling wound. Just confirming it\'s not an L/W/D mix-up.');
     const prior=fp(priorInput&&priorInput.value); const tr=measFlags._trend; tr.className='mf-trend';
     if(prior>0&&sa>0){
@@ -4421,7 +4421,7 @@ function renderLines(text, container, keyPrefix, opts){
       priorInput.oninput=()=>{STATE[pk]=priorInput.value; persist(); updateFlags();};
       calcLine.appendChild(calc);
       // Prior SA is meaningless on an INITIAL note — there is no previous visit to compare against
-      // (Abby, 7/16: "we shouldn't have prior surface area on the initial note though, right?").
+      // (the NP, 7/16: "we shouldn't have prior surface area on the initial note though, right?").
       // On a follow-up, carry-forward auto-fills it from the last committed visit; it stays editable
       // so a first tracked visit can still be keyed in by hand.
       if(MODE!=='new'){ calcLine.appendChild(pl2); calcLine.appendChild(priorInput); calcLine.appendChild(cm); }
@@ -4534,7 +4534,7 @@ function dropDeadSentences(t){
 // composed note AND the handoff (its resolver returns ''). EMPTY since 2026-07-20: Procedures got a
 // per-wound Yes/No gate, which made the section-level "✕ Not performed" a redundant second way to say
 // no (Scott: "Remove not performed. No does that already"). Machinery kept for any future section.
-const REMOVABLE_SECTIONS = new Set([]);   // MDM section deleted entirely (Abby, 7/16) — PCC's dot-phrase owns it now
+const REMOVABLE_SECTIONS = new Set([]);   // MDM section deleted entirely (the NP, 7/16) — PCC's dot-phrase owns it now
 // Guarded by REMOVABLE_SECTIONS: a stale "__secoff:Procedures" flag saved before the button was
 // removed must not silently hide the section forever (the restore button is gone with it).
 function sectionRemoved(name){ return REMOVABLE_SECTIONS.has(name) && STATE['__secoff:'+name]===true; }
@@ -4630,7 +4630,7 @@ function buildSection(name,idx,text){
     wrap.appendChild(body); return wrap;
   }
 
-  /* MDM = two fixed lines with ONE rule (Shevie 2026-07-23): the E&M time/review attestation prints
+  /* MDM = two fixed lines with ONE rule (the practice lead 2026-07-23): the E&M time/review attestation prints
      ONLY when no wound had a procedure this visit (read straight off the per-wound "performed?"
      answers — the same `:__done` keys the Procedures section prints from, so the two can never
      disagree); the "discussed with DON and staff" line prints always. No inputs, nothing to fill —
@@ -4787,7 +4787,7 @@ function buildSection(name,idx,text){
 }
 
 /* ============ ONE-CLICK → PCC (the "copy the whole note in one shot" ask) ============
-   Abby, 7/16: "is it possible to copy the entire note in one shot and it just auto-fills into PCC?"
+   the NP, 7/16: "is it possible to copy the entire note in one shot and it just auto-fills into PCC?"
 
    The composer's half of that is deliberately tiny: publish the composed sections into a hidden JSON
    element. The browser extension ("LaVida — Send Note to PCC") reads this element and drives the PCC
@@ -4801,7 +4801,7 @@ function buildSection(name,idx,text){
 
    `removed:true` carries an X-ed-out section so the extension CLEARS that PCC box — otherwise the
    macro's template text survives and the chart claims something that was never done. (That hole exists
-   in today's manual flow too: Abby has to hand-clear those boxes.)
+   in today's manual flow too: the NP has to hand-clear those boxes.)
 
    NOT a merged blob. Sections stay separate, each addressed to its own PCC field — the "Copy entire
    note" button remains review/print only. See [[wound-composer-per-section-copy]]. */
@@ -5150,7 +5150,7 @@ const AUTH = {
 const LOGIN_SCOPES = ['openid','profile','email'];
 function _acctName(a){ return (a && (a.username || (a.idTokenClaims && (a.idTokenClaims.preferred_username||a.idTokenClaims.email)) || a.name)) || 'signed in'; }
 async function beginSignIn(){
-  if(AUTH.demo){ document.getElementById('authGate').style.display='none'; showUser({username:'operations@lavidaheal.com (demo)',name:'Demo User'}); setMode(ptNoteType(activePt())); return; }
+  if(AUTH.demo){ document.getElementById('authGate').style.display='none'; showUser({username:'demo@example.com',name:'Demo User'}); setMode(ptNoteType(activePt())); return; }
   const btn=document.querySelector('#authGate button'); if(btn) btn.disabled=true;
   try{
     const pca=await _getPca();
