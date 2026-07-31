@@ -2947,11 +2947,22 @@ function _rcWasSeen(r){ const d=_rcDispo(r); return d!=='notSeen' && d!=='discha
 // Patient identity ACROSS rounds. Record ids are per-round (carry-forward mints a fresh id every week),
 // so an id cannot answer "is this the same person as last week". Name + building can.
 function _rcPtKey(r){ return whNameKey((r&&r.patient&&r.patient.name)||'')+'|'+_rcFacSeg((r&&r.facility)||''); }
-function _rcSelectForPull(unseen, reachCut){
+function _rcSelectForPull(unseen, reachCut, todayArg){
   const day=r=>String((r&&r.date)||'').slice(0,10);
-  const dated=(unseen||[]).filter(r=>day(r));
+  const isISO=d=>/^\d{4}-\d{2}-\d{2}$/.test(d);
+  /* "The last visit" was a plain string max over whatever was in the date field, with no validation and
+     no upper bound. The card's date input carries no max=, so a mistyped year (2029, or a stray digit)
+     writes a record that sorts highest forever — and because the pull then takes ONLY records matching
+     that date, every real visit becomes "older, skipped" and the provider's pull silently returns
+     nothing. A pull that quietly finds nothing is indistinguishable from a day with no rounds, which
+     is the same failure this function's own comments were already written about.
+     So: a date must LOOK like a date and must not be in the future, and anything else is reported
+     rather than dropped. */
+  const today=todayArg||(typeof todayISO==='function'?todayISO():'9999-12-31');
+  const dated=(unseen||[]).filter(r=>{ const d=day(r); return d && isISO(d) && d<=today; });
+  const future=(unseen||[]).filter(r=>{ const d=day(r); return d && !(isISO(d) && d<=today); });
   const undated=(unseen||[]).filter(r=>!day(r));          // legacy, no date to reason about — unchanged
-  if(!dated.length) return {create:undated, olderSkipped:0, lastDate:''};
+  if(!dated.length) return {create:undated, olderSkipped:0, lastDate:'', futureSkipped:future.length};
   const back=reachCut||_rcReachbackCutoff();
   const lastDate=dated.map(day).sort().pop();
   const create=[];
@@ -2965,7 +2976,7 @@ function _rcSelectForPull(unseen, reachCut){
   });
   const chosen=new Set(create.map(r=>r));
   const olderSkipped=dated.filter(r=>day(r)!==lastDate && !chosen.has(r)).length;
-  return {create:create.concat(undated), olderSkipped, lastDate};
+  return {create:create.concat(undated), olderSkipped, lastDate, futureSkipped:future.length};
 }
 function _rcKey(rec){ return (rec&&rec.id) || [_rcFacSeg(rec&&rec.facility), String((rec&&rec.patient&&rec.patient.name)||'').toLowerCase().trim(), String((rec&&rec.date)||'').slice(0,10)].join('|'); }
 function _rcSeenLoad(){ try{ const o=JSON.parse(localStorage.getItem(RC_SEEN_KEY)||'{}'); return (o&&typeof o==='object')?o:{}; }catch(e){ return {}; } }
@@ -3014,7 +3025,21 @@ function _rcRenamePrompt(oldName, newName){
 let _rcPullBlocked=false;
 function _rcProvOk(rec){
   try{
-    const nk=s=>String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim().split(' ').filter(Boolean).sort().join(' ');
+    /* ORDER MATTERS AGAIN. This used to end in .sort().join(' '), which made the comparison a token
+       MULTISET — so "Silver, Dr Scott" matched "Dr. Scott Silver" (wanted), but so did any two
+       providers whose names are word-order permutations of each other (not wanted). The fence was
+       strict about WHICH words were present and completely blind to their ORDER, which is the shape of
+       a normalizer side effect rather than a decision.
+       The comma form is real and has to keep working, so it is handled EXPLICITLY: a name containing a
+       comma also matches its flipped form. Everything else compares in order. */
+    const nk=s=>String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim().split(' ').filter(Boolean).join(' ');
+    const nkForms=s=>{
+      const raw=String(s||'').toLowerCase();
+      const out=[nk(raw)];
+      const c=raw.indexOf(',');
+      if(c>=0){ const flip=nk(raw.slice(c+1)+' '+raw.slice(0,c)); if(flip && out.indexOf(flip)<0) out.push(flip); }
+      return out.filter(Boolean);
+    };
     /* FAILS CLOSED, three ways, after 2026-07-30: Scott opened the composer and 23 of Abby's patients
        loaded into his workspace. Each `return true` below used to be a `return`-everything path.
 
@@ -3027,14 +3052,17 @@ function _rcProvOk(rec){
        3. rc_last_prov IS GONE from this set. It exists so a shared tablet running the CARD does not
           strand a round; the composer has a signed-in account and never needed it. It was the widest
           door here — one colleague's name, remembered on a device forever, admitting all their records. */
-    const rp=nk(rec&&rec.provider); if(!rp) return false;
+    const rpForms=nkForms(rec&&rec.provider); if(!rpForms.length) return false;
     const ok=new Set();
-    try{ const a=_pca&&_pca.getAllAccounts&&_pca.getAllAccounts()[0]; if(a){ ok.add(nk(a.name)); ok.add(nk(a.username)); } }catch(e){}
-    try{ const c=JSON.parse(sessionStorage.getItem('id_claims')||'{}'); if(c.name) ok.add(nk(c.name)); }catch(e){}
-    try{ if(WS.round&&WS.round.provider) ok.add(nk(WS.round.provider)); }catch(e){}
+    const addAll=v=>{ nkForms(v).forEach(f=>ok.add(f)); };
+    try{ const a=_pca&&_pca.getAllAccounts&&_pca.getAllAccounts()[0]; if(a){ addAll(a.name); addAll(a.username); } }catch(e){}
+    try{ const c=JSON.parse(sessionStorage.getItem('id_claims')||'{}'); if(c.name) addAll(c.name); }catch(e){}
+    try{ if(WS.round&&WS.round.provider) addAll(WS.round.provider); }catch(e){}
     ok.delete('');
     if(!ok.size){ _rcPullBlocked=true; return false; }
-    return ok.has(rp);
+    /* Either side may be written comma-first, so both are expanded and any pairing counts. Word ORDER
+       within a form still matters — that is the whole point of dropping the sort. */
+    return rpForms.some(f=>ok.has(f));
   }catch(e){ return false; }
 }
 /* Every recent roundcard.v1 record across all buildings. Auto-discovers buildings by listing the
@@ -3334,7 +3362,11 @@ async function rcAutoPull(reason){
          visible rather than dropped on the floor. */
       const when=sel.lastDate ? ' from '+sel.lastDate : '';
       const older=sel.olderSkipped ? ' · '+sel.olderSkipped+' older record'+(sel.olderSkipped===1?'':'s')+' not brought in' : '';
-      toast('Brought in '+total+' patient'+(total===1?'':'s')+when+' ('+parts+')'+older); }
+      /* A record dated in the future is almost always a typo in the round date, and it used to
+         hijack "the last visit" and blank the whole pull. It is skipped now, and SAID, because a
+         silently smaller pull is the failure mode this banner exists for. */
+      const fut=sel.futureSkipped ? ' · '+sel.futureSkipped+' record'+(sel.futureSkipped===1?'':'s')+' dated in the FUTURE were skipped — check the round date on the card' : '';
+      toast('Brought in '+total+' patient'+(total===1?'':'s')+when+' ('+parts+')'+older+fut); }
   }catch(e){}
   finally{ _rcPulling=false; _rcLastPull=Date.now();
     if(_rcPullAgain){ _rcPullAgain=false; setTimeout(()=>{ try{ rcAutoPull('queued'); }catch(e){} },0); } }
