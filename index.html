@@ -976,6 +976,11 @@ function _rcAllNumbered(cardWounds){ return !!(cardWounds && cardWounds.length &
    WoundHistory, and from that visit on the fast path takes over. No vault read from the card, and no
    data correction to anyone's records. */
 function _rcCardWid(wid){ return /^c\d+$/.test(String(wid)); }
+/* Wound numbers this provider has deleted from THIS patient's note by hand. Written by
+   releaseWoundNum, read by the card merge, which must never re-add one. A pure accessor so the
+   suite can drive both sides of the rule without a workspace. */
+function _rcDeletedNums(p){ const d=p&&p.wcDel; return Array.isArray(d)?d:[]; }
+function _rcWasDeleted(p, num){ const n=Number(num)||0; return !!n && _rcDeletedNums(p).indexOf(n)>=0; }
 /* THE NUMBER A CARD WID CARRIES. For a card-linked wound the key IS the number — c4 is Wound 4 — so
    identity and number are ONE fact stored ONCE and cannot drift apart. That is the whole repair. */
 function _rcNumOfCardWid(wid){ const m=/^c(\d+)$/.exec(String(wid)); return m?Number(m[1]):0; }
@@ -1013,6 +1018,23 @@ function releaseWoundNum(wid, p){ p=p||activePt(); const R=wreg(p); const k=Stri
   // A card-owned number is an identity the moment the card mints it — never freed, never handed on.
   const wasCommitted=_rcPinned(k, e);
   const delNum=e.num||0;
+  /* A WOUND SHE DELETED STAYS DELETED. Scott, 2026-07-31: "If Abby by hand deletes a wound that wound
+     is GONE." Nothing recorded the deletion, so the next card save simply re-minted the same key and
+     the wound came back — with its old measurements, its A&P order line, and no message. The patient
+     level already has this rule (delete a patient and card updates never resurrect them); the wound
+     level had no equivalent.
+     Keyed by NUMBER, because the number is what the card sends and what identifies a wound across
+     visits. Only for a CARD-owned wound: a hand-added wound was never on the card so it cannot come
+     back from one, and tombstoning its number would be wrong anyway — compaction renumbers
+     hand-added wounds, so that number may belong to a different wound a moment later. Card numbers
+     are never reassigned (see the committedMax high-water mark below), so this can never block the
+     wrong wound.
+     NO UNDO, deliberately: re-adding by hand mints the next free number rather than reviving this
+     one. That is the cost of "GONE" and it was chosen with the alternative on the table. */
+  if(delNum && _rcCardWid(k)){ try{
+    const d=p.wcDel=Array.isArray(p.wcDel)?p.wcDel:[];
+    if(d.indexOf(delNum)<0) d.push(delNum);
+  }catch(e2){} }
   delete R.byId[k];
   /* THE DELETED WOUND'S ORDERS GO WITH IT — ON EVERY PATH. This used to sit below the pinned branch's
      early return, so removing a CARD-owned wound left its "Wound N (location): orders" line behind in
@@ -3348,6 +3370,11 @@ function rcMergeIntoPatient(pid, rec){
   const ordPairs=[];
   cardWounds.forEach((cw,ci)=>{
     const m=props[ci]; let wid;
+    /* SHE DELETED THIS ONE. The card still has it — that is the ordinary case, because the card is
+       the bedside record and she removed it from the NOTE — and it does not come back. Skipped
+       before anything is written, so no key is minted, no measurement lands, and no A&P order line
+       is appended for it. See releaseWoundNum. */
+    if(_rcWasDeleted(WS.patients[pid], cw&&cw.num)) return;
     /* THE NUMBER IS THE IDENTITY, SO WHOEVER ALREADY HOLDS IT IS THE WOUND.
        This used to take the c<num> key FIRST, ahead of the matcher and the empty-shell claim — so a
        wound the note already had under a different wid (typed by hand, added by hand after a pull, or
