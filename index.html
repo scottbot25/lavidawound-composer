@@ -1156,7 +1156,11 @@ async function whCommit(){
     // and next visit's carry-forward matches on them). Must run before the wreg snapshot so it's recorded.
     woundRegistry.forEach(w=>{ const e=wreg().byId[String(w.id)]; if(e){ e.committed=true; e.committedHere=true; } });   // finalized THIS visit -> number locked against reuse now
     { const R=wreg(); Object.keys(R.byId).forEach(k=>{ const e=R.byId[k]; if(e&&e.committed) R.committedMax=Math.max(R.committedMax||0, e.num||0); }); }   // high-water mark: a committed number stays reserved even if its entry is later deleted
+    /* STAMP WHO THIS VISIT BELONGS TO. The file is named after the patient, and two residents can
+       share a name — so the name alone cannot say whose visit this is. The card's per-patient id
+       can, and whPriorVisit reads it back to keep the two apart. */
     const rec={ date, provider:hdr.provider||'', mode:MODE, savedAt:Date.now(), wounds:whSnapshotWounds(),
+                rcId:_whPtId()||undefined,
                 wreg:JSON.parse(JSON.stringify(wreg().byId||{})) };
     const i=h.visits.findIndex(v=>v.date===date);
     if(i>=0) h.visits[i]=rec; else h.visits.push(rec);           // same-day recopy overwrites
@@ -1168,17 +1172,55 @@ async function whCommit(){
 }
 /* The prior visit = the most recent COMMITTED visit before today. Not a date window. */
 let _whPriorCache=null;
+/* THE PATIENT'S OWN ID, from the round card record this note was pulled from.
+   WoundHistory is filed as WoundHistory/<facility>/<patient name>.json and NOTHING ELSE — so two
+   residents called "Garcia, Maria" at one building are the same file. Before this, the second one
+   opened as a Follow-up holding the first one's wounds, and the only on-screen check printed
+   _whPrior.name, which is the same string for both and so could never fire.
+   The card already carries a stable per-patient id across visits, so each committed visit is stamped
+   with it and the reader keeps only the visits that belong to THIS patient. The file layout does not
+   change, so no existing history is orphaned. */
+function _whPtId(){ try{ return String((activePt()||{}).srcRcId||'').trim(); }catch(e){ return ''; } }
+/* Split a history's visits into this patient's, unstamped legacy ones, and somebody else's. */
+function _whSplitVisits(visits, me){
+  const mine=[], legacy=[], theirs=[];
+  (visits||[]).forEach(v=>{
+    const id=String((v&&v.rcId)||'').trim();
+    if(!id) legacy.push(v);
+    else if(me && id===me) mine.push(v);
+    else if(me) theirs.push(v);
+    else legacy.push(v);                      // we don't know who we are — cannot claim it is not ours
+  });
+  return { mine, legacy, theirs };
+}
 async function whPriorVisit(name, exceptDate){
   const h=await whLoad(name); if(!h || !h.visits || !h.visits.length) return null;
   const d=exceptDate||todayISO();
   const past=h.visits.filter(v=>v.date < d);
-  return past.length ? past[past.length-1] : null;
+  if(!past.length) return null;
+  const me=_whPtId();
+  const { mine, legacy, theirs } = _whSplitVisits(past, me);
+  if(mine.length) return mine[mine.length-1];               // unambiguous: visits stamped as this patient
+  if(theirs.length && !legacy.length){
+    /* Every prior visit under this name belongs to a DIFFERENT patient. Seeding them would put one
+       resident's wounds in another's note, so this opens as a first visit instead. */
+    try{ if(typeof console!=='undefined'&&console.warn) console.warn('WoundHistory for "'+name+'" belongs to a different patient id — treating this as a first visit.');
+      if(typeof toast==='function') toast('Another patient at this facility has the same name — starting a fresh history for this one');
+    }catch(e){}
+    return null;
+  }
+  if(theirs.length){
+    try{ if(typeof console!=='undefined'&&console.warn) console.warn('WoundHistory for "'+name+'" holds visits for more than one patient id — using only the unstamped ones.'); }catch(e){}
+  }
+  return legacy.length ? legacy[legacy.length-1] : null;    // pre-stamp history: unchanged behaviour
 }
 
 /* ---- prior state for the ACTIVE patient ---- */
 let _whPrior=null;        // {key, name, visit}  — visit===null means "looked, found nothing"
 let _whLoading=false;
-function _whKey(){ return whNameKey(getPatient())+'|'+whNameKey(whFacility()); }
+/* The id is part of the cache key for the same reason it is part of the lookup: two residents with
+   one name would otherwise share _whPrior in a single workspace and read each other's wounds. */
+function _whKey(){ return whNameKey(getPatient())+'|'+whNameKey(whFacility())+'|'+_whPtId(); }
 function whPriorReady(){ return !!(_whPrior && _whPrior.key===_whKey()); }
 async function whRefreshPrior(){
   const key=_whKey();
