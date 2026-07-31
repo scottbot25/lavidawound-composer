@@ -3160,18 +3160,44 @@ function rcMergeIntoPatient(pid, rec){
   const ordPairs=[];
   cardWounds.forEach((cw,ci)=>{
     const m=props[ci]; let wid;
-    /* A NUMBERED card wound goes to the wid its number names, full stop — no location scoring, no empty
-       shell to claim. That is what makes a re-saved card land on the same wound it created rather than
-       appending a duplicate, and it is why the number has to be an identity rather than a position. */
-    const byNum=_rcWidFor(cw);
-    if(byNum){ wid=byNum; woundNumFromCard(wid, cw.num); if(wids.indexOf(wid)<0) wids.push(wid); }
-    else if(m && m.priorWid!=null && m.confident){ wid=m.priorWid; }                   // fill an existing wound's blanks
-    else if(shells.length){ wid=shells.shift(); }                                      // claim an empty shell (keeps its number)
-    else { wid=mintWid(); woundNum(wid); if(wids.indexOf(wid)<0) wids.push(wid); }     // genuinely new wound -> append
+    /* THE NUMBER IS THE IDENTITY, SO WHOEVER ALREADY HOLDS IT IS THE WOUND.
+       This used to take the c<num> key FIRST, ahead of the matcher and the empty-shell claim — so a
+       wound the note already had under a different wid (typed by hand, added by hand after a pull, or
+       the blank first shell) kept its own key while the card's wound landed on a brand-new one. Two
+       wids holding one number, and the note charted the same wound TWICE — on the silent auto-update
+       path, with no dialog. The card still wins the NUMBER; it no longer insists on the KEY, which is
+       what stops a second key ever being created for a number the note already has. */
+    /* `wid===undefined`, never `!wid`: a legacy wid is the NUMBER 0, which is falsy, so a truthiness
+       test discards a real key and lets every branch below overwrite it. Same trap as the wid-0 case
+       already guarded in _rcNumberedSafe. */
+    const cn=Number(cw&&cw.num)||0;
+    if(cn){ const _R=wreg();
+      const ownerKey=Object.keys(_R.byId||{}).find(k=>Number(_R.byId[k]&&_R.byId[k].num)===cn);
+      /* Object.keys gives STRINGS while the note's wid list may hold NUMBERS. Hand back the entry that
+         is already in the list, or "0" and 0 end up in __wc_1 as two entries for one wound. */
+      if(ownerKey!=null){ let ex; wids.forEach(w=>{ if(String(w)===ownerKey) ex=w; }); wid=(ex!==undefined)?ex:ownerKey; } }
+    if(wid===undefined && m && m.priorWid!=null && m.confident) wid=m.priorWid;        // fill an existing wound's blanks
+    if(wid===undefined && shells.length) wid=shells.shift();                           // claim an empty shell
+    if(wid===undefined) wid=(cn && _rcWidFor(cw))||mintWid();                          // genuinely new -> append
+    if(wids.indexOf(wid)<0) wids.push(wid);
+    if(cn) woundNumFromCard(wid, cn); else woundNum(wid);
     _rcWriteWound(S, wid, cw, {onlyEmpty:true});
     const o=String(cw.orders||'').trim();
     if(o) ordPairs.push({wid, line:'Wound '+woundNum(wid)+(String(cw.loc||'').trim()?' ('+String(cw.loc).trim()+')':'')+': '+o});
   });
+  /* A WOUND THE CARD NO LONGER HAS. This path is add-only by construction: wids starts from the note's
+     existing list and only ever grows, so a wound removed at the bedside kept rendering, kept its
+     measurements, and kept its A&P order line, with nothing to tell the provider. It is NOT deleted
+     here - this merge's whole promise is that it never destroys provider-entered work, and the note is
+     also where a hand-added wound legitimately lives. It is REPORTED, which is what was missing. */
+  { const gone=wids.filter(w=>_rcCardWid(w) && !(cardWounds||[]).some(cw=>_rcWidFor(cw)===w));
+    if(gone.length){ try{
+      const msg='the round card no longer has wound '+gone.map(w=>woundNum(w)).join(', ')+
+                ' — it is still in this note; remove it here if the bedside removal was intended';
+      const _p=activePt(); if(_p) (_p.numWarnings=_p.numWarnings||[]).push(msg);
+      if(typeof console!=='undefined'&&console.warn) console.warn('wound merge: '+msg);
+      if(typeof toast==='function') toast('Card dropped wound '+gone.map(w=>woundNum(w)).join(', ')+' — still in your note');
+    }catch(e){} } }
   S['__wc_1']=wids;
   // A&P sync, CARD-OWNED-LINE aware (same __rcw contract as the wound fields): the exact line the card
   // wrote per wound is remembered; while it still sits in the A&P untouched, a card edit REPLACES it in
