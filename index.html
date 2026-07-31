@@ -3021,7 +3021,10 @@ function _rcWasSeen(r){ const d=_rcDispo(r); return d!=='notSeen' && d!=='discha
 // Patient identity ACROSS rounds. Record ids are per-round (carry-forward mints a fresh id every week),
 // so an id cannot answer "is this the same person as last week". Name + building can.
 function _rcPtKey(r){ return whNameKey((r&&r.patient&&r.patient.name)||'')+'|'+_rcFacSeg((r&&r.facility)||''); }
-function _rcSelectForPull(unseen, reachCut, todayArg){
+/* pinDate: load a SPECIFIC round instead of the newest one. Without it this takes the last visit,
+   which is right for auto-pull but wrong for "reload the Crestmoor round from yesterday" once
+   anything has been saved today - today would win and yesterday would count as older-skipped. */
+function _rcSelectForPull(unseen, reachCut, todayArg, pinDate){
   const day=r=>String((r&&r.date)||'').slice(0,10);
   const isISO=d=>/^\d{4}-\d{2}-\d{2}$/.test(d);
   /* "The last visit" was a plain string max over whatever was in the date field, with no validation and
@@ -3038,7 +3041,7 @@ function _rcSelectForPull(unseen, reachCut, todayArg){
   const undated=(unseen||[]).filter(r=>!day(r));          // legacy, no date to reason about — unchanged
   if(!dated.length) return {create:undated, olderSkipped:0, lastDate:'', futureSkipped:future.length};
   const back=reachCut||_rcReachbackCutoff();
-  const lastDate=dated.map(day).sort().pop();
+  const lastDate=(pinDate && dated.some(r=>day(r)===pinDate)) ? pinDate : dated.map(day).sort().pop();
   const create=[];
   dated.filter(r=>day(r)===lastDate).forEach(r=>{
     if(_rcDispo(r)==='discharged') return;                // gone — nothing to capture
@@ -3298,50 +3301,137 @@ function rcMergeIntoPatient(pid, rec){
   persist(); if(!_rcBatch){ setMode(MODE); renderPatientBar(); }
 }
 let _rcPulling=false, _rcLastPull=0, _rcPullAgain=false;
-/* "Reload patients from the card" — the UI the no-resurrect rule never had.
+/* WHICH ROUNDS ARE THERE TO RELOAD — and the one warning that matters.
  *
- * WHY THIS EXISTS. Abby, 2026-07-31: her Crestmoor round from yesterday is right there on the Round
- * Card, and the note composer opens with none of those patients in it. Scott: "Why does this keep
- * happening. Do we need a button that loads in from the round card."
+ * Scott, 2026-07-31: "yes add the date option to the button... but something to consider is that then
+ * also going to overwrite the current dates notes. How does that work."
  *
- * It kept happening because a pulled record is remembered FOREVER so it cannot duplicate, and clearing
- * the patients out of the note does not clear that memory — so a cleanup makes those patients
- * permanently unloadable. That rule is deliberate (it is what stops a deleted patient reappearing every
- * few seconds), and the escape hatch already existed as a URL: ?repull=1. The comment on the valve says
- * the quiet part out loud — "the deliberate no-resurrect rule has no UI to undo it" — so the escape
- * hatch was a thing you had to KNOW, and a provider mid-round does not.
+ * It does not overwrite. rcMergeIntoPatient writes with onlyEmpty, whose own comment is "never overwrite
+ * a value SHE typed", and a pulled patient whose name+facility is already open is matched by
+ * _rcFindExistingPatient and FILLED rather than duplicated. So loading an older round adds those
+ * patients, or fills BLANKS on ones already in the note.
  *
- * This is that valve as a button. It forgets the pulled-set and pulls again immediately, in this tab,
- * with no reload and nothing typed lost:
- *   - RC_SEEN_KEY only, never RC_EVER_KEY. Clearing the durable set would strip the bypass that keeps a
- *     record flowing after its provider stamp drifts, handing the provider FEWER records — the exact
- *     regression the two keys were split apart to prevent on 2026-07-28.
- *   - A patient already in the note is matched and merged by the existing collision path, not
- *     duplicated, so pressing it twice is harmless.
- *   - It says what it did, because a pull that quietly finds nothing looks identical to a quiet day.
+ * The real hazard is subtler and this is what the picker warns about: the SAME patient seen on two days.
+ * Load yesterday's round while today's note for that patient is half-written and yesterday's answers land
+ * in today's empty boxes — nothing is destroyed, but last visit's findings are now sitting in this
+ * visit's note. So the picker names those patients before she chooses, and defaults to the newest round,
+ * which is the one the plain pull would have taken anyway.
+ *
+ * Both functions are pure — no DOM, no network — so the suite can drive them.
+ */
+
+/* Group provider-filtered records into rounds, newest first.
+   [{date, facilities:[...], count, ids:[...]}] */
+function _rcRoundsAvailable(recs){
+  const by = {};
+  (recs || []).forEach(r => {
+    const d = String((r && r.date) || '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return;          // undated / malformed: never a choosable round
+    const g = by[d] || (by[d] = { date: d, facilities: [], count: 0, ids: [] });
+    g.count++;
+    if (r.id) g.ids.push(r.id);
+    const f = String((r && r.facility) || '').trim();
+    if (f && g.facilities.indexOf(f) < 0) g.facilities.push(f);
+  });
+  return Object.keys(by).sort().reverse().map(d => {
+    const g = by[d];
+    g.facilities.sort();
+    return g;
+  });
+}
+
+/* Which patients in THIS round are already open in the workspace, by name+facility — the ones whose
+   empty boxes this round would fill. Returns their names, so the warning can say who. */
+function _rcRoundOverlap(recs, date, patients){
+  const out = [];
+  const key = s => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(' ').filter(Boolean).sort().join(' ');
+  const open = Object.keys(patients || {}).map(pid => patients[pid]).filter(Boolean);
+  (recs || []).forEach(r => {
+    if (String((r && r.date) || '').slice(0, 10) !== date) return;
+    const nm = key((r.patient && r.patient.name) || '');
+    if (!nm) return;
+    const fac = key(r.facility || '');
+    const hit = open.find(p => key(p.name || '') === nm && key(p.facility || '') === fac);
+    if (hit && out.indexOf(hit.name) < 0) out.push(hit.name);
+  });
+  return out;
+}
+
+/* "Reload patients from the card" — with a round to choose, because the newest is not always the one.
+ *
+ * WHY THIS EXISTS. Abby, 2026-07-31: her Crestmoor round from yesterday is on the card and the note
+ * opens empty. A pulled record is remembered forever so it cannot duplicate, and clearing patients out
+ * of the note does not clear that memory — so a cleanup makes them permanently unloadable. Deliberate,
+ * but with no way to undo it: the valve's own comment says "the no-resurrect rule has no UI to undo it",
+ * and ?repull=1 is a URL a provider mid-round does not know.
+ *
+ * WHY A DATE AND NOT JUST A BUTTON. A plain repull takes the LAST VISIT. The moment anything is saved on
+ * today's card, today becomes the last visit and yesterday's Crestmoor round is counted as
+ * older-and-skipped — the button would look like it did nothing. So the round is chosen, newest first.
+ *
+ * WHAT IT DOES NOT DO, WHICH IS SCOTT'S QUESTION. It does not overwrite the note. rcMergeIntoPatient
+ * writes with onlyEmpty ("never overwrite a value SHE typed"), and a patient already open under the same
+ * name+facility is matched by _rcFindExistingPatient and filled rather than duplicated. The one thing
+ * worth knowing is named on the button before she commits: if a patient in the chosen round is ALREADY
+ * open, that round's answers land in this note's empty boxes — nothing is destroyed, but last visit's
+ * findings end up in this visit's note. So those patients are listed by name in the confirm.
  */
 async function rcRepull(){
   const btn=document.getElementById('rcRepullBtn');
+  if(!DRAFTS_ENABLED()){ toast('Sign in first — the card records live in ClinicalVault'); return; }
   try{
-    if(!DRAFTS_ENABLED()){ toast('Sign in first — the card records live in ClinicalVault'); return; }
     if(btn){ btn.disabled=true; btn.style.opacity='.6'; }
-    const before=Object.keys(WS&&WS.patients?WS.patients:{}).length;
-    /* SEEN only. RC_EVER_KEY is the listing bypass, not dedupe state — see the split at RC_SEEN_KEY. */
+    toast('Looking for your rounds…');
+    /* The listing already filters to THIS provider, and a record this workspace has pulled before still
+       passes — which is exactly the set a reload should be able to choose from. */
+    const recs=await rcListAllRecent();
+    const rounds=_rcRoundsAvailable(recs);
+    if(!rounds.length){ toast('No round card records for you in the last 60 days'); return; }
+    let pick=rounds[0];
+    if(rounds.length>1){
+      const lines=rounds.slice(0,8).map((g,i)=>
+        (i+1)+') '+g.date+'  —  '+g.count+' patient'+(g.count===1?'':'s')+
+        (g.facilities.length?'  ('+g.facilities.join(', ')+')':''));
+      const ans=prompt('Which round do you want to reload?\n\n'+lines.join('\n')+
+        '\n\nType a number (1 = most recent), or Cancel.', '1');
+      if(ans===null){ return; }
+      const n=parseInt(String(ans).trim(),10);
+      if(!(n>=1 && n<=Math.min(rounds.length,8))){ toast('That was not one of the numbers — nothing loaded'); return; }
+      pick=rounds[n-1];
+    }
+    /* THE ONLY WARNING THAT MATTERS. Not "this will overwrite" — it will not — but "this round's answers
+       will fill the blanks in notes you already have open for these people". */
+    const overlap=_rcRoundOverlap(recs, pick.date, (WS&&WS.patients)||{});
+    if(overlap.length){
+      const ok=confirm('Load the '+pick.date+' round?\n\n'+
+        'These patients are already open in your note:\n  '+overlap.join('\n  ')+'\n\n'+
+        'Nothing you have typed will be changed — but that round\'s answers will fill any boxes you have '+
+        'left empty for them. Continue?');
+      if(!ok) return;
+    }
+    const before=Object.keys((WS&&WS.patients)||{}).length;
+    /* SEEN only, never RC_EVER_KEY: clearing the durable set would strip the bypass that keeps a record
+       flowing after a provider stamp drifts, handing the provider FEWER records — the regression those
+       two keys were split apart to prevent on 2026-07-28. */
     try{ localStorage.removeItem(RC_SEEN_KEY); }catch(e){}
-    try{ if(WS) WS.rcPulled={}; }catch(e){}          // session-only dedup for legacy records with no id
-    toast('Looking for round card patients…');
-    await rcAutoPull('manual-repull');
-    const after=Object.keys(WS&&WS.patients?WS.patients:{}).length;
-    const added=after-before;
-    if(added>0) toast('Brought back '+added+' patient'+(added===1?'':'s')+' from the round card');
-    else if(_rcPullBlocked) toast('Could not tell who you are, so nothing was pulled — put your name in the Provider box, or sign in');
-    else toast('Nothing new on the card for you in the last 60 days');
+    try{ if(WS) WS.rcPulled={}; }catch(e){}
+    _rcPinDate=pick.date;
+    try{ await rcAutoPull('manual-repull'); }
+    finally{ _rcPinDate=null; }        // one pull only — never pin later auto-pulls to an old round
+    const added=Object.keys((WS&&WS.patients)||{}).length-before;
+    if(added>0) toast('Loaded '+added+' patient'+(added===1?'':'s')+' from the '+pick.date+' round');
+    else if(_rcPullBlocked) toast('Could not tell who you are, so nothing was loaded — put your name in the Provider box, or sign in');
+    else if(overlap.length) toast('That round was already open — filled any empty boxes for '+overlap.length+' patient'+(overlap.length===1?'':'s'));
+    else toast('Nothing new to load from the '+pick.date+' round');
   }catch(e){
     try{ toast('Could not reach the round card records — check your connection and try again'); }catch(e2){}
   }
   finally{ if(btn){ btn.disabled=false; btn.style.opacity=''; } }
 }
 
+/* Set by the reload button when the provider picks a specific round; cleared after one pull so it
+   can never quietly pin every later auto-pull to an old date. */
+let _rcPinDate=null;
 async function rcAutoPull(reason){
   if(!DRAFTS_ENABLED() || !_draftRestoreDone) return;
   // A save-nudge landing while a pull is in flight must not vanish — queue exactly one re-pull for
@@ -3378,7 +3468,7 @@ async function rcAutoPull(reason){
       }
       const k=_rcKey(r); if(k && !WS.rcPulled[k]) candidates.push(r);   // legacy no-id: name-based, this session only
     });
-    const sel=_rcSelectForPull(candidates);
+    const sel=_rcSelectForPull(candidates, null, null, _rcPinDate);
     const fresh=updates.concat(sel.create);
     // Lazily baseline legacy numeric entries so FUTURE card edits become detectable updates.
     let baselined=false;
