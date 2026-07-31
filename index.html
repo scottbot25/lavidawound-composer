@@ -919,7 +919,22 @@ function rcApplyByCardNum(S, priorList, cardWounds, edu){
          to MERGE two wounds in a chart — it is the same laterality trap rcMatchWounds already refuses
          to auto-confirm, and here the cost of being wrong is a real wound disappearing from a note
          rather than a reconcile prompt. */
-      if(_rcLocScore(pw.location, cw.loc)===1){ ties++; hit=t; }
+      if(_rcLocScore(pw.location, cw.loc)!==1) return;
+      /* AND THE NUMBERS MUST POINT THE RIGHT WAY. This is what separates a wound the NOTE mis-numbered
+         from a genuinely NEW wound the CARD minted at the same site — Scott's rule: "if the wound
+         reopens, it becomes a brand new wound and they will label it as a new wound".
+           a stray  : the note's counter ran ahead of the card, so the PRIOR number is higher
+           a reopen : the card minted a fresh number, so the CARD's number is higher
+         Folding the second case makes a brand-new wound inherit the old one's identity, opened-on date
+         and prior measurements — a 1x1 wound then opens quoting 5x4 as its own baseline and reads as a
+         ~95% improvement on a document the facility sees.
+         Note this does NOT lean on the status field, which is the point: a wound whose Status was never
+         touched stores "" (hoBlank strips the placeholder) and cfRebuildWounds blanks it every week for
+         every unhealed wound, so blank is the DEFAULT rather than an oddity. `pw.resolved` alone could
+         never have held this line. */
+      const cn=Number(cw&&cw.num)||0;
+      if(!(n>0 && cn>0 && n>cn)) return;
+      ties++; hit=t;
     });
     if(hit && ties===1){ _rcAdoptPriorWid(pw.wid, hit); pw.wid=hit; claimed[hit]=1;
       strays.push('folded a stray onto '+hit+' (was number '+n+')'); }
