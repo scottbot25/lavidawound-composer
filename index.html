@@ -308,6 +308,7 @@
     <button id="tab-fu" onclick="chooseNoteType('fu')">Follow-Up · Weekly</button>
   </div>
   <label class="pt-field" title="For your reference and the facility handoff only — this is never copied into the PCC note.">Patient <input id="patientName" placeholder="name / ID — not copied into the note" oninput="onPatientInput(this.value)"></label>
+  <button id="rcRepullBtn" onclick="rcRepull()" title="Bring back every recent Round Card patient, including ones you have already pulled or cleared out of the note. Use this when the card shows patients the note does not." style="cursor:pointer;padding:8px 15px;border:1px solid var(--line);border-radius:9px;color:var(--ink);font-weight:650;background:#fff;display:inline-flex;align-items:center;gap:8px">&#8635; Reload patients from the card</button>
   <button id="handoffBtn" onclick="openHandoff()" title="Move the current patient to a different building (and edit round date / provider). Facility handoffs are sent from the Round Card." style="cursor:pointer;padding:8px 15px;border:1px solid var(--line);border-radius:9px;color:var(--ink);font-weight:650;background:#fff;display:inline-flex;align-items:center;gap:8px">⇄ Reassign patient</button>
   <button id="roundCardBtn" onclick="openRoundCard()" title="Bedside Round Card — quick wound orders for the nurse, same tool as on the phone. Opens over the composer. Patients you send from it appear here automatically." style="cursor:pointer;padding:8px 15px;border:1px solid var(--accent);border-radius:9px;color:var(--accent);font-weight:650;display:inline-flex;align-items:center;gap:8px;background:#fff">🩹 Round Card</button>
   <span id="authUser" class="auth-user"></span>
@@ -2305,6 +2306,74 @@ function doReassign(){
    (schema roundcard.v1). Here the composer reads them (same ClinicalVault read the
    follow-up carry-forward uses), auto-creates the patient, and pre-fills the wound
    fields. It's a HEAD START — the provider completes the full note. */
+/* ============ THE CARD/NOTE CONTRACT — ONE COPY, BYTE-IDENTICAL IN BOTH FILES ====================
+   Scott, 2026-07-31: "go ahead with the shared contract block."
+
+   WHAT THIS IS. Every field the Round Card offers has three separate expressions of the same fact:
+   the card's option list, the composer's translation table, and the bracket list in the note template.
+   Nothing in the CODE tied them together — the tie lived in a hand-written array inside
+   wound-contract-test.js, which covered 8 of the 19 fields. The other 11, including every Procedures
+   field, had no option-parity check at all, and a field added tomorrow would have had none either.
+
+   WHY IT IS DATA AND NOT A REFACTOR. The 19 pairs were compared before this was written: 14 are already
+   byte-identical, and the other 5 differ only by a trailing 'Other' that `selField` appends at render
+   time. The two files already AGREE — what was missing was anything that would notice when they stopped.
+   So nothing is moved and no shipped value changes; the contract is declared, and the suite iterates it
+   instead of restating it.
+
+   HOW IT IS KEPT HONEST. This block is byte-identical in Round-Card.html and Wound-Note-Composer.html,
+   and sweep check 5b fails if the two copies ever differ by a single character. Edit one, edit both.
+
+   ADDING A FIELD: add its row here and it is covered automatically — list/table parity, the "an option
+   the card offers must exist in the table" rule that the Healed bug broke, and the widget SHAPE that
+   the Procedures bug broke.
+
+     cardList  the card's option list             (Round-Card.html)
+     table     the card-option -> note-value map  (Wound-Note-Composer.html)
+     control   WHICH RENDERER draws it, because only one of the three appends anything:
+               'select' selField  - APPENDS 'Other' when the list lacks it
+               'multi'  multiField - renders the list verbatim
+               'proc'   procSel    - renders the list verbatim (the Procedures section)
+               'inline' a plain inline <select> - verbatim (debridement yes/no)
+               Getting this wrong is not cosmetic: it changes what the provider can actually pick, and
+               the first run of this contract caught twelve fields mislabelled 'select' that in fact
+               render verbatim
+     line      a REGEX SOURCE matching the note-template line whose bracket group must accept the
+               table's output. Anchoring is per-field on purpose: "Status:" must be anchored or it
+               matches other rows, while "Stage:" appears mid-line ("Pressure injury Stage: ...").
+               Omitted for the Procedures section, which renders from PROC(), not the wound template
+     bracket   which bracket group on that line, 0-based. Drainage is one line carrying four
+               independent sub-fields, so Odor is group 3 of the Drainage line
+     shape     'array' when the note widget is a checkbox group (makeMultiCheck reads ONLY an array —
+               a string reads as nothing ticked and the whole line is dropped from the chart), else
+               'scalar'. _rcWriteWound DERIVES its Procedures shape map from this field, so the block
+               is load-bearing rather than documentation: get `shape` wrong here and the answer stops
+               reaching the chart, which is exactly the defect Abby reported on 2026-07-30
+     key       the Procedures STATE key this field writes, so the writer can look the shape up
+   ================================================================================================ */
+const WOUND_CONTRACT = [
+  { cardList:'WOUND_TYPES',     table:'_RC_ETIO',        control:'multi',  shape:'array',  line:'^Etiology/classification:', bracket:0 },
+  { cardList:'STAGES',          table:'_RC_STAGE',       control:'select', shape:'scalar', line:'Stage:', bracket:0 },
+  { cardList:'WAGNER',          table:'_RC_WAGNER',      control:'select', shape:'scalar', line:'Wagner grade:', bracket:0 },
+  { cardList:'STATUS',          table:'_RC_STATUS',      control:'select', shape:'scalar', line:'^Status:', bracket:0 },
+  { cardList:'EXPOSED',         table:'_RC_EXPOSED',     control:'multi',  shape:'array',  line:'^Exposed structures:', bracket:0 },
+  { cardList:'DRAINAGE',        table:'_RC_DRAIN',       control:'select', shape:'scalar', line:'^Drainage:', bracket:0 },
+  { cardList:'ODOR',            table:'_RC_ODOR',        control:'select', shape:'scalar', line:'^Drainage:', bracket:3 },
+  { cardList:'PERIWOUND',       table:'_RC_PERIWOUND',   control:'multi',  shape:'array',  line:'^Periwound:', bracket:0 },
+  { cardList:'DEBRIDE',         table:'_RC_DEBRIDE',     control:'inline', shape:'scalar' },
+  { cardList:'PROC_TISSUE',     table:'_RC_P_TISSUE',    control:'proc'  , shape:'array', key:'0' },
+  { cardList:'PROC_DEEPEST',    table:'_RC_P_DEEPEST',   control:'proc'  , shape:'scalar', key:'4' },
+  { cardList:'PROC_TYPE',       table:'_RC_P_TYPE',      control:'proc'  , shape:'scalar', key:'debtype' },
+  { cardList:'PROC_INSTRUMENT', table:'_RC_P_INSTR',     control:'proc'  , shape:'array', key:'5' },
+  { cardList:'PROC_BLOODCTL',   table:'_RC_P_BLOOD',     control:'proc'  , shape:'array', key:'7' },
+  { cardList:'PROC_CONSENT',    table:'_RC_P_CONSENT',   control:'proc'  , shape:'scalar', key:'consent' },
+  { cardList:'PROC_ANESTH',     table:'_RC_P_ANESTH',    control:'proc'  , shape:'array', key:'8' },
+  { cardList:'PROC_CLEANSE',    table:'_RC_P_CLEANSE',   control:'proc'  , shape:'scalar', key:'9' },
+  { cardList:'PROC_ENDPOINT',   table:'_RC_P_ENDPOINT',  control:'proc'  , shape:'scalar', key:'10' },
+  { cardList:'PROC_TOLERANCE',  table:'_RC_P_TOLERANCE', control:'proc'  , shape:'scalar', key:'11' },
+];
+/* ======================= END OF THE CARD/NOTE CONTRACT ========================================== */
+
 const _RC_ETIO={ 'Pressure injury':'pressure injury','Diabetic ulcer':'diabetic ulcer','Venous':'venous','Arterial':'arterial','Surgical':'surgical','Traumatic':'traumatic','MASD':'MASD','Other':'other' };
 /* 'Other' is on every one of these because selField (Round-Card.html) APPENDS it to any list lacking
    one, so the provider can pick it whether we planned for it or not. The key is exactly 'Other' with a
@@ -2520,7 +2589,12 @@ function _rcWriteWound(S, wid, w, opts){
            exactly why it looked like it mostly did.
            The exam section above avoids this only by accident: it happens to write arrays for :4/:8/:17.
            Nothing enforced the shape, so the writer and the reader disagreed in silence. */
-        const P_MULTI={'0':1,'5':1,'7':1,'8':1};
+        /* DERIVED FROM THE CONTRACT, not restated. `shape` in WOUND_CONTRACT is the single
+           declaration of which Procedures keys are checkbox groups; getting it wrong is what
+           silently dropped four of the eleven bedside answers from every chart. Deriving it here
+           makes that block load-bearing rather than documentation - and the parity suite reads
+           the same rows, so the writer and the test cannot disagree about the shape. */
+        const P_MULTI={}; WOUND_CONTRACT.forEach(r=>{ if(r.shape==='array' && r.key!=null) P_MULTI[r.key]=1; });
         const pset=(key,table,val,other)=>{ const mapped=table[val]; if(!mapped) return;
           setK(PP+':'+key, P_MULTI[key] ? [mapped] : mapped);
           if(other!=null && /^other/i.test(String(mapped)) && String(other||'').trim()) setK(PP+':'+key+':fill', String(other).trim()); };
@@ -3224,6 +3298,50 @@ function rcMergeIntoPatient(pid, rec){
   persist(); if(!_rcBatch){ setMode(MODE); renderPatientBar(); }
 }
 let _rcPulling=false, _rcLastPull=0, _rcPullAgain=false;
+/* "Reload patients from the card" — the UI the no-resurrect rule never had.
+ *
+ * WHY THIS EXISTS. Abby, 2026-07-31: her Crestmoor round from yesterday is right there on the Round
+ * Card, and the note composer opens with none of those patients in it. Scott: "Why does this keep
+ * happening. Do we need a button that loads in from the round card."
+ *
+ * It kept happening because a pulled record is remembered FOREVER so it cannot duplicate, and clearing
+ * the patients out of the note does not clear that memory — so a cleanup makes those patients
+ * permanently unloadable. That rule is deliberate (it is what stops a deleted patient reappearing every
+ * few seconds), and the escape hatch already existed as a URL: ?repull=1. The comment on the valve says
+ * the quiet part out loud — "the deliberate no-resurrect rule has no UI to undo it" — so the escape
+ * hatch was a thing you had to KNOW, and a provider mid-round does not.
+ *
+ * This is that valve as a button. It forgets the pulled-set and pulls again immediately, in this tab,
+ * with no reload and nothing typed lost:
+ *   - RC_SEEN_KEY only, never RC_EVER_KEY. Clearing the durable set would strip the bypass that keeps a
+ *     record flowing after its provider stamp drifts, handing the provider FEWER records — the exact
+ *     regression the two keys were split apart to prevent on 2026-07-28.
+ *   - A patient already in the note is matched and merged by the existing collision path, not
+ *     duplicated, so pressing it twice is harmless.
+ *   - It says what it did, because a pull that quietly finds nothing looks identical to a quiet day.
+ */
+async function rcRepull(){
+  const btn=document.getElementById('rcRepullBtn');
+  try{
+    if(!DRAFTS_ENABLED()){ toast('Sign in first — the card records live in ClinicalVault'); return; }
+    if(btn){ btn.disabled=true; btn.style.opacity='.6'; }
+    const before=Object.keys(WS&&WS.patients?WS.patients:{}).length;
+    /* SEEN only. RC_EVER_KEY is the listing bypass, not dedupe state — see the split at RC_SEEN_KEY. */
+    try{ localStorage.removeItem(RC_SEEN_KEY); }catch(e){}
+    try{ if(WS) WS.rcPulled={}; }catch(e){}          // session-only dedup for legacy records with no id
+    toast('Looking for round card patients…');
+    await rcAutoPull('manual-repull');
+    const after=Object.keys(WS&&WS.patients?WS.patients:{}).length;
+    const added=after-before;
+    if(added>0) toast('Brought back '+added+' patient'+(added===1?'':'s')+' from the round card');
+    else if(_rcPullBlocked) toast('Could not tell who you are, so nothing was pulled — put your name in the Provider box, or sign in');
+    else toast('Nothing new on the card for you in the last 60 days');
+  }catch(e){
+    try{ toast('Could not reach the round card records — check your connection and try again'); }catch(e2){}
+  }
+  finally{ if(btn){ btn.disabled=false; btn.style.opacity=''; } }
+}
+
 async function rcAutoPull(reason){
   if(!DRAFTS_ENABLED() || !_draftRestoreDone) return;
   // A save-nudge landing while a pull is in flight must not vanish — queue exactly one re-pull for
