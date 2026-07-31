@@ -3060,7 +3060,11 @@ function addOnePatient(ix){
     return;
   }
   const built=cfRebuildWounds(r.rec);
-  S.pts.push({ id:newId(), name:r.name, edu:'', priorEdu:String(r.rec.edu||''),
+  /* KEEP THE PATIENT'S EXISTING ID. Every other path preserves it (`id:r.id||newId()`); this one alone
+     minted a fresh one, so a patient added individually looked like a different person from the same
+     patient carried forward. That matters now that the note uses this id to tell two residents with the
+     SAME NAME apart: minting here would orphan them from their own wound history. */
+  S.pts.push({ id:(r.rec&&r.rec.id)||newId(), name:r.name, edu:'', priorEdu:String(r.rec.edu||''),
                wounds:built.wounds.length?built.wounds:[newWound()],
                woundSeq:Number(r.rec.woundSeq)||0, send:true, visitType:'', dispo:'' });
   normalizePts(S);
