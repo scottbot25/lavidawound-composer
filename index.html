@@ -1013,18 +1013,23 @@ function releaseWoundNum(wid, p){ p=p||activePt(); const R=wreg(p); const k=Stri
   const wasCommitted=_rcPinned(k, e);
   const delNum=e.num||0;
   delete R.byId[k];
-  if(wasCommitted){
-    // Carried-forward wound: prior-visit identity. Its number is not handed to other wounds; delete+re-add
-    // may still reuse it via seq when it was the highest (unchanged 2026-07-20 behavior).
-    let mx=0; Object.keys(R.byId).forEach(kk=>{ mx=Math.max(mx, R.byId[kk].num||0); });
-    R.seq=mx+1;                                        // next number = one past the highest still in use
-    try{ persist(); }catch(e2){}
-    return null;
-  }
-  // The deleted wound's own A&P order line goes with it — left behind, it would misattribute its orders
-  // to whichever wound inherits the number in the compaction below. Its card-line memory goes too.
+  /* THE DELETED WOUND'S ORDERS GO WITH IT — ON EVERY PATH. This used to sit below the pinned branch's
+     early return, so removing a CARD-owned wound left its "Wound N (location): orders" line behind in
+     the A&P, describing a wound that is no longer in the note. */
   ['new','fu'].forEach(m=>{ try{ const st=p&&p.store&&p.store[m]; const W=st&&st['__rcw']; if(W) delete W['__ap:w'+wid]; }catch(e2){} });
   const stripped=_rcStripApLines(p, delNum);
+  if(wasCommitted){
+    /* A number that has been in a chart is never handed to another wound.
+       This ASSIGNED mx+1, which could LOWER the counter: delete the card's wound 5 out of {1,2,5} and
+       seq fell from 6 to 3, so the next hand-added wound was issued 3, then 4, then 5 — re-using a
+       number already committed to a note. seq may only ever RISE, and the number just deleted stays
+       reserved through committedMax even though its entry is gone. */
+    let mx=0; Object.keys(R.byId).forEach(kk=>{ mx=Math.max(mx, R.byId[kk].num||0); });
+    R.seq=Math.max(Number(R.seq)||1, mx+1, delNum+1);
+    R.committedMax=Math.max(Number(R.committedMax)||0, delNum);
+    try{ persist(); }catch(e2){}
+    return stripped ? {} : null;                       // {} = re-render, nothing renumbered
+  }
   const ren=compactWoundNums(p);
   try{ persist(); }catch(e2){}
   return (Object.keys(ren).length || stripped) ? ren : null;
