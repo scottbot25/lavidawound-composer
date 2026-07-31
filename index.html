@@ -1018,20 +1018,20 @@ function releaseWoundNum(wid, p){ p=p||activePt(); const R=wreg(p); const k=Stri
   // A card-owned number is an identity the moment the card mints it — never freed, never handed on.
   const wasCommitted=_rcPinned(k, e);
   const delNum=e.num||0;
-  /* A WOUND SHE DELETED STAYS DELETED. Scott, 2026-07-31: "If Abby by hand deletes a wound that wound
-     is GONE." Nothing recorded the deletion, so the next card save simply re-minted the same key and
-     the wound came back — with its old measurements, its A&P order line, and no message. The patient
-     level already has this rule (delete a patient and card updates never resurrect them); the wound
-     level had no equivalent.
-     Keyed by NUMBER, because the number is what the card sends and what identifies a wound across
-     visits. Only for a CARD-owned wound: a hand-added wound was never on the card so it cannot come
-     back from one, and tombstoning its number would be wrong anyway — compaction renumbers
-     hand-added wounds, so that number may belong to a different wound a moment later. Card numbers
-     are never reassigned (see the committedMax high-water mark below), so this can never block the
-     wrong wound.
-     NO UNDO, deliberately: re-adding by hand mints the next free number rather than reviving this
-     one. That is the cost of "GONE" and it was chosen with the alternative on the table. */
-  if(delNum && _rcCardWid(k)){ try{
+  /* A WOUND WITH HISTORY, DELETED, STAYS DELETED — and ONLY a wound with history.
+     Scott, 2026-07-31: "only a wound that has history right… if a wound that was pulled from wound
+     history gets deleted it just doesn't carry over into the next note but that number is not
+     reused." And for a wound with no history: "that shouldn't carry forward" either, but it is not a
+     retirement — it is a wound that never happened.
+     So the tombstone is gated on `committed`, which is exactly "this wound came from a prior
+     committed visit" (whRefreshPrior rehydrates prior wounds as committed:true / committedHere:false).
+     A wound minted THIS visit — on the card or by hand — is not tombstoned: the card is the bedside
+     record and if it is still on the card, it belongs in the note. Nothing recorded the deletion
+     before this, so an established wound she had removed came back on the next card save with its old
+     measurements and its A&P order line, silently.
+     Keyed by NUMBER because that is what the card sends and what identifies a wound across visits;
+     a committed number is pinned, so compaction can never move it onto a different wound. */
+  if(delNum && e.committed){ try{
     const d=p.wcDel=Array.isArray(p.wcDel)?p.wcDel:[];
     if(d.indexOf(delNum)<0) d.push(delNum);
   }catch(e2){} }
