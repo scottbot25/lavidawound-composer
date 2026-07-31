@@ -138,7 +138,7 @@
         <div id="provOwner" class="muted" style="display:none;font-size:12px;margin-top:4px;line-height:1.35"></div>
       </div>
     </div>
-    <!-- Next-day access (Abby 2026-07-22: "an RN wants a change in the orders" after the round is off
+    <!-- Next-day access (the NP 2026-07-22: "an RN wants a change in the orders" after the round is off
          the screen). Today's round already restores by itself on open; this reaches BACK — any round
          saved in the last week can be reloaded, amended, and re-sent. A Cleared round is gone on
          purpose (Clear wipes the cloud copy too); the PCC note + saved sheet remain the record. -->
@@ -293,7 +293,7 @@ const PERIWOUND   = ['Normal','Macerated','Erythematous','Indurated','Ecchymotic
    The composer now asks `_isResolvedStatus()`, which excludes it explicitly. Do not replace that with
    a bare regex, in either file. */
 const STATUS      = ['New','Not healed','Improving','Stable','Worsening','Healed'];
-/* Debridement / procedure performed on this wound (Abby, 2026-07-30). Feeds the note's OWN per-wound
+/* Debridement / procedure performed on this wound (the NP, 2026-07-30). Feeds the note's OWN per-wound
    gate — "Procedure / debridement performed on this wound?" — rather than a parallel field, so the two
    can never disagree. That gate is billing-relevant: the note prints the E&M time attestation only when
    NO wound had a procedure, so a Yes here removes it, which is correct and is why it must be exact.
@@ -935,7 +935,7 @@ function paintCount(){
   document.getElementById('countPill').textContent =
     n+' patient'+(n===1?'':'s') + (seen!==n ? ' · '+seen+' seen' : '');
 }
-/* ABC ordering (Abby 2026-07-22: the card should line up with PCC's name-sorted patient list).
+/* ABC ordering (the NP 2026-07-22: the card should line up with PCC's name-sorted patient list).
    DISPLAY-only — S.pts keeps entry order (indices stay stable for pickPt/delPt/setW), and every
    surface sorts a copy: tabs, the sheet (so "Patient N of M" counts alphabetically too), and the
    Review send-picker. Named patients A→Z, case-insensitive; unnamed ones sink to the end in entry
@@ -1005,7 +1005,7 @@ function toggleW(i,field,opt,on){
    A carried wound arrives with its IDENTITY filled (location / type / stage) and every FINDING blank.
    Last visit's numbers ride along in w.prior and are shown BESIDE the blank boxes, never inside them:
    pre-filling last week's measurement is how a wound that grew gets charted as unchanged, and it is the
-   same trap the note's "last visit" panel was built to avoid (Abby: "I need the numbers to actually show
+   same trap the note's "last visit" panel was built to avoid (the NP: "I need the numbers to actually show
    that it's getting better"). Orders are the one exception — one tap copies them, because that is the
    biggest time saver on the card and a tap is still a decision. */
 function _priorLine(txt){ return '<div class="muted" style="font-size:11.5px;margin:2px 0 6px">'+txt+'</div>'; }
@@ -1819,7 +1819,7 @@ function _rcGone(id){ return !!id && (_rcDeleting.has(id) || _rcDeleted.has(id))
    tapped - on 2026-07-27 that put 21 records into the vault for a round nobody had started, purely
    because Scott wanted to see what the button did. Undoing it meant deleting 21 patients one at a
    time, and until he did, the QC count read 21 patients seen on a day nobody was seen, which would
-   have sent Ramil hunting for 21 notes that do not exist.
+   have sent the QC reviewer hunting for 21 notes that do not exist.
    So a carried-forward round is UNSTARTED until the provider actually changes something. The
    patients are on screen; nothing is filed. The first real edit starts the round and everything
    behaves exactly as before from then on.
@@ -1897,7 +1897,7 @@ const _rcCloudSig=_loadCloudSig((function(){ try{ return sessionStorage.getItem(
 /* ---------- IDS WE KNOW ARE IN THE VAULT (audit #2) ----------
    The QC count counted what was ON SCREEN. An untouched carried-forward patient is on the list and
    owes no note, and no record is ever filed for them - so the card could write patientCount 12 for a
-   day that produced 3 records. Ramil's Day Check then reads 12, finds 3 notes, and goes hunting for
+   day that produced 3 records. the QC reviewer's Day Check then reads 12, finds 3 notes, and goes hunting for
    9 that were never owed: the exact failure the carry-forward guard exists to prevent, arriving
    through the PARTIAL case instead of the all-untouched one. The 23:00 job usually overwrites the
    number before the morning read, so the damage is bounded - but not on a night the job does not
@@ -2098,7 +2098,7 @@ async function sheetAutoSave(){
    a document that simply reflects the round, while this is a business metric, and a count that ticks
    1,2,3… all afternoon is noise.
    Scott 2026-07-26: "set it to pull at a time when rounds would be over." That fits the consumer exactly —
-   Ramil's Day Check reads this feed the NEXT MORNING to catch visits that never became a PCC note, so the
+   the QC reviewer's Day Check reads this feed the NEXT MORNING to catch visits that never became a PCC note, so the
    only real deadline is "correct by tomorrow".
    So it files when the round is genuinely done, judged two ways:
      · after QC_AFTER_HOUR — the tab is still open and the working day is over, or
@@ -2110,7 +2110,7 @@ const QC_AFTER_HOUR=17;                                // 5pm local
 let _qcBusy=false, _qcLastSig='';
 async function qcAutoSave(force){
   if(_qcBusy) return;
-  // Never file a count for a round nobody has started. This is the one that would have sent Ramil
+  // Never file a count for a round nobody has started. This is the one that would have sent the QC reviewer
   // looking for 21 notes that were never owed.
   if(_rcUnstarted) return;
   // captured synchronously — a facility switch must not file this building's count under the next one
@@ -2507,7 +2507,7 @@ function clearAll(btn){
      It used to delete the on-screen patients' records from ClinicalVault, so that reopening the card
      couldn't resurrect a round the provider had deliberately wiped. The trade was wrong by an order of
      magnitude: to a provider, "Clear" plainly means clear the screen before the next building — nothing
-     about it suggests reaching into the server and destroying a completed round. On 2026-07-22 Abby
+     about it suggests reaching into the server and destroying a completed round. On 2026-07-22 the NP
      finished University Heights, sent the sheet, cleared to start Crestmoor, and all 21 of that round's
      records were deleted from the vault. The folder survived, empty, which is how we found it. They were
      recovered from the recycle bin; the next one might not be.
@@ -2569,7 +2569,7 @@ function _nameKey(s){ return String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,'
    carry-forward had none until it returned the whole of Crestmoor to Scott (2026-07-26). Same bug, four
    chances to make it — so there is now exactly one implementation and no feature may hand-roll another.
    A record is MINE if its provider matches the Provider box, the signed-in account, or the last provider
-   used on this device (spelling-insensitive via _nameKey, so "Dr. Kassai" == "kassai dr").
+   used on this device (spelling-insensitive via _nameKey, so "Dr. Smith" == "smith dr").
    allowBlank = accept records with NO provider stamped. TRUE where the user still eyeballs the result or
    it is same-day and almost certainly theirs (restore, the picker's labelled list); FALSE where records
    are turned into patients unreviewed (carry-forward) — that is how someone else's patient would land on
@@ -2694,9 +2694,9 @@ async function rcRestoreFromVault(){
   }catch(e){}
 }
 
-/* ---------- Load a recent round (Abby 2026-07-22) ----------
+/* ---------- Load a recent round (the NP 2026-07-22) ----------
    Reaches BACK where restore-on-open only covers today: any round saved in the last 7 days can be
-   reloaded to amend orders after the fact ("samira or an RN wants a change... the next day").
+   reloaded to amend orders after the fact ("a facility nurse or an RN wants a change... the next day").
    Click-driven, so interactive sign-in is fine (standalone redirects; in the overlay the token comes
    from the composer via the broker). Loading keeps the round's ORIGINAL date — re-saving updates the
    SAME records (same ids), so the composer's update path sees the amendments. A Cleared round will
@@ -2827,7 +2827,7 @@ async function openRecentRounds(){
     list.innerHTML='<div class="muted">⚠ '+esc(e.message||'Couldn’t reach ClinicalVault')+'</div>';
   }
 }
-/* ---------- START FROM LAST VISIT (Abby 2026-07-22: "what will the rounding card pull from this week?
+/* ---------- START FROM LAST VISIT (the NP 2026-07-22: "what will the rounding card pull from this week?
    ...there is some stuff that 100 percent shld pull forward so it keeps adding data") ----------
    Rebuilds this week's panel for THIS PROVIDER at the CURRENT facility, from each patient's OWN most
    recent earlier visit (not "last week's round" — someone seen off-schedule still gets their history),
