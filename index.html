@@ -2447,8 +2447,20 @@ function _rcWriteWound(S, wid, w, opts){
       /* Only a YES carries the section. A "No" answers the gate and stops — writing procedure detail
          for a procedure that did not happen would put it in the chart. */
       if(_RC_DEBRIDE[w.debride]==='yes'){
+        /* FOUR OF THESE LINES ARE CHECKBOX GROUPS, NOT DROPDOWNS, and they read only an ARRAY.
+           makeWidget routes "Tissue Type Removed:", "Instrument Used:", "Blood Loss Controlled Via:"
+           and "Anesthesia:" to makeMultiCheck, whose reader is
+               const getSel=()=> Array.isArray(STATE[k]) ? STATE[k] : [];
+           A string in those keys reads as NOTHING TICKED, the sink returns the raw bracket list, and
+           cleanForCopy then deletes the whole line — so four of the eleven bedside Procedures answers
+           silently never reached the chart on any debrided wound. This is what Abby was seeing when she
+           said the card was not carrying into the note. The seven plain selects always worked, which is
+           exactly why it looked like it mostly did.
+           The exam section above avoids this only by accident: it happens to write arrays for :4/:8/:17.
+           Nothing enforced the shape, so the writer and the reader disagreed in silence. */
+        const P_MULTI={'0':1,'5':1,'7':1,'8':1};
         const pset=(key,table,val,other)=>{ const mapped=table[val]; if(!mapped) return;
-          setK(PP+':'+key, mapped);
+          setK(PP+':'+key, P_MULTI[key] ? [mapped] : mapped);
           if(other!=null && /^other/i.test(String(mapped)) && String(other||'').trim()) setK(PP+':'+key+':fill', String(other).trim()); };
         pset('0',  _RC_P_TISSUE,   w.tissueRemoved, w.tissueRemovedOther);
         if(String(w.postL||'').trim()) setK(PP+':1', String(w.postL).trim());
