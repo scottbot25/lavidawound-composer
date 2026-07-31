@@ -333,6 +333,17 @@ function load(){
 function normalizePts(o){
   if(!o || !Array.isArray(o.pts)) return;
   o.pts.forEach(p=>{ if(!p.id) p.id=newId(); if(typeof p.send!=='boolean') p.send=true;
+    /* THE ID THAT SURVIVES CARRY-FORWARD (Scott 2026-07-31). `id` is the RECORD's id and is minted
+       fresh every round — carryForward's own map calls newId() — so it can say "which save is this"
+       and can never say "which person is this". The composer had been using it for the second job:
+       whCommit stamps each committed visit with it and whPriorVisit only accepts visits whose stamp
+       matches, so from the second stamped visit onward EVERY returning patient lost her own history.
+       No prior block, no Prior SA, nothing for the >50%-change check to compare against, and a toast
+       claiming another patient at that building shares her name when nobody does.
+       ptId is minted once and carried, so it answers the second question. Backfilled to the current
+       record id, which is exactly the value already stamped into any existing history — so the chain
+       links up on the first carry-forward after this ships rather than starting over. */
+    if(!p.ptId) p.ptId=p.id;
     if(typeof p.dispo!=='string') p.dispo='';   // absent means seen — see DISPO_OPTS
     /* WOUND NUMBERS ARE ASSIGNED HERE AND NOWHERE ELSE (Scott 2026-07-30). Every load path — session
        resume, restore-on-open, the round picker, carry-forward — funnels through normalizePts, so
@@ -2208,6 +2219,7 @@ async function rcAutoSaveCloud(){
         // woundSeq rides in the record: it is the only place a number spent by a since-resolved wound
         // survives, and without it next week's card would reuse it. Each wound carries its own `num`.
         patient:{name:p.name}, edu:p.edu||'', woundSeq:Number(p.woundSeq)||0,
+        ptId:p.ptId||p.id||'',   // the id that survives carry-forward - see normalizePts
         wounds:JSON.parse(JSON.stringify(p.wounds||[])) };
       const jb=new Blob([JSON.stringify(rec)],{type:'application/json'});
       await _netTmo(_vaultUpload(token,driveId,recSegs,id+'.json',jb,'application/json'), 30000);
@@ -2295,6 +2307,7 @@ async function saveVault(){
         // woundSeq rides in the record: it is the only place a number spent by a since-resolved wound
         // survives, and without it next week's card would reuse it. Each wound carries its own `num`.
         patient:{name:p.name}, edu:p.edu||'', woundSeq:Number(p.woundSeq)||0,
+        ptId:p.ptId||p.id||'',   // the id that survives carry-forward - see normalizePts
         wounds:JSON.parse(JSON.stringify(p.wounds||[])) };
       const jb=new Blob([JSON.stringify(rec)],{type:'application/json'});
       await _vaultUpload(token,driveId,recSegs,id+'.json',jb,'application/json');
@@ -2664,7 +2677,7 @@ async function rcRestoreFromVault(){
     S.round.loadedProv=owner.name; S.round.loadedMixed=owner.mixed;
     // dispo has to come back too — reopening a round must not quietly reset everyone to
     // "seen" and re-inflate the count that was already filed for that day.
-    S.pts=mine.map(r=>({ id:r.id||newId(), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], woundSeq:Number(r.woundSeq)||0, send:true, visitType:r.visitType||'', dispo:r.dispo||'' }));
+    S.pts=mine.map(r=>({ id:r.id||newId(), ptId:String(r.ptId||r.id||''), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], woundSeq:Number(r.woundSeq)||0, send:true, visitType:r.visitType||'', dispo:r.dispo||'' }));
     normalizePts(S); S.active=0;
     S.pts.forEach(p=>{ try{ _rcCloudSig[p.id]=_rcSig(p); _rcFiled.add(p.id); }catch(e){} });   // restored = already in the cloud; no re-upload
     saveFiled();
@@ -3064,7 +3077,8 @@ function addOnePatient(ix){
      minted a fresh one, so a patient added individually looked like a different person from the same
      patient carried forward. That matters now that the note uses this id to tell two residents with the
      SAME NAME apart: minting here would orphan them from their own wound history. */
-  S.pts.push({ id:(r.rec&&r.rec.id)||newId(), name:r.name, edu:'', priorEdu:String(r.rec.edu||''),
+  S.pts.push({ id:(r.rec&&r.rec.id)||newId(), ptId:String((r.rec&&(r.rec.ptId||r.rec.id))||''),
+               name:r.name, edu:'', priorEdu:String(r.rec.edu||''),
                wounds:built.wounds.length?built.wounds:[newWound()],
                woundSeq:Number(r.rec.woundSeq)||0, send:true, visitType:'', dispo:'' });
   normalizePts(S);
@@ -3103,7 +3117,12 @@ async function carryForward(){
       /* woundSeq comes from the RECORD, never recomputed from the wounds that survived. `kept` drops
          resolved wounds, so max(kept) would forget a spent number: heal Wound 3, carry forward, add a
          wound, and it would be handed 3 again — a number already in this patient's chart. */
-      return { id:newId(), name:((rec.patient&&rec.patient.name)||'').trim(), edu:'',
+      /* A NEW RECORD, THE SAME PERSON. id is minted (this is a brand-new save for today); ptId is
+         CARRIED, because it is what the composer's wound history files this patient under. Falling
+         back to the source record's id is the migration: records written before ptId existed are
+         stamped in history under that id, so adopting it here links this week to last week's. */
+      return { id:newId(), ptId:String((rec&&(rec.ptId||rec.id))||''),
+               name:((rec.patient&&rec.patient.name)||'').trim(), edu:'',
                priorEdu:String(rec.edu||''), wounds:wounds.length?wounds:[newWound()],
                woundSeq:Number(rec.woundSeq)||0,
                send:true, visitType:'', dispo:'' };   // Auto — the composer decides Initial vs Follow-up from history
@@ -3173,7 +3192,7 @@ function loadRecentRound(i){
   // dispo comes back too — see the same line in rcRestoreFromVault. Reopening a round must
   // not quietly reset everyone to "seen"; auto-save would then re-upload them as seen and
   // re-inflate a count that was already filed correctly.
-  S.pts=mine.map(r=>({ id:r.id||newId(), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], woundSeq:Number(r.woundSeq)||0, send:true, visitType:r.visitType||'', dispo:r.dispo||'' }));
+  S.pts=mine.map(r=>({ id:r.id||newId(), ptId:String(r.ptId||r.id||''), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], woundSeq:Number(r.woundSeq)||0, send:true, visitType:r.visitType||'', dispo:r.dispo||'' }));
   normalizePts(S); S.active=0;
   S.pts.forEach(p=>{ try{ _rcCloudSig[p.id]=_rcSig(p); _rcFiled.add(p.id); }catch(e){} });   // loaded = already in the cloud; only edits re-upload
   saveFiled();
@@ -3280,7 +3299,7 @@ async function rcLoadRoundFor(dateStr, facRaw){
        would let a throw leave a full card on screen with NO seeded signatures - every record dirty,
        the whole round re-uploaded under whatever the box says. That is the 21-record re-file class. */
     const owner=_roundOwner(mine);
-    S.pts=mine.map(r=>({ id:r.id||newId(), name:(r.patient&&r.patient.name)||'', edu:r.edu||'',
+    S.pts=mine.map(r=>({ id:r.id||newId(), ptId:String(r.ptId||r.id||''), name:(r.patient&&r.patient.name)||'', edu:r.edu||'',
       wounds:Array.isArray(r.wounds)?r.wounds:[], woundSeq:Number(r.woundSeq)||0, send:true, visitType:r.visitType||'', dispo:r.dispo||'' }));
     normalizePts(S); S.active=0;
     S.round.facLock=facR;                                  // every vault-load path must set this

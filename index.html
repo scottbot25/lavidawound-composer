@@ -888,7 +888,7 @@ function _rcAssertNumbers(orderWids, cardWounds, p){
   }catch(e){}
   return true;
 }
-function rcApplyByCardNum(S, priorList, cardWounds, edu){
+function rcApplyByCardNum(S, priorList, cardWounds, edu, recDate){
   const order=[]; const seenW={};
   /* Reconcile FIRST: any prior wound whose number matches a card wound is the SAME wound, so it adopts
      the card's key. Only then is it safe to seed, because after this no prior wid can duplicate a card
@@ -950,15 +950,15 @@ function rcApplyByCardNum(S, priorList, cardWounds, edu){
     const wid=_rcWidFor(cw); if(!wid) return;
     woundNumFromCard(wid, cw.num);
     if(order.indexOf(wid)<0) order.push(wid);
-    _rcWriteWound(S, wid, cw);
+    _rcWriteWound(S, wid, cw, {recDate});
     const o=String(cw.orders||'').trim();
     if(o){ const line='Wound '+woundNum(wid)+(String(cw.loc||'').trim()?' ('+String(cw.loc).trim()+')':'')+': '+o;
-      ordLines.push(line); W['__ap:w'+wid]=line; }
+      ordLines.push(line); W['__ap:w'+wid]=line; _rcStamp(S,'__ap:w'+wid,recDate); }
   });
   order.sort((a,b)=>woundNum(a)-woundNum(b));
   _rcAssertNumbers(order, cardWounds);
   S['__wc_1']=order;
-  if(String(edu||'').trim()) W['__ap:edu']='Additional info / education: '+String(edu).trim();
+  if(String(edu||'').trim()){ W['__ap:edu']='Additional info / education: '+String(edu).trim(); _rcStamp(S,'__ap:edu',recDate); }
   _rcSetAP(S, _rcComposeAP(ordLines, edu));
 }
 // Every card wound carries a number -> identity is known and the matcher is skipped entirely.
@@ -1201,7 +1201,19 @@ let _whPriorCache=null;
    The card already carries a stable per-patient id across visits, so each committed visit is stamped
    with it and the reader keeps only the visits that belong to THIS patient. The file layout does not
    change, so no existing history is orphaned. */
-function _whPtId(){ try{ return String((activePt()||{}).srcRcId||'').trim(); }catch(e){ return ''; } }
+/* THE RECORD ID WAS THE WRONG ID, and the comment above said so while _rcPtKey's comment 1,800 lines
+   below said the opposite: "Record ids are per-round (carry-forward mints a fresh id every week), so
+   an id cannot answer 'is this the same person as last week'." That one was right. carryForward's own
+   map calls newId(), so from the second stamped visit onward EVERY returning card-pulled patient was
+   filed under a stamp nothing in her history carried: no prior block, Prior SA never auto-filled, the
+   >50%-change sanity check had nothing to compare against, the handoff's Prior surface area row
+   printed empty, and she was told "another patient at this facility has the same name" about a
+   patient with no namesake. The card now carries ptId, minted once and preserved through
+   carry-forward, add-one-patient and every round load.
+   srcRcId stays as the FALLBACK, and that is the migration rather than a leftover: a record written
+   before ptId existed has its history stamped with the record id, and carryForward adopts that same
+   id as the new ptId, so the chain links up instead of restarting. */
+function _whPtId(){ try{ const p=activePt()||{}; return String(p.rcPtId||p.srcRcId||'').trim(); }catch(e){ return ''; } }
 /* Split a history's visits into this patient's, unstamped legacy ones, and somebody else's. */
 function _whSplitVisits(visits, me){
   const mine=[], legacy=[], theirs=[];
@@ -2505,8 +2517,38 @@ async function rcList(facility){
 // Write ONE card wound's fields into store S under the given wid (keyPrefix "1:w<wid>"). Field positions
 // (:0 loc, :1/:2/:3 L/W/D, :4 etiology, :5 stage, :7 status, :8 exposed, :9 drainage, :12 odor, :17
 // periwound) are verified empirically against the live Objective template (choice/select/checkbox tokens).
+/* ===== WHICH DAY'S RECORD WROTE THIS KEY (Scott 2026-07-31) =======================================
+   __rcw answers "did the card write this value". It cannot answer "was that THIS visit or last
+   week's" — and until the reload button existed, nothing could load an older round, so the two
+   questions had the same answer. They do not any more.
+
+   The damage: a note built from today's card holds card-written values in every box. Load yesterday's
+   round (or let a not-seen patient reach back to an older visit) and the merge's ownership test —
+   "the value still equals what the card wrote, so the card may update it" — hands every one of those
+   boxes to the OLDER record. Today's length, width, depth, status, stage, drainage, odor, wound bed
+   and orders are replaced by last week's, silently, in the note that gets pasted into PCC as today's
+   exam. The confirm dialog's promise ("nothing you have typed will be changed") stays literally true
+   the whole time, because none of it was typed.
+
+   So provenance gets its own map, keyed exactly like __rcw so the two cannot drift, under a '__' key
+   so it stays out of every content check. ABSENT MEANS UNKNOWN, and unknown reads as not-stale — a
+   legacy store behaves precisely as it did before, and this can never invent a new refusal. */
+function _rcDateMap(S){ return S['__rcwd']=(S&&S['__rcwd']&&typeof S['__rcwd']==='object')?S['__rcwd']:{}; }
+function _rcStamp(S, k, recDate){ const d=String(recDate||'').slice(0,10); if(d) _rcDateMap(S)[k]=d; }
+// Would this record be RE-answering a key that a LATER record already answered? Same day is not stale:
+// that is the ordinary "she fixed a typo on today's card and re-saved" path, which must keep landing.
+function _rcStale(S, k, recDate){
+  const D=S&&S['__rcwd']; const had=D&&typeof D==='object'?D[k]:null; const now=String(recDate||'').slice(0,10);
+  /* An UNDATED record is not newer than a dated one — it is unknown, and unknown is not permission.
+     (Undated records are legacy saves from before the card stamped a date; they ride along on every
+     pull, so without this one clause they would quietly outrank every real round.) Note the asymmetry,
+     which is deliberate: a key with NO recorded date is fair game, because before this build nothing
+     was stamped and refusing there would start blocking ordinary card updates on notes already open. */
+  return !!(had && (!now || now < had));
+}
 function _rcWriteWound(S, wid, w, opts){
   const P='1:w'+wid; const onlyEmpty=!!(opts&&opts.onlyEmpty);
+  const recDate=String((opts&&opts.recDate)||'').slice(0,10);   // the round this record is FROM
   // onlyEmpty (merge into a note the provider already started): never overwrite a value SHE typed — but a
   // value the CARD itself wrote on an earlier pull is still the card's to update (Scott 2026-07-21: fixing
   // a typo'd measurement on the card must reach the note, not die against fill-empty). S['__rcw'] remembers
@@ -2518,7 +2560,14 @@ function _rcWriteWound(S, wid, w, opts){
   const isEmpty=v=>v==null || v==='' || (Array.isArray(v)&&!v.length);
   const W=S['__rcw']=(S['__rcw']&&typeof S['__rcw']==='object')?S['__rcw']:{};
   const same=(a,b)=>{ try{ return JSON.stringify(a)===JSON.stringify(b); }catch(e){ return false; } };
-  const setK=(k,v)=>{ if(!onlyEmpty || isEmpty(S[k]) || ((k in W) && same(S[k],W[k]))){ S[k]=v; W[k]=Array.isArray(v)?v.slice():v; } };
+  /* Three ways a write is allowed, and the third is the one that needed a date:
+       - not a merge at all (a fresh pulled patient) -> the record is authoritative, write
+       - the box is EMPTY -> nobody has answered it, so any record may, however old
+       - the card still owns the value AND this record is not older than the one that wrote it
+     An older record filling a blank is wanted (that is what "fill any boxes you left empty" means);
+     an older record re-answering a question a newer round already answered is the defect. */
+  const setK=(k,v)=>{ if(!onlyEmpty || isEmpty(S[k]) || (((k in W) && same(S[k],W[k])) && !_rcStale(S,k,recDate))){
+    S[k]=v; W[k]=Array.isArray(v)?v.slice():v; _rcStamp(S,k,recDate); } };
   if(String(w.loc||'').trim()) setK(P+':0',String(w.loc).trim());
   if(String(w.l||'').trim())   setK(P+':1',String(w.l).trim());
   if(String(w.w||'').trim())   setK(P+':2',String(w.w).trim());
@@ -2687,15 +2736,24 @@ function _migrateWoundData(p, fromMode, toMode){
     if(sw && typeof sw==='object'){
       const dw=dst['__rcw']=(dst['__rcw']&&typeof dst['__rcw']==='object')?dst['__rcw']:{};
       const same=(a,b)=>{ try{ return JSON.stringify(a)===JSON.stringify(b); }catch(e){ return false; } };
+      /* THE PROVENANCE TRAVELS WITH THE OWNERSHIP IT QUALIFIES. __rcwd says which round's record wrote
+         each key; leaving it behind on a note-type switch would make every carried value look
+         undated, and undated reads as "not stale" — so an older round could overwrite today's exam
+         again, but only for notes that had switched between Initial and Follow-up. Exactly the shape
+         of bug the __rcw migration below this was written to fix. Claimed together, never apart. */
+      const sd=(src['__rcwd']&&typeof src['__rcwd']==='object')?src['__rcwd']:null;
+      const claim=(mk,v)=>{ dw[mk]=v;
+        if(sd && sd[mk]!=null){ const dd=dst['__rcwd']=(dst['__rcwd']&&typeof dst['__rcwd']==='object')?dst['__rcwd']:{};
+          if(!(mk in dd)) dd[mk]=sd[mk]; } };
       Object.keys(sw).forEach(mk=>{
         if(mk in dw) return;                       // destination already has its own memory - leave it
         if(/^__ap:/.test(mk)){
           // An A&P line memory holds the LINE TEXT. The card still owns it only if that exact line
           // is in the destination A&P now; otherwise the provider has rewritten it and it is hers.
-          if(tk && typeof dst[tk]==='string' && typeof sw[mk]==='string' && sw[mk] && dst[tk].indexOf(sw[mk])>=0) dw[mk]=sw[mk];
+          if(tk && typeof dst[tk]==='string' && typeof sw[mk]==='string' && sw[mk] && dst[tk].indexOf(sw[mk])>=0) claim(mk, sw[mk]);
           return;
         }
-        if((mk in dst) && same(dst[mk], sw[mk])) dw[mk]=Array.isArray(sw[mk])?sw[mk].slice():sw[mk];
+        if((mk in dst) && same(dst[mk], sw[mk])) claim(mk, Array.isArray(sw[mk])?sw[mk].slice():sw[mk]);
       });
     }
   }catch(e){}
@@ -2754,7 +2812,7 @@ function rcMatchWounds(cardWounds, priorList){
 }
 // Seed all prior wounds (carry-forward), then overlay each card wound onto its mapped wid (null = a new
 // wound). Rebuilds __wc_1 (prior wids in number order + any new wids) and the A&P orders text.
-function rcApplyMapping(S, priorList, cardWounds, mapping, edu){
+function rcApplyMapping(S, priorList, cardWounds, mapping, edu, recDate){
   const orderWids=priorList.map(pw=>pw.wid);
   const ordLines=[];
   const W=S['__rcw']=(S['__rcw']&&typeof S['__rcw']==='object')?S['__rcw']:{};
@@ -2768,17 +2826,17 @@ function rcApplyMapping(S, priorList, cardWounds, mapping, edu){
     const _cn=Number(cw&&cw.num)||0;
     if(wid==null){ wid=(_cn && _rcWidFor(cw))||mintWid(); orderWids.push(wid); }
     if(_cn) woundNumFromCard(wid, _cn); else woundNum(wid);
-    _rcWriteWound(S, wid, cw);
+    _rcWriteWound(S, wid, cw, {recDate});
     const o=String(cw.orders||'').trim();
     if(o){ const line='Wound '+woundNum(wid)+(String(cw.loc||'').trim()?' ('+String(cw.loc).trim()+')':'')+': '+o;
-      ordLines.push(line); W['__ap:w'+wid]=line; }   // card-owned line — a later card edit may replace it
+      ordLines.push(line); W['__ap:w'+wid]=line; _rcStamp(S,'__ap:w'+wid,recDate); }   // card-owned line — a later card edit may replace it
   });
   // Number order, same as the numbered path — or the note reads in whatever order the matcher happened
   // to return and the card's 1,2,4 prints as 2,4,1.
   orderWids.sort((a,b)=>woundNum(a)-woundNum(b));
   _rcAssertNumbers(orderWids, cardWounds);
   S['__wc_1']=orderWids;
-  if(String(edu||'').trim()) W['__ap:edu']='Additional info / education: '+String(edu).trim();
+  if(String(edu||'').trim()){ W['__ap:edu']='Additional info / education: '+String(edu).trim(); _rcStamp(S,'__ap:edu',recDate); }
   _rcSetAP(S, _rcComposeAP(ordLines, edu));
 }
 
@@ -2819,6 +2877,10 @@ async function rcPrefill(rec){
   const S=STORE[nt];
   const cardWounds=(rec.wounds||[]);
   const edu=String(rec.edu||'').trim();
+  /* Stamp every value this record writes with the DAY it is from. Nothing reads it today; it is what
+     lets a later merge tell "the card wrote this last week" from "the card wrote this this morning",
+     which is the whole defence against an older round overwriting today's exam. See _rcStale. */
+  const recDate=String((rec&&rec.date)||'').slice(0,10);
 
   if(nt==='fu' && pv && pv.wounds){
     /* Carry-forward: seed EVERY prior wound — healed ones too — reusing its wid, so it keeps its
@@ -2837,7 +2899,7 @@ async function rcPrefill(rec){
        it is what turned a retyped "sacral" into a phantom second wound. The matcher below survives only
        for legacy records written before the card had numbers. */
     if(_rcNumberedSafe(cardWounds, priorList)){
-      rcApplyByCardNum(S, priorList, cardWounds, edu);
+      rcApplyByCardNum(S, priorList, cardWounds, edu, recDate);
     } else {
     const props=rcMatchWounds(cardWounds, priorList);
     if(props.some(p=>!p.confident)){
@@ -2847,25 +2909,27 @@ async function rcPrefill(rec){
       if(edu) _rcSetAP(S, 'Additional info / education: '+edu);
       const _p=activePt(); if(_p) _p.rcPending={ cardWounds, props, priorList, edu };
     } else {
-      rcApplyMapping(S, priorList, cardWounds, props.map(p=>p.priorWid), edu);
+      rcApplyMapping(S, priorList, cardWounds, props.map(p=>p.priorWid), edu, recDate);
     }
     }
   } else {
     // First-timer (Initial), or a follow-up with no prior wounds: fresh wids per card wound.
     const wids=[];
     // The card's number IS the wound's number. mintWid only for a legacy record that carries none.
-    cardWounds.forEach(w=>{ const wid=_rcWidFor(w)||mintWid(); woundNumFromCard(wid, w&&w.num); wids.push(wid); _rcWriteWound(S, wid, w); });
+    cardWounds.forEach(w=>{ const wid=_rcWidFor(w)||mintWid(); woundNumFromCard(wid, w&&w.num); wids.push(wid); _rcWriteWound(S, wid, w, {recDate}); });
     if(wids.length) S['__wc_1']=wids;
     const W=S['__rcw']=(S['__rcw']&&typeof S['__rcw']==='object')?S['__rcw']:{};
     const ord=cardWounds.map((w,i)=>{ const o=String(w.orders||'').trim();
       if(!o) return '';
       const line='Wound '+woundNum(wids[i])+(String(w.loc||'').trim()?' ('+String(w.loc).trim()+')':'')+': '+o;
-      W['__ap:w'+wids[i]]=line;   // card-owned line — a later card edit may replace it
+      W['__ap:w'+wids[i]]=line; _rcStamp(S,'__ap:w'+wids[i],recDate);   // card-owned line — a later card edit may replace it
       return line; });
-    if(edu) W['__ap:edu']='Additional info / education: '+edu;
+    if(edu){ W['__ap:edu']='Additional info / education: '+edu; _rcStamp(S,'__ap:edu',recDate); }
     _rcSetAP(S, _rcComposeAP(ord, edu));
   }
   { const _p=activePt(); if(_p){ _p.srcRcKey=_rcKey(rec); _p.srcRcId=rec.id||null; _p.rcName=nm;
+      // WHO this is, as opposed to WHICH SAVE this is — the wound history files by the first. See _whPtId.
+      _p.rcPtId=String((rec&&rec.ptId)||'')||null;
       /* Which ROUND this note came from. One card record is one visit, so a patient rounded twice
          has two notes with the same name - remembering the date is what lets the patient list tell
          them apart. See renderPatientBar. */
@@ -3039,21 +3103,48 @@ function _rcSelectForPull(unseen, reachCut, todayArg, pinDate){
   const dated=(unseen||[]).filter(r=>{ const d=day(r); return d && isISO(d) && d<=today; });
   const future=(unseen||[]).filter(r=>{ const d=day(r); return d && !(isISO(d) && d<=today); });
   const undated=(unseen||[]).filter(r=>!day(r));          // legacy, no date to reason about — unchanged
-  if(!dated.length) return {create:undated, olderSkipped:0, lastDate:'', futureSkipped:future.length};
+  if(!dated.length) return {create:undated, olderSkipped:0, newerSkipped:0, lastDate:'', futureSkipped:future.length};
   const back=reachCut||_rcReachbackCutoff();
+  /* What this one DAY yields, so the choice of day can be made from the answer rather than before it. */
+  const buildFor=d=>{
+    const out=[];
+    dated.filter(r=>day(r)===d).forEach(r=>{
+      if(_rcDispo(r)==='discharged') return;              // gone — nothing to capture
+      if(_rcWasSeen(r)){ out.push(r); return; }           // the ordinary case
+      const k=_rcPtKey(r);
+      const prior=dated.filter(x=>_rcPtKey(x)===k && day(x)<d && day(x)>=back && _rcWasSeen(x))
+                       .sort((a,b)=>day(a).localeCompare(day(b))).pop();
+      if(prior) out.push(prior);                          // the visit whose note is actually owed
+    });
+    /* ONE RECORD, ONE NOTE. Reach-back runs per ROW, so two not-seen rows for the same patient on the
+       same day (a duplicate slot, or the same person listed at two buildings) both walked back to the
+       SAME earlier record and pushed the identical object in twice. The second pass then fired a
+       collision confirm about a note the pull itself had created a second earlier, and answering
+       "add as a separate patient" left two notes for one visit. */
+    const seenIds=new Set(), uniq=[];
+    out.forEach(r=>{ const k=(r&&r.id)?('id:'+r.id):null;
+      if(k){ if(seenIds.has(k)) return; seenIds.add(k); }
+      else if(uniq.indexOf(r)>=0) return;
+      uniq.push(r); });
+    return uniq;
+  };
+  /* THE LAST VISIT IS STILL THE LAST VISIT, even when it yields nothing. Walking back to an earlier
+     day that does yield something was tried and reverted on 2026-07-31: it quietly overruled three
+     rules that are deliberate and tested — the 21-day reach-back bound, "discharged never reaches
+     back", and "reach-back does not cross buildings" — by letting exactly those declined records in
+     through a side door. A day where nobody is capturable is a day with no notes owed.
+     What WAS wrong is that it happened in silence: create came back empty, so rcAutoPull returned at
+     its !fresh.length guard before ever reaching the banner that reports what was left behind. The
+     counts below are now returned on that path too, and rcAutoPull says them. */
   const lastDate=(pinDate && dated.some(r=>day(r)===pinDate)) ? pinDate : dated.map(day).sort().pop();
-  const create=[];
-  dated.filter(r=>day(r)===lastDate).forEach(r=>{
-    if(_rcDispo(r)==='discharged') return;                // gone — nothing to capture
-    if(_rcWasSeen(r)){ create.push(r); return; }          // the ordinary case
-    const k=_rcPtKey(r);
-    const prior=dated.filter(x=>_rcPtKey(x)===k && day(x)<lastDate && day(x)>=back && _rcWasSeen(x))
-                     .sort((a,b)=>day(a).localeCompare(day(b))).pop();
-    if(prior) create.push(prior);                         // the visit whose note is actually owed
-  });
-  const chosen=new Set(create.map(r=>r));
-  const olderSkipped=dated.filter(r=>day(r)!==lastDate && !chosen.has(r)).length;
-  return {create:create.concat(undated), olderSkipped, lastDate, futureSkipped:future.length};
+  const create=buildFor(lastDate);
+  const chosen=new Set(create);
+  /* Two counts, not one. Once a pin (or the walk-back above) can move lastDate BACKWARDS, "not
+     lastDate" stopped meaning "older" — a pinned reload of yesterday reported today's round as
+     "older records not brought in", which is the one signal that says a round still owes a note. */
+  const olderSkipped=dated.filter(r=>day(r)<lastDate && !chosen.has(r)).length;
+  const newerSkipped=dated.filter(r=>day(r)>lastDate && !chosen.has(r)).length;
+  return {create:create.concat(undated), olderSkipped, newerSkipped, lastDate, futureSkipped:future.length};
 }
 function _rcKey(rec){ return (rec&&rec.id) || [_rcFacSeg(rec&&rec.facility), String((rec&&rec.patient&&rec.patient.name)||'').toLowerCase().trim(), String((rec&&rec.date)||'').slice(0,10)].join('|'); }
 function _rcSeenLoad(){ try{ const o=JSON.parse(localStorage.getItem(RC_SEEN_KEY)||'{}'); return (o&&typeof o==='object')?o:{}; }catch(e){ return {}; } }
@@ -3202,6 +3293,14 @@ function _noteAllCardOwned(p){ try{
 function rcMergeIntoPatient(pid, rec){
   switchPatient(pid);                                  // activate + render; woundRegistry = this patient's wounds
   const S=STATE;
+  /* WHICH DAY THIS RECORD IS FROM, and whether that is BEHIND the note it is being merged into. The
+     merge had no idea: an older round (reloaded deliberately, or reached back to because a patient was
+     marked not-seen today) was treated exactly like a re-save of today's card. _rcWriteWound now
+     defends the wound fields itself; these two are for the writers it cannot reach — the A&P line
+     upsert and the "the card dropped a wound" report. */
+  const recDate=String((rec&&rec.date)||'').slice(0,10);
+  const noteDate=String(((WS.patients[pid]||{}).rcDate)||'').slice(0,10);
+  const olderThanNote=!!(recDate && noteDate && recDate < noteDate);
   // IDENTITY sync (Scott 2026-07-21, two rounds): fill a BLANK name/facility from the record (the card
   // auto-saves fast — the record's first version can precede the typed name), and let a card RENAME
   // follow through when the card still owns the name (p.rcName = the name the card last wrote; if the
@@ -3258,7 +3357,7 @@ function rcMergeIntoPatient(pid, rec){
     if(wid===undefined) wid=(cn && _rcWidFor(cw))||mintWid();                          // genuinely new -> append
     if(wids.indexOf(wid)<0) wids.push(wid);
     if(cn) woundNumFromCard(wid, cn); else woundNum(wid);
-    _rcWriteWound(S, wid, cw, {onlyEmpty:true});
+    _rcWriteWound(S, wid, cw, {onlyEmpty:true, recDate});
     const o=String(cw.orders||'').trim();
     if(o) ordPairs.push({wid, line:'Wound '+woundNum(wid)+(String(cw.loc||'').trim()?' ('+String(cw.loc).trim()+')':'')+': '+o});
   });
@@ -3267,7 +3366,11 @@ function rcMergeIntoPatient(pid, rec){
      measurements, and kept its A&P order line, with nothing to tell the provider. It is NOT deleted
      here - this merge's whole promise is that it never destroys provider-entered work, and the note is
      also where a hand-added wound legitimately lives. It is REPORTED, which is what was missing. */
-  { const gone=wids.filter(w=>_rcCardWid(w) && !(cardWounds||[]).some(cw=>_rcWidFor(cw)===w));
+  /* ...and it must not fire for a record from an EARLIER round. Merging last week's card into today's
+     note made this compare today's wounds against last week's list, so it confidently named a wound
+     she had examined an hour ago and invited her to delete it. The true and false versions of the
+     message are character-identical, which is the worse half: it devalues the one case it exists for. */
+  { const gone=olderThanNote ? [] : wids.filter(w=>_rcCardWid(w) && !(cardWounds||[]).some(cw=>_rcWidFor(cw)===w));
     if(gone.length){ try{
       const msg='the round card no longer has wound '+gone.map(w=>woundNum(w)).join(', ')+
                 ' — it is still in this note; remove it here if the bedside removal was intended';
@@ -3275,6 +3378,10 @@ function rcMergeIntoPatient(pid, rec){
       if(typeof console!=='undefined'&&console.warn) console.warn('wound merge: '+msg);
       if(typeof toast==='function') toast('Card dropped wound '+gone.map(w=>woundNum(w)).join(', ')+' — still in your note');
     }catch(e){} } }
+  /* NUMBER ORDER, like both sibling paths (rcApplyByCardNum and rcApplyMapping each sort, with the
+     comment explaining why). This one appended, so a wound the merge added printed after the wounds
+     already in the note whatever its number — the note could read Wound 2, Wound 3, Wound 1. */
+  wids.sort((a,b)=>woundNum(a)-woundNum(b));
   S['__wc_1']=wids;
   // A&P sync, CARD-OWNED-LINE aware (same __rcw contract as the wound fields): the exact line the card
   // wrote per wound is remembered; while it still sits in the A&P untouched, a card edit REPLACES it in
@@ -3283,20 +3390,61 @@ function rcMergeIntoPatient(pid, rec){
   { const k=_rcApKey(); if(k){
       let cur=String(S[k]||'');
       const W=S['__rcw']=(S['__rcw']&&typeof S['__rcw']==='object')?S['__rcw']:{};
-      const pend=[];
+      const pend=[], apConflicts=[];
+      /* THREE OUTCOMES, NOT TWO (2026-07-31). Ownership was decided by SUBSTRING CONTAINMENT, so any
+         edit that left the card's text as one contiguous run — an append, a prefix, a wrap — still
+         counted as "she has not touched it, the card may replace it". The card wrote
+             Wound 2 (left heel): collagen daily
+         she made it
+             Wound 2 (left heel): collagen daily — hold if bleeding, notify MD
+         the bedside order changed to santyl, and her line silently became
+             Wound 2 (left heel): santyl daily — hold if bleeding, notify MD
+         An order nobody authored, on the silent update path, with no dialog and no reload needed.
+         Tightening containment to EQUALITY is not the fix either — that trades an unauthored order for
+         a stale one, which is the same kind of wrong. So: the card replaces its line only while that
+         line is still there in full, as a whole line. A line she extended keeps hers, the card's new
+         wording is added beside it, and she is told there are now two. */
       const upsert=(mk,line)=>{ const prev=W[mk];
-        if(prev && cur.indexOf(prev)>=0){ if(line && line!==prev) cur=cur.replace(prev,line); if(line) W[mk]=line; }
-        else if(prev){ /* the card's line was edited or removed by the provider — hers wins */ }
-        else if(line && cur.indexOf(line)<0){ pend.push(line); W[mk]=line; }
-        else if(line){ W[mk]=line; } };
+        if(prev && _rcStale(S, mk, recDate)) return;         // an older round never rewrites a newer order
+        if(prev){
+          const ls=cur.split('\n');
+          const exact=ls.findIndex(l=>l.trim()===String(prev).trim());
+          if(exact>=0){ if(line && line!==prev){ ls[exact]=line; cur=ls.join('\n'); }
+                        if(line){ W[mk]=line; _rcStamp(S,mk,recDate); }
+                        return; }
+          const partial=ls.findIndex(l=>l.indexOf(prev)>=0);
+          if(partial>=0 && line && line!==prev){
+            pend.push(line); apConflicts.push(ls[partial].trim()); W[mk]=line; _rcStamp(S,mk,recDate); }
+          return;                                            // rewritten or removed by her — hers wins
+        }
+        if(line && cur.indexOf(line)<0){ pend.push(line); W[mk]=line; _rcStamp(S,mk,recDate); }
+        else if(line){ W[mk]=line; _rcStamp(S,mk,recDate); } };
       ordPairs.forEach(pr=>upsert('__ap:w'+pr.wid, pr.line));
       const eduS=String(rec.edu||'').trim();
       upsert('__ap:edu', eduS?('Additional info / education: '+eduS):'');
       if(pend.length) cur=cur.trim() ? (cur.trim()+'\n\n'+pend.join('\n')) : pend.join('\n');
-      S[k]=cur; } }
-  { const _p=activePt(); if(_p){ _p.srcRcKey=_rcKey(rec); _p.srcRcId=rec.id||_p.srcRcId||null;
-      // keep the round date current too - see renderPatientBar
-      _p.rcDate=String((rec&&rec.date)||'').slice(0,10)||_p.rcDate||null; } }
+      S[k]=cur;
+      if(apConflicts.length){ try{
+        const msg='the round card changed an order you had added to ('+apConflicts.join(' | ')+
+                  ') — the card’s new wording was added below instead of replacing yours';
+        const _p=activePt(); if(_p) (_p.numWarnings=_p.numWarnings||[]).push(msg);
+        if(typeof console!=='undefined'&&console.warn) console.warn('A&P: '+msg);
+        if(typeof toast==='function') toast('The card changed an order you had edited — both are in the plan now, check it');
+      }catch(e){} } } }
+  /* THE TAG ONLY EVER MOVES FORWARD. This used to re-tag the note to whatever record merged last, so
+     merging an OLDER round pointed today's note at last week's record — and the next edit on TODAY's
+     card then looked for a note carrying today's id, found none, read that as "she deleted this
+     patient" and dropped the update in silence. The note also relabelled itself with the older date,
+     which is the one thing that tells two same-name notes apart in the patient list. An older record
+     is allowed to fill blanks; it is not allowed to take the note over. */
+  { const _p=activePt(); if(_p){
+      if(!olderThanNote){ _p.srcRcKey=_rcKey(rec); _p.srcRcId=rec.id||_p.srcRcId||null;
+        // keep the round date current too - see renderPatientBar
+        _p.rcDate=recDate||_p.rcDate||null; }
+      /* WHO this is never moves backwards or forwards — it is the same person either way, and a note
+         that has never been told is told now, whichever record arrived. See _whPtId. */
+      if(!_p.rcPtId && rec && rec.ptId) _p.rcPtId=String(rec.ptId);
+      else if(!_p.srcRcId && !_p.srcRcKey){ _p.srcRcKey=_rcKey(rec); _p.srcRcId=rec.id||null; _p.rcDate=_p.rcDate||recDate||null; } } }
   // Inside a pull the caller repaints once at the end - see _rcBatch. Alone, this behaves as before.
   persist(); if(!_rcBatch){ setMode(MODE); renderPatientBar(); }
 }
@@ -3322,14 +3470,30 @@ let _rcPulling=false, _rcLastPull=0, _rcPullAgain=false;
 
 /* Group provider-filtered records into rounds, newest first.
    [{date, facilities:[...], count, ids:[...]}] */
-function _rcRoundsAvailable(recs){
+function _rcRoundsAvailable(recs, todayArg){
+  /* A FUTURE DATE IS NEVER A ROUND. The card's date input has no max=, so one mistyped year writes a
+     record that sorts highest forever — and this list sorts descending, so the typo was offered as
+     choice 1 with "1" pre-filled in the prompt. Pressing Enter then pinned a date _rcSelectForPull
+     rejects outright, so a DIFFERENT round loaded, the overlap warning was computed for the phantom
+     day, and the closing toast named the day she picked rather than the day she got. Same upper bound
+     as the pull uses, so the menu and the pull cannot disagree about what a date means. */
+  const today = todayArg || (typeof todayISO === 'function' ? todayISO() : '9999-12-31');
   const by = {};
   (recs || []).forEach(r => {
     const d = String((r && r.date) || '').slice(0, 10);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return;          // undated / malformed: never a choosable round
-    const g = by[d] || (by[d] = { date: d, facilities: [], count: 0, ids: [] });
+    if (d > today) return;                               // a typo, not a round
+    const g = by[d] || (by[d] = { date: d, facilities: [], count: 0, ids: [], notSeen: 0, discharged: 0 });
     g.count++;
     if (r.id) g.ids.push(r.id);
+    /* WHAT WILL NOT LOAD, counted here rather than filtered out. The menu deliberately describes the
+       round as it stands on the CARD — filtering would put it out of step with the card and the orders
+       sheet — but "2026-07-30 — 5 patients" when two are discharged and one was not seen reads as a
+       promise of five notes, and olderSkipped structurally cannot explain the gap (it only counts
+       records on OTHER dates). So the line says both numbers. */
+    const dispo = _rcDispo(r);
+    if (dispo === 'notSeen') g.notSeen++;
+    else if (dispo === 'discharged') g.discharged++;
     const f = String((r && r.facility) || '').trim();
     if (f && g.facilities.indexOf(f) < 0) g.facilities.push(f);
   });
@@ -3343,16 +3507,30 @@ function _rcRoundsAvailable(recs){
 /* Which patients in THIS round are already open in the workspace, by name+facility — the ones whose
    empty boxes this round would fill. Returns their names, so the warning can say who. */
 function _rcRoundOverlap(recs, date, patients){
-  const out = [];
+  const out = [], hitPids = [];
   const key = s => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(' ').filter(Boolean).sort().join(' ');
-  const open = Object.keys(patients || {}).map(pid => patients[pid]).filter(Boolean);
+  const pids = Object.keys(patients || {}).filter(pid => patients[pid]);
   (recs || []).forEach(r => {
     if (String((r && r.date) || '').slice(0, 10) !== date) return;
+    /* A DISCHARGED record is never merged into anything (_rcSelectForPull drops it outright), so naming
+       that patient describes a risk the load does not carry — and a warning made of patients the pull
+       will not touch steers her away from a round that was safe to load. */
+    if (_rcDispo(r) === 'discharged') return;
     const nm = key((r.patient && r.patient.name) || '');
     if (!nm) return;
     const fac = key(r.facility || '');
-    const hit = open.find(p => key(p.name || '') === nm && key(p.facility || '') === fac);
-    if (hit && out.indexOf(hit.name) < 0) out.push(hit.name);
+    /* Dedupe on the PATIENT matched, not on the display string. Two different residents with the same
+       name at two buildings are two notes that would both be filled; naming them once counted them as
+       one, and the closing toast then reported the wrong number. */
+    const pid = pids.find(p => key(patients[p].name || '') === nm && key(patients[p].facility || '') === fac);
+    if (pid && hitPids.indexOf(pid) < 0) hitPids.push(pid);
+  });
+  // Name alone, unless two of the matched patients share one — then both carry their building, because
+  // "Garcia, Maria" listed once is exactly what made two of them look like one.
+  hitPids.forEach(pid => {
+    const p = patients[pid];
+    const dupe = hitPids.some(o => o !== pid && String(patients[o].name || '') === String(p.name || ''));
+    out.push(String(p.name || '') + (dupe && String(p.facility || '').trim() ? ' (' + String(p.facility).trim() + ')' : ''));
   });
   return out;
 }
@@ -3379,24 +3557,56 @@ function _rcRoundOverlap(recs, date, patients){
 async function rcRepull(){
   const btn=document.getElementById('rcRepullBtn');
   if(!DRAFTS_ENABLED()){ toast('Sign in first — the card records live in ClinicalVault'); return; }
+  /* DRAFTS_ENABLED is a build flag; _draftRestoreDone is whether her saved work is actually back on
+     screen. rcAutoPull refuses on the second and this only checked the first, so after a failed draft
+     restore the whole ceremony ran — picker, warning, memory cleared — against a pull that returned on
+     its first line, and reported "nothing to load from that round" about records it never looked at. */
+  if(typeof _draftRestoreDone!=='undefined' && !_draftRestoreDone){
+    toast('Your saved notes have not finished loading — reload the page, then try again'); return; }
+  /* NOT RE-ENTRANT WITH THE OTHER FOUR PULL TRIGGERS (page load, card save, overlay close, tab return
+     after 45s). rcAutoPull returns at its _rcPulling guard BEFORE it ever reads the pin, so the round
+     she picked was thrown away by this function's own finally, the queued re-pull then ran unpinned and
+     took a different day, and she was told "nothing new to load from <the round she picked>". The
+     picker blocks the thread on prompt()/confirm(), so a pull whose network lands while the dialog is
+     open is not a knife-edge race — it is guaranteed to lose. Refuse and say so; nothing is cleared. */
+  if(_rcPulling){ toast('Still bringing in your patients — give it a second and tap again'); return; }
   try{
     if(btn){ btn.disabled=true; btn.style.opacity='.6'; }
     toast('Looking for your rounds…');
     /* The listing already filters to THIS provider, and a record this workspace has pulled before still
        passes — which is exactly the set a reload should be able to choose from. */
+    _rcPullBlocked=false;
     const recs=await rcListAllRecent();
     const rounds=_rcRoundsAvailable(recs);
-    if(!rounds.length){ toast('No round card records for you in the last 60 days'); return; }
+    if(!rounds.length){
+      /* "No records" is a claim about the clinical record store. An expired token, a 503 on the folder
+         listing and "I cannot tell who you are" all reach here with an empty array, and only the last
+         has a message — which the early return used to make unreachable. */
+      toast(_rcPullBlocked
+        ? 'Could not tell who you are, so nothing was loaded — put your name in the Provider box, or sign in'
+        : 'No round card records for you in the last 60 days');
+      return;
+    }
     let pick=rounds[0];
     if(rounds.length>1){
-      const lines=rounds.slice(0,8).map((g,i)=>
-        (i+1)+') '+g.date+'  —  '+g.count+' patient'+(g.count===1?'':'s')+
-        (g.facilities.length?'  ('+g.facilities.join(', ')+')':''));
-      const ans=prompt('Which round do you want to reload?\n\n'+lines.join('\n')+
+      const SHOW=8;
+      const lines=rounds.slice(0,SHOW).map((g,i)=>{
+        const wont=[]; if(g.discharged) wont.push(g.discharged+' discharged'); if(g.notSeen) wont.push(g.notSeen+' not seen');
+        return (i+1)+') '+g.date+'  —  '+g.count+' patient'+(g.count===1?'':'s')+
+          (wont.length?' ('+wont.join(', ')+' — those do not open a note)':'')+
+          (g.facilities.length?'  '+g.facilities.join(', '):'');
+      });
+      // Say what is NOT on the list. A cap nobody mentions reads as "that is everything".
+      const more=rounds.length>SHOW ? ('\n\n(showing the '+SHOW+' most recent of '+rounds.length+
+        ' — older rounds are not reachable from here)') : '';
+      const ans=prompt('Which round do you want to reload?\n\n'+lines.join('\n')+more+
         '\n\nType a number (1 = most recent), or Cancel.', '1');
       if(ans===null){ return; }
-      const n=parseInt(String(ans).trim(),10);
-      if(!(n>=1 && n<=Math.min(rounds.length,8))){ toast('That was not one of the numbers — nothing loaded'); return; }
+      // A CLEAN INTEGER, not parseInt: parseInt('7/24') is 7, so typing a date — the format this very
+      // prompt displays — silently loaded round 7.
+      const raw=String(ans).trim();
+      const n=/^\d+$/.test(raw) ? parseInt(raw,10) : NaN;
+      if(!(n>=1 && n<=Math.min(rounds.length,SHOW))){ toast('That was not one of the numbers — nothing loaded'); return; }
       pick=rounds[n-1];
     }
     /* THE ONLY WARNING THAT MATTERS. Not "this will overwrite" — it will not — but "this round's answers
@@ -3409,19 +3619,41 @@ async function rcRepull(){
         'left empty for them. Continue?');
       if(!ok) return;
     }
-    const before=Object.keys((WS&&WS.patients)||{}).length;
-    /* SEEN only, never RC_EVER_KEY: clearing the durable set would strip the bypass that keeps a record
+    /* FORGET ONE ROUND, NOT SIXTY DAYS.
+       This used to wipe the whole seen-set. One press then re-armed the entire listing: every later
+       auto-pull — page load, card save, overlay close, tab return after 45s — consumed another round
+       walking backwards, each one raising a collision dialog per patient already open ("...is already
+       in your list. Pull the Round Card into that note?"). OK merged an old visit into a current note;
+       Cancel, which the dialog itself offers, left two same-name notes in one building. One measured
+       run reached 19 dialogs and 10 notes for one resident. It also disarmed the never-resurrect rule
+       for every round except the pinned one, because that rule lives inside the isUpdate branch and
+       isUpdate needs a surviving seen entry.
+       The wipe itself is not the bug and must not be removed — without it the button does nothing at
+       all. Its SCOPE was the bug, and _rcRoundsAvailable already collects exactly the right ids.
+       SEEN only, never RC_EVER_KEY: clearing the durable set would strip the bypass that keeps a record
        flowing after a provider stamp drifts, handing the provider FEWER records — the regression those
        two keys were split apart to prevent on 2026-07-28. */
-    try{ localStorage.removeItem(RC_SEEN_KEY); }catch(e){}
-    try{ if(WS) WS.rcPulled={}; }catch(e){}
+    try{ const seen=_rcSeenLoad();
+      (pick.ids||[]).forEach(id=>{ delete seen[id]; });
+      _rcSeenSave(seen); }catch(e){}
+    // The legacy no-id path is keyed "<fac>|<name>|<date>", so the picked day is addressable there too.
+    try{ if(WS && WS.rcPulled) Object.keys(WS.rcPulled).forEach(k=>{
+      if(String(k).slice(-11)==='|'+pick.date) delete WS.rcPulled[k]; }); }catch(e){}
     _rcPinDate=pick.date;
-    try{ await rcAutoPull('manual-repull'); }
+    let res=null;
+    try{ res=await rcAutoPull('manual-repull'); }
     finally{ _rcPinDate=null; }        // one pull only — never pin later auto-pulls to an old round
-    const added=Object.keys((WS&&WS.patients)||{}).length-before;
-    if(added>0) toast('Loaded '+added+' patient'+(added===1?'':'s')+' from the '+pick.date+' round');
-    else if(_rcPullBlocked) toast('Could not tell who you are, so nothing was loaded — put your name in the Provider box, or sign in');
-    else if(overlap.length) toast('That round was already open — filled any empty boxes for '+overlap.length+' patient'+(overlap.length===1?'':'s'));
+    /* SAY WHAT HAPPENED, from what the pull actually did. This used to difference a patient COUNT
+       across the await — and the pull deletes the empty "Start here" slot inside it, so the flagship
+       fresh-session case (one round, one patient) reported "Nothing new to load" having just loaded
+       the patient. added===0 also meant four different things: merged, pruned, skipped, or never ran. */
+    const created=(res&&res.created)||0, merged=(res&&res.merged)||0;
+    const bits=[];
+    if(created) bits.push('brought in '+created+' patient'+(created===1?'':'s'));
+    if(merged)  bits.push('filled empty boxes in '+merged+' note'+(merged===1?'':'s')+' you already had');
+    if(bits.length) toast('The '+pick.date+' round: '+bits.join(', ')+
+      ((res&&res.futureSkipped)?' · '+res.futureSkipped+' record'+(res.futureSkipped===1?'':'s')+' on the card are dated in the FUTURE — check the round date':''));
+    else if(res&&res.blocked) toast('Could not tell who you are, so nothing was loaded — put your name in the Provider box, or sign in');
     else toast('Nothing new to load from the '+pick.date+' round');
   }catch(e){
     try{ toast('Could not reach the round card records — check your connection and try again'); }catch(e2){}
@@ -3433,10 +3665,16 @@ async function rcRepull(){
    can never quietly pin every later auto-pull to an old date. */
 let _rcPinDate=null;
 async function rcAutoPull(reason){
-  if(!DRAFTS_ENABLED() || !_draftRestoreDone) return;
+  /* WHAT IT ACTUALLY DID, so no caller has to infer it. Returning undefined whether it created five
+     notes or never ran at all is what let the reload button report "filled any empty boxes for 1
+     patient" after a pull that performed zero merges, and "Nothing new to load" after loading the
+     patient. Every exit below returns this shape. */
+  const RES=o=>Object.assign({created:0, merged:0, blocked:false, ran:false,
+                              lastDate:'', olderSkipped:0, newerSkipped:0, futureSkipped:0}, o||{});
+  if(!DRAFTS_ENABLED() || !_draftRestoreDone) return RES({reason:'not-ready'});
   // A save-nudge landing while a pull is in flight must not vanish — queue exactly one re-pull for
   // when this one finishes (the card fires rc-saved per upload; back-to-back saves raced this guard).
-  if(_rcPulling){ _rcPullAgain=true; return; }
+  if(_rcPulling){ _rcPullAgain=true; return RES({reason:'in-flight'}); }
   _rcPulling=true;
   _rcPullBlocked=false;                 // fresh verdict per pull, or a stale one alarms forever
   try{
@@ -3478,12 +3716,22 @@ async function rcAutoPull(reason){
       // Nothing came in. Say WHY when the reason is "I could not tell who you are" — silence here reads
       // as "no rounds today", which is a different and much more comforting thing.
       if(_rcPullBlocked) toast('Couldn’t tell who you are, so no Round Card patients were brought in. Sign in, or set the Provider box, then reopen.');
-      return;
+      /* AND SAY WHAT WAS DECLINED. A pull that brings in nothing lands here, before the banner below
+         that reports skipped records — so a day where everyone was discharged or not seen looked
+         exactly like a quiet morning, while older rounds still owing notes sat unmentioned. Four
+         times this vault has been bitten by a check that reported fine while something needed doing. */
+      else if(sel.olderSkipped || sel.futureSkipped){
+        toast('No new notes to open'+(sel.lastDate?' from '+sel.lastDate:'')+
+          (sel.olderSkipped?' · '+sel.olderSkipped+' older record'+(sel.olderSkipped===1?'':'s')+' still not brought in':'')+
+          (sel.futureSkipped?' · '+sel.futureSkipped+' record'+(sel.futureSkipped===1?'':'s')+' dated in the FUTURE — check the round date on the card':''));
+      }
+      return RES({ran:true, blocked:_rcPullBlocked, lastDate:sel.lastDate, olderSkipped:sel.olderSkipped,
+                  newerSkipped:sel.newerSkipped, futureSkipped:sel.futureSkipped});
     }
     // Don't yank a provider off a note they're mid-way through: remember where they were, go back after.
     const returnPid=activePid, returnNamed=!!((((WS.patients[returnPid]||{}).name)||'').trim());
     const now=Date.now(), byFac={};
-    let pulled=0;
+    let pulled=0, mergedCount=0;
     // rcPrefill is async now (it checks wound-history to decide Initial vs Follow-up), so await each in
     // turn — a for-of loop, not forEach, so the seen-marking and counts stay in step with each create.
     /* ONE REBUILD FOR THE WHOLE PULL. Everything from here to the returnPid restore below moves
@@ -3515,7 +3763,7 @@ async function rcAutoPull(reason){
           try{ const _op=WS.patients[srcPid]; if(_op){ _op.srcRcId=null; _op.srcRcKey=null; _op.rcName=null; } }catch(e2){}
         }
         if(srcPid && sameSlotPatient){
-          rcMergeIntoPatient(srcPid, r); pulled++;
+          rcMergeIntoPatient(srcPid, r); pulled++; mergedCount++;
           const nm=((r.patient&&r.patient.name)||'').trim()||'Patient';
           /* SAY WHICH NOTE CHANGED, because it is often not the one on screen.
              One card record is one visit, so a patient rounded on two days has TWO notes with the
@@ -3557,21 +3805,31 @@ async function rcAutoPull(reason){
       // Warn + let her pull the card INTO that note instead of silently creating a duplicate (Scott 2026-07-20).
       const existPid=_rcFindExistingPatient(r);
       if(existPid && confirm('“'+(((r.patient&&r.patient.name)||'This patient').trim())+'” is already in your '+(facLabel(r.facility||'')||'list')+'.\n\nPull the Round Card into that note?\n\nOK = fill in the note you already started (it won’t overwrite anything you typed).\nCancel = add as a separate patient.')){
+        /* Read the note's round date BEFORE the merge, which may set it. An OLDER record must not flip
+           the note between Initial and Follow-up: that is last week's answer to this week's question,
+           and the switch discards the narrative on the side it leaves. */
+        const _pd=String(((WS.patients[existPid]||{}).rcDate)||'').slice(0,10);
+        const _rd=String((r&&r.date)||'').slice(0,10);
         rcMergeIntoPatient(existPid, r);
         // The card's Visit-type choice drives the merged note too (auto-switch when lossless).
-        const wantV=(r.visitType==='new'||r.visitType==='fu')?r.visitType:'';
+        const wantV=(_pd && _rd && _rd<_pd) ? '' : ((r.visitType==='new'||r.visitType==='fu')?r.visitType:'');
         if(wantV && (WS.patients[existPid]||{}).noteType!==wantV && _rcAutoSwitchType(existPid, wantV)){
           toast((((r.patient&&r.patient.name)||'Patient').trim())+': switched to '+(wantV==='fu'?'Follow-Up':'Initial')+' per the Round Card.');
         }
+        mergedCount++;
       } else {
         await rcPrefill(r);
+        /* "Brought in N patients" counts NEW notes. byFac used to be incremented outside this if/else,
+           so a merge into a note she already had was announced as a patient brought in — directly
+           contradicting the comment above the banner, which is how it survived. */
+        const f=facLabel(r.facility||'')||'Unfiled'; byFac[f]=(byFac[f]||0)+1;
       }
       pulled++;
-      if(r&&r.id) seen[r.id]={t:now, sa:String(r.savedAt||''), k:String(r.key||'')}; else WS.rcPulled[_rcKey(r)]=true;
-      const f=facLabel(r.facility||'')||'Unfiled'; byFac[f]=(byFac[f]||0)+1; }
+      if(r&&r.id) seen[r.id]={t:now, sa:String(r.savedAt||''), k:String(r.key||'')}; else WS.rcPulled[_rcKey(r)]=true; }
     Object.keys(seen).forEach(id=>{ if(now-entryT(seen[id]) > RC_SEEN_TTL_MS) delete seen[id]; });   // prune old ids
     _rcSeenSave(seen);
-    if(!pulled){ return; }
+    if(!pulled){ return RES({ran:true, blocked:_rcPullBlocked, lastDate:sel.lastDate, olderSkipped:sel.olderSkipped,
+                             newerSkipped:sel.newerSkipped, futureSkipped:sel.futureSkipped}); }
     // A fresh session's empty "Start here" slot must not linger as a rogue "Unassigned · New patient 1"
     // once the cards brought the real patients in (Scott 2026-07-21). STRICTER than the resume prune on
     // purpose: only a slot with NO name, NO building AND NO charted content is dropped — an un-named note
@@ -3596,12 +3854,18 @@ async function rcAutoPull(reason){
          visible rather than dropped on the floor. */
       const when=sel.lastDate ? ' from '+sel.lastDate : '';
       const older=sel.olderSkipped ? ' · '+sel.olderSkipped+' older record'+(sel.olderSkipped===1?'':'s')+' not brought in' : '';
+      /* NEWER records get their own words. Once a pinned reload (or the walk-back past a day that
+         yields nothing) can move lastDate backwards, "older" stopped being true of everything left
+         behind — and this line is the one signal that says a round still owes a note. */
+      const newer=sel.newerSkipped ? ' · '+sel.newerSkipped+' record'+(sel.newerSkipped===1?'':'s')+' from a LATER round not brought in' : '';
       /* A record dated in the future is almost always a typo in the round date, and it used to
          hijack "the last visit" and blank the whole pull. It is skipped now, and SAID, because a
          silently smaller pull is the failure mode this banner exists for. */
       const fut=sel.futureSkipped ? ' · '+sel.futureSkipped+' record'+(sel.futureSkipped===1?'':'s')+' dated in the FUTURE were skipped — check the round date on the card' : '';
-      toast('Brought in '+total+' patient'+(total===1?'':'s')+when+' ('+parts+')'+older+fut); }
-  }catch(e){}
+      toast('Brought in '+total+' patient'+(total===1?'':'s')+when+' ('+parts+')'+older+newer+fut); }
+    return RES({ran:true, created:total, merged:mergedCount, blocked:_rcPullBlocked, lastDate:sel.lastDate,
+                olderSkipped:sel.olderSkipped, newerSkipped:sel.newerSkipped, futureSkipped:sel.futureSkipped});
+  }catch(e){ return RES({ran:true, reason:'error'}); }
   finally{ _rcPulling=false; _rcLastPull=Date.now();
     if(_rcPullAgain){ _rcPullAgain=false; setTimeout(()=>{ try{ rcAutoPull('queued'); }catch(e){} },0); } }
 }
