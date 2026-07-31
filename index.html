@@ -3329,8 +3329,20 @@ function rcMergeIntoPatient(pid, rec){
   // first, instead of skipped — otherwise the merge strands an empty "Wound 1" and appends the real
   // wounds as 2 and 3 (Scott hit this twice in pre-flight).
   const takenW=new Set(props.filter(m=>m&&m.priorWid!=null&&m.confident).map(m=>String(m.priorWid)));
-  const shells=existList.filter(e=>!takenW.has(String(e.wid)) &&
-      !Object.keys(S).some(k=>k.indexOf(e.keyPrefix+':')===0 && !/:priorSA$/.test(k) && String(S[k]==null?'':S[k]).trim()))
+  /* "EMPTY" HAS TO MEAN THE WHOLE WOUND, not one section of it. This scanned only the exam prefix
+     (1:w<wid>:), and a wound's Procedures answers live under 3:w<wid>: — so a wound carrying a
+     documented debridement, with the exam not yet typed, read as a blank shell, was claimed by an
+     unrelated card wound, and that wound's location and measurements were written over it. Her
+     scalpel, her tissue type, her 2 mL of blood loss then printed under a different site's exam.
+     A procedure attributed to the wrong wound is the most serious thing in this file. */
+  const _pfx=(typeof _rcProcIdx==='function') ? _rcProcIdx(typeof MODE!=='undefined'?MODE:'new') : null;
+  const _blank=e=>!Object.keys(S).some(k=>{
+    const mine=(k.indexOf(e.keyPrefix+':')===0) || (_pfx!=null && k.indexOf(_pfx+':w'+e.wid+':')===0);
+    if(!mine || /:priorSA$/.test(k)) return false;
+    const v=S[k];
+    return Array.isArray(v) ? v.length>0 : String(v==null?'':v).trim()!=='';
+  });
+  const shells=existList.filter(e=>!takenW.has(String(e.wid)) && _blank(e))
     .sort((a,b)=>(a.num||0)-(b.num||0)).map(e=>e.wid);
   const wids=(Array.isArray(S['__wc_1'])?S['__wc_1'].slice():(woundRegistry||[]).map(w=>w.id));
   const ordPairs=[];
@@ -3354,7 +3366,12 @@ function rcMergeIntoPatient(pid, rec){
       if(ownerKey!=null){ let ex; wids.forEach(w=>{ if(String(w)===ownerKey) ex=w; }); wid=(ex!==undefined)?ex:ownerKey; } }
     if(wid===undefined && m && m.priorWid!=null && m.confident) wid=m.priorWid;        // fill an existing wound's blanks
     if(wid===undefined && shells.length) wid=shells.shift();                           // claim an empty shell
-    if(wid===undefined) wid=(cn && _rcWidFor(cw))||mintWid();                          // genuinely new -> append
+    /* NEVER HAND BACK A KEY THIS PULL HAS ALREADY GIVEN AWAY. _rcWidFor is derived from the card's
+       number, so if an empty shell above happened to be that same key, two card wounds landed on one
+       key and one of them disappeared from the note entirely. The card still wins the NUMBER below —
+       only the key falls back to a fresh one. */
+    if(wid===undefined){ const want=(cn && _rcWidFor(cw))||null;
+      wid=(want!=null && wids.indexOf(want)<0) ? want : mintWid(); }                    // genuinely new -> append
     if(wids.indexOf(wid)<0) wids.push(wid);
     if(cn) woundNumFromCard(wid, cn); else woundNum(wid);
     _rcWriteWound(S, wid, cw, {onlyEmpty:true, recDate});
