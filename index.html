@@ -2938,7 +2938,12 @@ async function rcPrefill(rec){
       // for a one-tap confirm (the reconcile banner + modal), and hold the orders until they're placed.
       S['__wc_1']=priorList.map(pw=>pw.wid);
       if(edu) _rcSetAP(S, 'Additional info / education: '+edu);
-      const _p=activePt(); if(_p) _p.rcPending={ cardWounds, props, priorList, edu };
+      /* recDate rides along or the reconcile writes UNDATED values. The modal can be answered minutes
+         or hours after the pull, in a different function, so the record's date has to be stashed with
+         everything else it will need — see applyRcReconcile. Without it every value the reconcile
+         writes carries no provenance, and an older round is then free to overwrite this visit's
+         measurements: the exact defect the __rcwd stamps were added this morning to prevent. */
+      const _p=activePt(); if(_p) _p.rcPending={ cardWounds, props, priorList, edu, recDate };
     } else {
       rcApplyMapping(S, priorList, cardWounds, props.map(p=>p.priorWid), edu, recDate);
     }
@@ -3016,7 +3021,7 @@ function applyRcReconcile(){
     used.add(v); mapping[ci]=(isNaN(+v)?v:+v);
   }
   const S=STORE[MODE];
-  rcApplyMapping(S, pend.priorList, pend.cardWounds, mapping, pend.edu);
+  rcApplyMapping(S, pend.priorList, pend.cardWounds, mapping, pend.edu, pend.recDate);
   p.rcPending=null;
   closeRcReconcile();
   persist(); setMode(MODE);
