@@ -53,6 +53,21 @@
   .muted{color:var(--muted); font-size:13px}
   .calc{color:var(--teal-dark); font-size:12.5px; font-weight:700; margin:6px 0 2px; min-height:1px}
   .other-box{margin-top:6px}
+  /* The location picker. The menu is capped and scrolls: 214 rows unrolled under a field would bury the
+     rest of the wound form on a phone, and the provider is standing at a bedside. */
+  .loc-wrap{position:relative}
+  .loc-menu{display:none; position:absolute; left:0; right:0; top:calc(100% + 4px); z-index:40;
+    max-height:46vh; overflow-y:auto; -webkit-overflow-scrolling:touch;
+    background:#fff; border:1px solid var(--line); border-radius:10px; box-shadow:0 6px 18px rgba(0,0,0,.14)}
+  .loc-menu.on{display:block}
+  .loc-grp{padding:7px 12px 3px; font-size:11px; font-weight:700; letter-spacing:.4px;
+    text-transform:uppercase; color:var(--muted); background:#f5f4ef; position:sticky; top:0}
+  .loc-row{display:block; width:100%; text-align:left; border:0; border-radius:0; border-bottom:1px solid var(--line);
+    background:#fff; padding:11px 12px; font-size:15px; font-weight:500; min-height:44px}
+  .loc-row:active{background:#eef4f3}
+  .loc-row.pick{color:var(--teal-dark); font-weight:700}
+  .loc-none{padding:11px 12px; font-size:13px; color:var(--muted)}
+  .loc-chosen{font-size:12px; color:var(--teal-dark); font-weight:650; margin-top:4px}
   .checks{display:flex; flex-wrap:wrap; gap:6px; margin-top:2px}
   .chk{display:inline-flex; align-items:center; gap:6px; border:1px solid var(--line); border-radius:999px;
     padding:8px 13px; font-size:14px; background:#fff; cursor:pointer; -webkit-tap-highlight-color:transparent}
@@ -269,6 +284,157 @@
    what the composer expects. Source of truth = the composer macro
    (Etiology / Stage / Drainage / odor / Status lines). */
 const WOUND_TYPES = ['Pressure injury','Diabetic ulcer','Venous','Arterial','Surgical','Traumatic','MASD','Other'];
+/* ============ WHERE THE WOUND IS — THE CLOSED VOCABULARY (Scott 2026-07-31) =========================
+   Wound numbering is retired, so THE LOCATION IS THE WOUND'S NAME. That promotes this field from a
+   free-text note to the thing a nurse reads to find the wound on a body, and the thing the note prints
+   as a heading. Free text could not hold that job: a pull of 107 real wounds found 71 distinct location
+   strings, laterality written six different ways, and typos throughout.
+
+   SIDE IS BAKED INTO EVERY ENTRY. She picks "Right heel (posterior)", never "heel" and then "right" —
+   one decision, one control, and a sideless paired site does not exist in the list, so it cannot be
+   left off. Straight from Scott's spec: "the provider puts the side + location on their dropdown."
+
+   POSITIONS ONLY WHERE THE DENSITY EARNS THEM (buttock, back, abdomen, thigh, foot). A number could
+   never point at a body; "Left buttock - lower" can. Deliberately NOT added, and recorded so nobody
+   adds them by accident: the medial/lateral side of an individual toe, and finer sacrum subdivisions —
+   both too rare to size honestly from 71 records. See the vault note for the ICD coverage check: our
+   sites are FINER than the code set nearly everywhere, which is the right direction.
+
+   THE STORED VALUE IS STILL ONE PLAIN STRING in `w.loc`, exactly as before. The dropdown composes side
+   and site into it, so the record shape, the upload, carry-forward and the composer's whole write path
+   are untouched by this change.
+
+   ⚠ "Other…" IS NOT IN THIS LIST, ON PURPOSE. Every other categorical field on this card stores the
+   sentinel 'Other' in the field and the real text in <field>Other. `loc` cannot do that: the composer
+   reads it as the location text, so a wound would go to the chart named "Other…". Here Other is a UI
+   MODE — it reveals a free-text box that writes the real words straight into `loc`.
+   The vault's list has 215 entries counting that escape; 214 of them are real places. */
+const WOUND_LOCATION_GROUPS = [
+  ['Head & neck', [
+    'Nose','Bridge of nose','Chin','Lip','Trach / stoma site','Right scalp','Left scalp',
+    'Scalp - midline','Right forehead','Left forehead','Forehead - midline','Right occiput',
+    'Left occiput','Occiput - midline','Right posterior neck','Left posterior neck',
+    'Posterior neck - midline','Right ear','Left ear','Right behind the ear','Left behind the ear',
+    'Right nostril / nare','Left nostril / nare','Right corner of the mouth','Left corner of the mouth',
+    'Right cheek','Left cheek','Right temple','Left temple','Right jaw','Left jaw','Right side of neck',
+    'Left side of neck',
+  ]],
+  ['Chest & abdomen', [
+    'Sternum / mid chest','Periumbilical','Suprapubic','Perineum','Right abdomen - upper',
+    'Left abdomen - upper','Abdomen - upper - midline','Right abdomen - lower','Left abdomen - lower',
+    'Abdomen - lower - midline','Right under the abdominal fold (pannus)',
+    'Left under the abdominal fold (pannus)','Under the abdominal fold (pannus) - midline',
+    'Right ostomy / stoma site','Left ostomy / stoma site','Ostomy / stoma site - midline',
+    'Right chest wall','Left chest wall','Right breast','Left breast',
+    'Right under the breast (inframammary fold)','Left under the breast (inframammary fold)',
+    'Right axilla','Left axilla','Right flank (anterior)','Left flank (anterior)','Right groin',
+    'Left groin','Right inner groin fold','Left inner groin fold','Right iliac crest',
+    'Left iliac crest',
+  ]],
+  ['Back, sacrum & pelvis', [
+    'Spine','Sacrum','Sacrococcygeal','Coccyx','Gluteal cleft','Perianal / anus','Genitalia',
+    'Spanning back, buttock and hip','Right upper back','Left upper back','Upper back - midline',
+    'Right mid back','Left mid back','Mid back - midline','Right lower back','Left lower back',
+    'Lower back - midline','Right scapula','Left scapula','Right flank (posterior)',
+    'Left flank (posterior)','Right buttock','Left buttock','Right buttock - upper',
+    'Left buttock - upper','Right buttock - lower','Left buttock - lower','Right buttock - inner',
+    'Left buttock - inner','Right buttock - outer','Left buttock - outer',
+    'Right ischium (ischial tuberosity)','Left ischium (ischial tuberosity)','Right greater trochanter',
+    'Left greater trochanter','Right hip','Left hip',
+  ]],
+  ['Arm & hand', [
+    'Right shoulder','Left shoulder','Right upper arm','Left upper arm','Right elbow','Left elbow',
+    'Right olecranon','Left olecranon','Right forearm','Left forearm','Right wrist','Left wrist',
+    'Right hand (dorsum)','Left hand (dorsum)','Right palm','Left palm','Right thumb','Left thumb',
+    'Right index finger','Left index finger','Right middle finger','Left middle finger',
+    'Right ring finger','Left ring finger','Right little finger','Left little finger',
+    'Right finger (unspecified)','Left finger (unspecified)','Right fingernail','Left fingernail',
+  ]],
+  ['Leg', [
+    'Right thigh','Left thigh','Right thigh - front','Left thigh - front','Right thigh - back',
+    'Left thigh - back','Right thigh - outer','Left thigh - outer','Right inner thigh',
+    'Left inner thigh','Right knee','Left knee','Right patella','Left patella',
+    'Right popliteal fossa (behind knee)','Left popliteal fossa (behind knee)',
+    'Right shin (anterior lower leg)','Left shin (anterior lower leg)',
+    'Right calf (posterior lower leg)','Left calf (posterior lower leg)','Right lower leg - medial',
+    'Left lower leg - medial','Right lower leg - lateral','Left lower leg - lateral','Right ankle',
+    'Left ankle','Right medial malleolus','Left medial malleolus','Right lateral malleolus',
+    'Left lateral malleolus','Right Achilles tendon','Left Achilles tendon',
+  ]],
+  ['Foot', [
+    'Right heel (posterior)','Left heel (posterior)','Right plantar heel','Left plantar heel',
+    'Right midfoot - plantar','Left midfoot - plantar','Right midfoot - dorsal','Left midfoot - dorsal',
+    'Right forefoot - plantar (metatarsal head)','Left forefoot - plantar (metatarsal head)',
+    'Right forefoot - dorsal','Left forefoot - dorsal','Right dorsum of foot','Left dorsum of foot',
+    'Right lateral border of foot','Left lateral border of foot','Right medial border of foot',
+    'Left medial border of foot','Right great toe','Left great toe','Right 2nd toe','Left 2nd toe',
+    'Right 3rd toe','Left 3rd toe','Right 4th toe','Left 4th toe','Right 5th toe','Left 5th toe',
+    'Right toe (unspecified)','Left toe (unspecified)','Right interdigital / web space',
+    'Left interdigital / web space','Right toenail','Left toenail',
+  ]],
+  ['Amputation & surgical sites', [
+    'Right surgical incision','Left surgical incision','Surgical incision - midline',
+    'Right BKA stump (below knee)','Left BKA stump (below knee)','Right AKA stump (above knee)',
+    'Left AKA stump (above knee)','Right partial foot amputation site',
+    'Left partial foot amputation site','Right toe amputation site','Left toe amputation site',
+    'Right graft site','Left graft site','Right donor site','Left donor site',
+  ]],
+  /* Bilateral is a real answer she gives today and it is kept, but it is a question for Abby rather
+     than a settled one: whether two sides are ever ONE wound. If they are not, this entry goes and she
+     picks a side twice. Left in the list rather than decided here. */
+  ['Special', [
+    'Bilateral',
+  ]],
+];
+/* The flat list, derived — never maintained separately, because two copies of a vocabulary is exactly
+   how the card and the composer came to disagree about everything else. */
+const WOUND_LOCATIONS = WOUND_LOCATION_GROUPS.reduce((a,g)=>a.concat(g[1]), []);
+const LOC_OTHER = 'Other…';
+/* IS THIS STRING ONE OF OURS, and what is its canonical spelling? Case-insensitive and
+   whitespace-insensitive, because a record written before this list existed may hold "sacrum" where the
+   list says "Sacrum" — that is the same place, and showing it as unrecognised free text would push the
+   provider to re-pick it and rename a wound that was never wrong.
+   ⚠ IT RETURNS THE CANONICAL SPELLING; IT NEVER WRITES IT BACK. Normalising the stored value on load
+   would be a silent data change, and after the switch a location change relabels the wound on EVERY
+   visit — so it must only ever happen because someone chose it. */
+function _locCanon(s){
+  const k=String(s==null?'':s).trim().toLowerCase();
+  if(!k) return '';
+  for(let i=0;i<WOUND_LOCATIONS.length;i++){ if(WOUND_LOCATIONS[i].toLowerCase()===k) return WOUND_LOCATIONS[i]; }
+  return '';
+}
+function _locListed(s){ return !!_locCanon(s); }
+/* Does `t` BEGIN a word of `l`, rather than sit inside one? This is what separates the heel she meant
+   from the cheek she did not: "hee" is genuinely a substring of both "heel" and "c-hee-k". */
+function _locWordStart(l,t){
+  let i=l.indexOf(t);
+  while(i>=0){ if(i===0 || /[^a-z0-9]/.test(l.charAt(i-1))) return true; i=l.indexOf(t,i+1); }
+  return false;
+}
+/* TYPE-TO-FILTER. Every word typed must appear somewhere in the entry, so "r heel" and "heel r" both
+   find "Right heel (posterior)" and word order never matters at a bedside.
+   RANKED IN THREE TIERS, anatomical list order kept inside each because that order is itself
+   information:
+     1. the entry STARTS with what she typed — she has already found it
+     2. every word she typed begins a word of the entry
+     3. the rest, where at least one word only matches mid-word
+   Tier 2 was added after watching it run: "right hee" put "Right cheek" ABOVE "Right plantar heel".
+   Keeping the cheek as a match is right — she may be typing mid-word — but ranking it above a heel is
+   not, and at a bedside the second row matters as much as the first.
+   Returns [] for an empty query — the caller shows the grouped list instead. */
+function _locMatch(q){
+  const toks=String(q==null?'':q).trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if(!toks.length) return [];
+  const full=toks.join(' ');
+  const hits=WOUND_LOCATIONS.filter(o=>{ const l=o.toLowerCase(); return toks.every(t=>l.indexOf(t)>=0); });
+  const lead=[], word=[], rest=[];
+  hits.forEach(o=>{ const l=o.toLowerCase();
+    if(l.indexOf(full)===0) lead.push(o);
+    else if(toks.every(t=>_locWordStart(l,t))) word.push(o);
+    else rest.push(o);
+  });
+  return lead.concat(word, rest);
+}
 const STAGES      = ['Stage 1','Stage 2','Stage 3','Stage 4','Unstageable','DTI'];
 /* Wagner grade is the diabetic-ulcer counterpart to Stage, and the note has always had a box for it
    (`If diabetic ulcer -> Wagner grade`). Without it here the provider picks "Diabetic ulcer" at the
@@ -371,7 +537,10 @@ function normalizePts(o){
        next new wound would silently reuse a number that is already in the chart. */
     if(!Array.isArray(p.wounds)) p.wounds=[];
     let seq=Number(p.woundSeq)||0;
-    p.wounds.forEach(w=>{ if(w && w.num>seq) seq=w.num; });   // never below a number already in use
+    /* The high-water mark now has to stay above every BIRTH STAMP as well as every number, or the next
+       addWound issues a born a live wound already holds and two wounds sort to the same place. */
+    p.wounds.forEach(w=>{ if(w && w.num>seq) seq=w.num; });        // never below a number already in use
+    p.wounds.forEach(w=>{ if(w && Number(w.born)>seq) seq=Number(w.born); });
     p.wounds.forEach(w=>{ if(w && !w.num) w.num=++seq; });    // unnumbered take the next FREE number
     p.woundSeq=seq;
     /* Two passes, not one, and NOT positional. Backfilling an unnumbered wound with its array index
@@ -384,7 +553,16 @@ function normalizePts(o){
        number order can disagree. Sorting here, in the one place every load path already funnels
        through, means they never can. A new wound always takes the highest number, so it still lands
        at the bottom of the list where the provider expects it. */
-    p.wounds.sort((a,b)=>(Number(a&&a.num)||0)-(Number(b&&b.num)||0));
+    /* KEEP THE LIST IN BIRTH ORDER — earliest-appeared first (Scott 2026-07-31). Everything that
+       renders wounds — the card, the sheet text, the .doc, the note — walks the array, so this one
+       line is what makes "ordered from earliest to latest" true everywhere at once. It is the only
+       place every load path funnels through.
+       BY `born`, NEVER BY THE LABEL. Scott named the trap himself: "if I end up changing the wound
+       name the metadata might say that is now the most recent wound. That is NOT the case, it's by
+       date of creation." A renamed wound must not move.
+       The number is the fallback while it still exists, and it gives the identical answer, because a
+       lower number has always meant "created earlier" — that was its one honest job. */
+    p.wounds.sort((a,b)=>((Number(a&&a.born)||Number(a&&a.num)||0)-(Number(b&&b.born)||Number(b&&b.num)||0)));
     /* THE WOUND'S OWN ID, AND ITS BIRTH ORDER — the linked-list pointer and the ordering, which are two
        different things and must never be confused (Scott 2026-07-31: "it's a linked list, it doesn't
        exist in a vacuum" / "if I end up changing the wound name the metadata might say that is now the
@@ -465,10 +643,36 @@ function toast(m){ const t=document.getElementById('toast'); t.textContent=m; t.
 function newWound(){ return { num:0, loc:'', type:[], stage:'', wagner:'', l:'', w:'', d:'', drain:'', odor:'', status:'', wbGran:'', wbSlough:'', wbFib:'', wbEpi:'', wbEschar:'', exposed:[], periwound:[], undermining:'', tunneling:'', debride:'',
   tissueRemoved:'', postL:'', postW:'', postD:'', deepest:'', debType:'', instrument:'', ebl:'', bloodCtl:'', consent:'', anesthesia:'', cleansing:'', endpoint:'', tolerance:'',
   orders:'' }; }
-/* The number to SHOW. Falls back to position only for a wound that somehow reached a renderer without
-   passing through normalizePts — display should never be blank, but the fallback is not an identity and
-   must never be written back into the record. */
-function wNum(w,i){ return (w && w.num) ? w.num : (i+1); }
+/* WHAT THE WOUND IS CALLED — its location, and nothing else (Scott 2026-07-31: "rely on titles and
+   call it a day"). Rule 2 of the spec: no number anywhere she can see, not on the card, not in the
+   note, not on the nurses' sheet.
+   ⚠ THE FALLBACK IS NOT DECORATION. A wound with no location yet is the ordinary state of a wound she
+   has just added, and the label is used in a confirm dialog, a toast, a section header and the nurses'
+   sheet. Returning '' would produce "Remove ?" and a blank heading on a document a facility acts on.
+   The old wNum fell back to the ARRAY INDEX, which is worse than blank: it printed a plausible number
+   that was a position, which is the original defect this whole change exists to remove. */
+const W_NO_NAME='a wound with no location yet';
+function _wBase(w){ return String((w&&w.loc)||'').trim() || W_NO_NAME; }
+/* TWO WOUNDS AT ONE SITE GET "(2)", and that is rule 7 of the spec rather than a nicety: "if it
+   reopens it's a new wound... two entries, and the second is where the (2) label comes from."
+   Found by playing a real follow-up: a healed Right great toe and the reopened Right great toe printed
+   the identical heading, on the card, in the note and on the nurse's sheet — three documents on which
+   nobody could tell which wound was which.
+   NUMBERED BY BIRTH, so the older wound keeps the plain name for as long as it exists and the label of
+   an established wound never changes underneath the chart. It is a DISPLAY suffix and nothing else:
+   w.loc still holds the plain site, so identity, matching and the vocabulary are untouched.
+   The list argument is optional — every renderer already walks the patient's wound array (woundHTML
+   gets it as map's third argument), and a caller without one simply gets the plain name. */
+function wLabel(w, list){
+  const base=_wBase(w);
+  if(!Array.isArray(list)) return base;
+  const key=base.toLowerCase();
+  const sibs=list.filter(x=>x && _wBase(x).toLowerCase()===key)
+                 .sort((a,b)=>(Number(a.born)||Number(a.num)||0)-(Number(b.born)||Number(b.num)||0));
+  if(sibs.length<2) return base;
+  const i=sibs.indexOf(w);
+  return i<=0 ? base : base+' ('+(i+1)+')';
+}
 /* Wound bed = the composer's structured field: gran/slough/fibrin/epithelialization % + eschar yes/no.
    Compose the same "N% granulation, …, eschar: yes" string for the sheet; the composer pull maps each
    piece straight into its :wb: keys. */
@@ -483,12 +687,16 @@ function wbText(w){
    patients added in the same second can't collide; never derived from the name (two "Maria Garcia"
    stay distinct). */
 function newId(){ return 'rc-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,7); }
-/* The first wound is numbered HERE, not left to normalizePts. addPt() calls save() immediately, and
+/* The first wound gets its IDENTITY HERE, not from normalizePts. addPt() calls save() immediately, and
    save() schedules the vault auto-save — so a patient added and left alone would have filed their first
    wound with num 0, which the composer reads as "no identity" and falls back to guessing from the
    location text. That is the exact failure wound numbers exist to remove, on the most common path in
-   the app. Caught 2026-07-30 while checking whether the location lock was still reachable. */
-function newPt(){ return { id:newId(), name:'', edu:'', wounds:[Object.assign(newWound(),{num:1})], woundSeq:1, send:true, visitType:'', dispo:'' }; }   // visitType: ''=Auto (history decides) | 'new' | 'fu'
+   the app. Caught 2026-07-30 while checking whether the location lock was still reachable.
+   ⚠ wid AND born BELONG HERE FOR THE SAME REASON, and they were missing until 2026-07-31 — confirmed
+   by driving the live card: `+ Patient` produced a wound with num 1 and no wid at all. Harmless while
+   numbers exist (the composer derives 'c'+num, and the next load backfills), and DATA LOSS the moment
+   numbers stop being written: the record reaches the vault with nothing saying which wound it is. */
+function newPt(){ return { id:newId(), name:'', edu:'', wounds:[Object.assign(newWound(),{num:1, born:1, wid:'c1'})], woundSeq:1, send:true, visitType:'', dispo:'' }; }   // visitType: ''=Auto (history decides) | 'new' | 'fu'
 function activePt(){ return S.pts[S.active] || null; }
 
 /* ---------- disposition: was this patient actually seen? (Scott 2026-07-27) ----------
@@ -932,7 +1140,7 @@ function addWound(){ const p=activePt(); if(!p) return;
 function delWound(i){
   const p=activePt(); if(!p) return;
   if(p.wounds.length===1){ toast('A patient needs at least one wound'); return; }
-  if(!confirm('Remove wound '+wNum(p.wounds[i],i)+'?')) return;
+  if(!confirm('Remove '+wLabel(p.wounds[i],p.wounds)+'?')) return;
   /* The survivors KEEP their numbers and woundSeq is not lowered — deleting Wound 1 of {1,2} leaves a
      Wound 2, it does not promote it. That promotion is exactly what made the card disagree with the
      note, and a number that has been in a chart must never be handed to a different wound. */
@@ -940,10 +1148,11 @@ function delWound(i){
 }
 /* Healed wounds the provider has started editing THIS SESSION. Deliberately not part of the record —
    it drives a warning, not data, and it must not travel to the vault or to next week's card. Keyed by
-   patient id plus wound number so it can never leak onto another patient or follow a renumber. */
+   patient id plus the wound's own id, so it can never leak onto another patient and never follows a
+   number (which is being retired; the wid is what identifies a wound). */
 const _healedEdited = new Set();
 function _healedKey(i){ const p=activePt(); const w=p&&p.wounds&&p.wounds[i];
-  return (p&&p.id?p.id:'?')+':'+((w&&w.num)||('idx'+i)); }
+  return (p&&p.id?p.id:'?')+':'+((w&&w.wid)||('idx'+i)); }
 function setW(i,f,val){
   const p=activePt(); if(!p) return;
   /* WARN ON THE ACT OF CHANGING IT, not on the wound existing (Scott 2026-07-30). A healed wound now
@@ -952,7 +1161,7 @@ function setW(i,f,val){
      corrected, and blocking it would trap the error. */
   const wasHealed=isHealedWound(p.wounds[i]);
   const firstTouch = wasHealed && f!=='status' && !_healedEdited.has(_healedKey(i));
-  if(firstTouch){ _healedEdited.add(_healedKey(i)); toast('Wound '+wNum(p.wounds[i],i)+' is recorded as healed — see the note on it'); }
+  if(firstTouch){ _healedEdited.add(_healedKey(i)); toast(wLabel(p.wounds[i],p.wounds)+' is recorded as healed — see the note on it'); }
   p.wounds[i][f]=val; save();
   // Status moved off Healed: the warning no longer applies, so drop it rather than leave it nagging.
   if(f==='status' && !isHealedWound(p.wounds[i])) _healedEdited.delete(_healedKey(i));
@@ -1043,6 +1252,122 @@ function multiField(i,w,field,list){
   }
   return h;
 }
+/* ============ WHERE IS IT — a CLOSED picker, not a text box (Scott 2026-07-31) ======================
+   The location is the wound's name now that numbering is retired, so it has to be a value we chose, not
+   a value that was typed. Everything below exists to make that true without slowing a bedside down.
+
+   WHY THIS IS A COMBOBOX AND NOT A <select>. 214 options in a native select is an iOS wheel picker —
+   unusable standing at a bed. She types a word or two, the list narrows, she taps. Type-to-filter is
+   the whole feature; the select was never a candidate.
+
+   WHAT MAKES IT CLOSED: TYPING DOES NOT WRITE. The search box filters and nothing more; `w.loc` only
+   ever changes in locPick (an entry off the list) or in the Other box (a deliberate escape). So a
+   half-typed search cannot become a wound's name by walking away — and locClose puts the stored value
+   back in the box so an abandoned search never LOOKS saved either.
+
+   THE THREE STATES, and only one of them is remembered anywhere:
+     list   — the normal case. Search + menu.
+     free   — `loc` holds something that is not on the list. That is either legacy free text (there are
+              71 distinct strings in the real data) or an Other she typed. Inferred from the DATA, so it
+              survives a reload, a carry-forward and a patient switch with no extra field on the record.
+     other  — she tapped Other… but has not typed yet. Nothing distinguishes that from "list mode with
+              an empty box" except intent, so it is held in a session-only Set, exactly as _healedEdited
+              holds "she has started editing a healed wound". It is UI state and must never reach the
+              vault or next week's card. */
+const _locFreeMode = new Set();
+function _locKey(i){ const p=activePt(); const w=p&&p.wounds&&p.wounds[i];
+  return (p&&p.id?p.id:'?')+':'+((w&&w.wid)||('idx'+i)); }
+/* Keyed on `wid`, deliberately, not on the number: this is new code and the number is being retired.
+   wid is minted once and never moves, so the flag cannot follow the wrong wound. */
+function _locRowHTML(i,o,cur){
+  /* data-v, not an inlined string argument. An option containing an apostrophe would break out of the
+     onclick attribute, and the vocabulary is Abby's to extend — the next entry she adds must not be
+     able to break the card. esc() covers the attribute; the handler reads the value back. */
+  return '<button type="button" class="loc-row'+(o===cur?' pick':'')+'" data-v="'+esc(o)+'" '
+    + 'onclick="locPick('+i+',this.getAttribute(\'data-v\'))">'+esc(o)+'</button>';
+}
+function _locOtherRowHTML(i){
+  return '<button type="button" class="loc-row" onclick="locOtherMode('+i+')">'+esc(LOC_OTHER)+'</button>';
+}
+const LOC_MENU_CAP = 50;   // a filtered list longer than this means the search has not narrowed anything
+function _locMenu(i, q, cur){
+  const typed=String(q||'').trim();
+  if(typed && typed!==cur){
+    const hits=_locMatch(typed);
+    if(!hits.length) return '<div class="loc-none">Nothing on the list matches “'+esc(typed)+'”. '
+      + 'Try one word (“heel”, “buttock”), or use ' + esc(LOC_OTHER) + '</div>' + _locOtherRowHTML(i);
+    const shown=hits.slice(0,LOC_MENU_CAP);
+    return shown.map(o=>_locRowHTML(i,o,cur)).join('')
+      + (hits.length>shown.length ? '<div class="loc-none">'+(hits.length-shown.length)+' more — keep typing</div>' : '')
+      + _locOtherRowHTML(i);
+  }
+  // Nothing typed: the whole vocabulary, in anatomical order, under its headings. The headings are the
+  // reason the grouping is kept at all — scanning "Foot" beats scrolling 214 flat rows.
+  return WOUND_LOCATION_GROUPS.map(g=>
+    '<div class="loc-grp">'+esc(g[0])+'</div>' + g[1].map(o=>_locRowHTML(i,o,cur)).join('')
+  ).join('') + '<div class="loc-grp">Not on the list</div>' + _locOtherRowHTML(i);
+}
+function locOpen(i){
+  const q=document.getElementById('locq_'+i), m=document.getElementById('locm_'+i);
+  if(!q||!m) return;
+  const p=activePt(); const w=p&&p.wounds&&p.wounds[i];
+  m.innerHTML=_locMenu(i, q.value, String((w&&w.loc)||'').trim());
+  m.classList.add('on');
+}
+/* An abandoned search must not look like a saved change. The box is restored to what is actually on the
+   record, which is the only value anything downstream will ever see. */
+function locClose(i){
+  const q=document.getElementById('locq_'+i), m=document.getElementById('locm_'+i);
+  if(m) m.classList.remove('on');
+  const p=activePt(); const w=p&&p.wounds&&p.wounds[i];
+  if(q) q.value=String((w&&w.loc)||'');
+}
+function locPick(i,val){
+  const p=activePt(); if(!p||!p.wounds[i]) return;
+  _locFreeMode.delete(_locKey(i));
+  setW(i,'loc',String(val==null?'':val));
+  render();
+}
+function locOtherMode(i){
+  const p=activePt(); if(!p||!p.wounds[i]) return;
+  /* The current value is KEPT and handed to the free box as a starting point. Clearing it would make
+     Other a destructive tap with no undo, and she may only want to add a word to it. */
+  _locFreeMode.add(_locKey(i));
+  render();
+}
+function locBackToList(i){
+  const p=activePt(); if(!p||!p.wounds[i]) return;
+  const cur=String(p.wounds[i].loc||'').trim();
+  /* Going back to the list DISCARDS off-list text, because free mode is inferred from the data — leave
+     the text and it would bounce straight back to free mode, which reads as the button being broken.
+     So it asks first. Never silently: this string is the wound's name. */
+  if(cur && !_locListed(cur)){
+    if(!confirm('Replace “'+cur+'” by picking from the list?')) return;
+    setW(i,'loc','');
+  }
+  _locFreeMode.delete(_locKey(i));
+  render();
+}
+function locField(i,w){
+  const cur=String((w&&w.loc)||'').trim();
+  const free=_locFreeMode.has(_locKey(i)) || (!!cur && !_locListed(cur));
+  if(free){
+    return '<input class="other-box" value="'+esc(cur)+'" placeholder="say the side and the place" '
+      + 'oninput="setW('+i+',\'loc\',this.value)">'
+      + '<div class="muted" style="font-size:11.5px;margin-top:4px">Off the list — this is what the note '
+      + 'and the nurse’s sheet will call this wound, so say the side. '
+      + '<button class="tiny" style="margin-left:4px" onclick="locBackToList('+i+')">Pick from the list</button></div>';
+  }
+  return '<div class="loc-wrap">'
+    + '<input id="locq_'+i+'" autocomplete="off" value="'+esc(cur)+'" '
+    + 'placeholder="type to find it — “heel”, “sacrum”, “buttock”" '
+    + 'onfocus="locOpen('+i+')" oninput="locOpen('+i+')" onblur="locClose('+i+')">'
+    /* preventDefault on mousedown INSIDE the menu, so the search box never loses focus and onblur never
+       fires while a row is being tapped. The classic combobox trap: close-on-blur eats the tap that was
+       trying to choose something, and it eats it on a phone where nobody can see why. */
+    + '<div class="loc-menu" id="locm_'+i+'" onmousedown="event.preventDefault()"></div>'
+    + '</div>';
+}
 function toggleW(i,field,opt,on){
   const p=activePt(); if(!p) return; const w=p.wounds[i];
   let arr=Array.isArray(w[field])?w[field].slice():[];
@@ -1101,10 +1426,10 @@ function procSel(i,w,field,list,label){
   }
   return h;
 }
-function procHTML(w,i){
+function procHTML(w,i,list){
   if(String(w&&w.debride||'')!=='Yes') return '';
   return '<div class="card" style="margin-top:8px;border-left:3px solid var(--accent)">'
-    + '<div class="muted" style="font-size:11px;font-weight:650;letter-spacing:.4px;text-transform:uppercase;margin-bottom:6px">Procedure — wound '+wNum(w,i)+'</div>'
+    + '<div class="muted" style="font-size:11px;font-weight:650;letter-spacing:.4px;text-transform:uppercase;margin-bottom:6px">Procedure — '+esc(wLabel(w,list))+'</div>'
     + procSel(i,w,'tissueRemoved',PROC_TISSUE,'Tissue type removed')
     /* PRE-debridement measurements are NOT asked here: the note inherits them from the exam L/W/D
        above, and the total surface area debrided is auto-calculated from them. Two boxes for one fact
@@ -1177,7 +1502,7 @@ function cfRebuildWounds(rec){
   });
   return { wounds, healed };
 }
-function woundHTML(w,i){
+function woundHTML(w,i,list){
   const pr = w.prior || null;
   const priorWhen = pr && pr.date ? ' ('+esc(pr.date)+')' : '';
   /* A HEALED WOUND IS JUST A WOUND WHOSE STATUS IS HEALED (Scott 2026-07-30: "dont make resolved grey
@@ -1190,38 +1515,28 @@ function woundHTML(w,i){
     ? '<div class="warn" style="margin:6px 0">This wound is recorded as <b>healed</b>. '
       + 'Changing it edits a wound the chart has already closed. '
       + 'If this site has opened again, that is a <b>new wound</b> — remove this edit and use '
-      + '“+ Add another wound”, which will give it the next number.</div>'
+      + '“+ Add another wound”, and pick the same place again. The note keeps them apart.</div>'
     : '';
   return '<div class="card">'
-    + '<div class="wound-head"><b>Wound '+wNum(w,i)+'</b>'
+    + '<div class="wound-head"><b>'+esc(wLabel(w,list))+'</b>'
     + (isHealedWound(w)?'<span class="muted" style="font-size:11px;margin-left:8px">healed</span>':'')
     + (pr?'<span class="muted" style="font-size:11px;margin-left:8px">carried from last visit</span>':'')
     + '<button class="tiny no-print" onclick="delWound('+i+')">Remove</button></div>'
     + healedWarn
 
-    /* LOCATION IS LOCKED ON A CARRIED-OVER WOUND (Scott 2026-07-30). Not cosmetic — it is load-bearing.
-       The composer decides "is this the same wound as last week" by comparing this text to the location
-       stored in the note's history, and its scorer is plain word overlap with no stemming. "sacrum" vs
-       "sacral" scores ZERO, which the matcher then treats as CERTAINLY a new wound: last week's wound
-       carries forward BLANK as Wound 1 and this week's findings land on a duplicate Wound 2. Retyping a
-       location by a single word is all it takes.
-       A NEW wound stays freely editable — there is nothing yet to match it against. Only a carried one
-       is locked, and `prior` is exactly the "came from last visit" marker.
-       This is a stopgap for the real fix (a permanent wound number owned by the card), not a substitute
-       for it. To correct a genuinely wrong location, remove the wound and add it back. */
-    /* THE LOCATION IS EDITABLE AGAIN ONCE THE WOUND HAS A NUMBER (Scott 2026-07-30).
-       It was locked earlier the same day as a stopgap, because the composer decided "is this the same
-       wound as last week" by scoring this text — and one retyped word made it invent a duplicate. Wound
-       numbers removed that entirely: identity now travels as `num`, and the note matches on it, so the
-       wording is free to change. Keeping the lock would only trap a bad name forever, which is exactly
-       what happened — a whole measurement string ended up in one wound's location and carried over
-       every week with no way to correct it.
-       A wound with NO number is still locked, because for those the composer really does fall back to
-       location matching. That is the legacy path and it shrinks to nothing as records gain numbers. */
+    /* THE LOCATION IS NOW A CLOSED PICK, NOT TYPED TEXT (Scott 2026-07-31, numbering retired).
+       Two earlier attempts at this field are worth knowing about before touching it again:
+       it was LOCKED on carried wounds on 2026-07-30, because the composer decided "is this the same
+       wound as last week" by scoring this text and "sacrum" vs "sacral" scores ZERO — one retyped word
+       invented a duplicate wound. The lock was then removed the same day, because it trapped a bad name
+       forever (a whole measurement string ended up in one wound's location and carried every week with
+       no way to correct it).
+       Both were treatments for free text. The vocabulary is the cure: she picks side+site from a closed
+       list, so the wording cannot drift in the first place, and identity no longer rides on it anyway.
+       The stored value is still one plain `loc` string, so nothing downstream changes. */
     + '<label>Where is it</label>'
-    + '<input value="'+esc(w.loc)+'" placeholder="e.g. right great toe, sacrum" '
-    + 'oninput="setW('+i+',\'loc\',this.value)">'
-    + (pr ? '<div class="muted" style="font-size:11px;margin-top:3px">Carried over. Safe to reword — the note tracks this wound by its number, not its name — but leave it alone unless it is wrong.</div>' : '')
+    + locField(i,w)
+    + (pr ? '<div class="muted" style="font-size:11px;margin-top:3px">Carried over. The note follows this wound by its own id, not by its name, so correcting the wording is safe — but leave it alone unless it is wrong.</div>' : '')
 
     + '<label>Type</label>'
     + multiField(i,w,'type',WOUND_TYPES)
@@ -1283,7 +1598,7 @@ function woundHTML(w,i){
     + '<select onchange="setW('+i+',\'debride\',this.value)"><option value=""></option>'
     +   DEBRIDE.map(o=>'<option value="'+esc(o)+'"'+(w.debride===o?' selected':'')+'>'+esc(o)+'</option>').join('')
     + '</select>'
-    + procHTML(w,i)
+    + procHTML(w,i,list)
 
     + '<label>Orders</label>'
     + '<textarea placeholder="what the nurse should do — dressing, frequency, offloading, re-check" '
@@ -1433,7 +1748,7 @@ function sheetHTML(list, roundOverride){
     p.wounds.forEach((w,i)=>{
       const odor=disp(w,'odor'), status=disp(w,'status');
       const stCls = status ? (String(status).toLowerCase().indexOf('improv')>=0?'b-imp':(String(status).toLowerCase().indexOf('wors')>=0?'b-wor':'b-stb')) : '';
-      b += '<div class="w'+(i===0?' w-first':'')+'"><div class="w-title">Wound '+wNum(w,i)+' — <span class="loc">'+esc(v(w.loc))+'</span></div>'
+      b += '<div class="w'+(i===0?' w-first':'')+'"><div class="w-title"><span class="loc">'+esc(wLabel(w,p.wounds))+'</span></div>'
          + '<table>'
          + '<tr><td class="k">Type</td><td class="val">'+esc(v(disp(w,'type')))
          +   (isPressure(w) ? ' &nbsp;·&nbsp; <b>'+esc(v(disp(w,'stage')))+'</b>' : '')+'</td></tr>'
@@ -1490,9 +1805,12 @@ function findGaps(){
     }
     if(p.send===false) return;   // held back this send — don't nag about its gaps
     p.wounds.forEach((w,i)=>{
-      const tag = named+' · wound '+(i+1);
+      /* NAMED, NOT NUMBERED - and this one was a POSITION, which is worse than a number: it moved
+         whenever a wound above it was removed, so "wound 2 has no orders" could point at a different
+         wound by the time she looked at it. The location is the thing she can act on. */
+      const tag = named+' · '+wLabel(w,p.wounds);
       if(!(w.orders||'').trim()) g.push(tag+': no orders — the nurse gets nothing to do');
-      if(!(w.loc||'').trim())    g.push(tag+': no location');
+      if(!(w.loc||'').trim())    g.push(tag+': a wound has no location — that is its name in the note');
       // NO nag for a blank status (Scott 2026-07-20): improving/stable/worsening is a COMPARISON —
       // meaningless on an initial visit. Status is optional; unset prints nothing on the sheet.
       if(isPressure(w) && !(w.stage||'').trim()) g.push(tag+': pressure wound with no stage');
