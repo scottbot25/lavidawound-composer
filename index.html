@@ -905,6 +905,24 @@ function rcApplyByCardNum(S, priorList, cardWounds, edu, recDate){
      and still carries — Scott, 2026-07-29: "a resolved wound should carry into the note." */
   const byNum={}; (cardWounds||[]).forEach(cw=>{ const n=Number(cw&&cw.num)||0; if(n) byNum[n]=cw; });
   const claimed={};
+  /* ⚠ THIS LOOP TREATS A SHARED NUMBER AS PROOF OF A SHARED WOUND, AND IT IS NOT. Reproduced against
+     this function on 2026-07-31, both silently and both reaching a chart:
+       - last visit's wound 2 was the right heel and it HEALED; this week's card wound 2 is the left
+         elbow. The healed heel is claimed by the elbow, DISAPPEARS from the note, and the elbow
+         inherits its baseline — a fresh wound printing as a large improvement on the nurses' sheet.
+       - a prior wound and a card wound carrying different wids but the same number: the prior's whole
+         history is folded onto the other wound. One wound in the note where there were two.
+     A GUARD ON LOCATION WAS TRIED HERE AND REVERTED THE SAME DAY — read this before trying it again.
+     Refusing to fold when the two sites "share no word" looks obviously right and is wrong: the real
+     matcher scores "sacral" vs "sacrum" at ZERO (token overlap, no stemming — proven by running it).
+     That is not two wounds, it is one wound whose wording drifted, and it is the exact case numbering
+     was introduced to survive. The guard broke seven assertions in card-note-number-sync-test.js on
+     precisely that fixture. Trading a silent wrong merge for a silent wrong SPLIT is not a fix.
+     There is no safe signal available here today: location is untrustworthy (that is why numbers
+     exist) and the wid is DERIVED from the number, so it cannot separate two wounds that share one.
+     THE FIX IS STEP 2 — when the card carries its own wid, pair on that and the ambiguity is gone.
+     Until then this stays as it is, knowingly, and the defect is recorded in the vault rather than
+     papered over. See "Wound Identity — Pitfall Analysis (2026-07-31)". */
   (priorList||[]).forEach(pw=>{
     const n=Number(pw&&pw.num)||0;
     if(n && byNum[n]){ const target=_rcWidFor(byNum[n]); if(target){ _rcAdoptPriorWid(pw.wid, target); pw.wid=target; claimed[target]=1; } }
