@@ -361,11 +361,6 @@ function normalizePts(o){
            the number itself go.
        NEITHER IS EVER RECOMPUTED. An edit to the location must not touch either one, or renaming a
        wound would send it to the end of the list. */
-    if(Array.isArray(p.wounds)) p.wounds.forEach((w,wi)=>{
-      if(!w) return;
-      if(!w.wid)   w.wid  = Number(w.num)>0 ? ('c'+Number(w.num)) : ('w'+(wi+1)+'-'+p.id);
-      if(!w.born)  w.born = Number(w.num)>0 ? Number(w.num) : (wi+1);
-    });
     if(typeof p.dispo!=='string') p.dispo='';   // absent means seen — see DISPO_OPTS
     /* WOUND NUMBERS ARE ASSIGNED HERE AND NOWHERE ELSE (Scott 2026-07-30). Every load path — session
        resume, restore-on-open, the round picker, carry-forward — funnels through normalizePts, so
@@ -390,6 +385,33 @@ function normalizePts(o){
        through, means they never can. A new wound always takes the highest number, so it still lands
        at the bottom of the list where the provider expects it. */
     p.wounds.sort((a,b)=>(Number(a&&a.num)||0)-(Number(b&&b.num)||0));
+    /* THE WOUND'S OWN ID, AND ITS BIRTH ORDER — the linked-list pointer and the ordering, which are two
+       different things and must never be confused (Scott 2026-07-31: "it's a linked list, it doesn't
+       exist in a vacuum" / "if I end up changing the wound name the metadata might say that is now the
+       most recent wound. That is NOT the case, it's by date of creation").
+         wid  — WHICH wound this is. Never shown, never typed, never reused, nothing computed from it.
+         born — WHEN it first appeared. Drives the earliest-to-latest order and NOTHING else.
+       Until now the wound's identity across visits WAS its number: cfRebuildWounds carries `num` and
+       says so — "THE NUMBER IS THE WOUND'S IDENTITY". Numbering is retired, so both jobs move here.
+
+       ⚠ THIS MUST RUN **AFTER** THE NUMBER BACKFILL ABOVE, AND IT DID NOT. Written above the numbering
+       block first, it saw `num` still 0 on a legacy record and minted a wid of 'w1-<pid>' — for exactly
+       the wounds the backfill exists to protect. Those wounds are already filed in a note under '1:wc1:*',
+       so the card would have started calling them something else and orphaned the provider's exam,
+       Procedures and orders. Both `num` and the sort are settled by the time we get here, so:
+         - wid = 'c<num>' is byte-for-byte the key the composer already derives (_rcWidFor), so every
+           wound that exists keeps the key its exam, Procedures block, A&P memory and wound history are
+           already filed under. Nothing orphans; there is no migration to run.
+         - born = num preserves today's order exactly, because a lower number HAS meant "created
+           earlier" all along. That was the number's one honest job, and lifting it out is what lets
+           the number itself go.
+       NEITHER IS EVER RECOMPUTED. An edit to the location must not touch either one, or renaming a
+       wound would send it to the end of the list. */
+    p.wounds.forEach(w=>{
+      if(!w) return;
+      if(!w.wid)  w.wid  = 'c'+(Number(w.num)||0);
+      if(!w.born) w.born = Number(w.num)||0;
+    });
   });
 }
 /* WHAT WE KNOW IS ALREADY IN THE VAULT, persisted alongside the round.
