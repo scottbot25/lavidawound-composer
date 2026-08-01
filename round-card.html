@@ -344,6 +344,28 @@ function normalizePts(o){
        record id, which is exactly the value already stamped into any existing history — so the chain
        links up on the first carry-forward after this ships rather than starting over. */
     if(!p.ptId) p.ptId=p.id;
+    /* THE WOUND'S OWN ID, AND ITS BIRTH ORDER — the linked-list pointer and the ordering, which are two
+       different things and must never be confused (Scott 2026-07-31: "it's a linked list, it doesn't
+       exist in a vacuum" / "if I end up changing the wound name the metadata might say that is now the
+       most recent wound. That is NOT the case, it's by date of creation").
+         wid  — WHICH wound this is. Never shown, never typed, never reused, nothing computed from it.
+         born — WHEN it first appeared. Drives the earliest-to-latest order and NOTHING else.
+       Until now the wound's identity across visits WAS its number: cfRebuildWounds carries `num` and
+       says so — "THE NUMBER IS THE WOUND'S IDENTITY". Numbering is retired, so both jobs move here.
+       BOTH ARE BACKFILLED FROM THE NUMBER, and that is what makes this free:
+         - wid = 'c<num>' is byte-for-byte the key the composer already derives (_rcWidFor), so every
+           wound that exists keeps the exact key its exam, Procedures block, A&P memory and wound
+           history are already filed under. Nothing orphans; there is no migration to run.
+         - born = num preserves today's order exactly, because a lower number HAS meant "created
+           earlier" all along. That was the number's one honest job, and lifting it out is what lets
+           the number itself go.
+       NEITHER IS EVER RECOMPUTED. An edit to the location must not touch either one, or renaming a
+       wound would send it to the end of the list. */
+    if(Array.isArray(p.wounds)) p.wounds.forEach((w,wi)=>{
+      if(!w) return;
+      if(!w.wid)   w.wid  = Number(w.num)>0 ? ('c'+Number(w.num)) : ('w'+(wi+1)+'-'+p.id);
+      if(!w.born)  w.born = Number(w.num)>0 ? Number(w.num) : (wi+1);
+    });
     if(typeof p.dispo!=='string') p.dispo='';   // absent means seen — see DISPO_OPTS
     /* WOUND NUMBERS ARE ASSIGNED HERE AND NOWHERE ELSE (Scott 2026-07-30). Every load path — session
        resume, restore-on-open, the round picker, carry-forward — funnels through normalizePts, so
@@ -879,7 +901,11 @@ function addWound(){ const p=activePt(); if(!p) return;
   // One past the HIGH-WATER MARK, never wounds.length+1. A number that has been used is spent for this
   // patient forever, even if that wound has since been removed or resolved.
   p.woundSeq=(Number(p.woundSeq)||0)+1;
-  p.wounds.push(Object.assign(newWound(),{num:p.woundSeq}));
+  /* born rides the same high-water mark, and that is the point: it makes "created later" mean a higher
+     value FOREVER, even after the wound it belonged to is removed. Ordering is by birth, never by
+     position in the array and never by anything an edit can move (Scott 2026-07-31). wid is minted here
+     and never again — it is this wound, in every visit, for the rest of its life. */
+  p.wounds.push(Object.assign(newWound(),{ num:p.woundSeq, born:p.woundSeq, wid:'c'+p.woundSeq }));
   save(); render(); }
 function delWound(i){
   const p=activePt(); if(!p) return;
@@ -1099,7 +1125,14 @@ function cfRebuildWounds(rec){
   const wounds=src.map(w=>{
     const wasHealed=isHealedWound(w); if(wasHealed) healed++;
     return Object.assign(newWound(),{
-      // THE NUMBER IS THE WOUND'S IDENTITY — it carries, or next week renumbers and the note disagrees.
+      /* THE WOUND'S IDENTITY AND ITS BIRTH ORDER CARRY UNCHANGED. This map builds a BRAND NEW wound
+         object every week, so anything not named here is silently reset — which for `born` would mean
+         every wound looking created today and the earliest-to-latest order collapsing to nothing.
+         Neither may ever be recomputed from this week's data: `born` is when the wound first appeared,
+         and an edit to the location must not move a wound to the end of the list (Scott 2026-07-31). */
+      wid:  w.wid || (Number(w.num)>0 ? ('c'+Number(w.num)) : ''),
+      born: w.born || (Number(w.num)||0),
+      // Retiring, kept for one build so the composer can fall back while both sides land. See the spec.
       num: Number(w.num)||0,
       status: wasHealed ? 'Healed' : '',
       loc: w.loc||'',
