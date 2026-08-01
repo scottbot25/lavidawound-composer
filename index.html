@@ -796,11 +796,122 @@ function mintWid(p){ p=p||activePt(); const R=wreg(p);
 // The permanent number for a wid. Assigns on first sight (this is also the migration path for drafts
 // written before the registry existed — they get numbered in the order they appear in __wc_).
 function woundNum(wid, p){ p=p||activePt(); const R=wreg(p); const k=String(wid);
-  if(!R.byId[k]){ R.byId[k]={ num:R.seq++, label:'', openedOn:(typeof todayISO==='function'?todayISO():''), resolvedOn:null };
+  if(!R.byId[k]){ R.byId[k]={ num:R.seq++, label:'', born:0, openedOn:(typeof todayISO==='function'?todayISO():''), resolvedOn:null };
     try{ persist(); }catch(e){} }
   return R.byId[k].num;
 }
 function woundMeta(wid, p){ p=p||activePt(); const R=wreg(p); woundNum(wid,p); return R.byId[String(wid)]; }
+/* WHEN THIS WOUND FIRST APPEARED — the card's own birth stamp, remembered by the note.
+   The number was doing two jobs at once and only one of them was honest: WHICH wound (identity) and
+   WHEN it appeared (order). The card split them into `wid` and `born` on 2026-07-31; this is where the
+   second one crosses into the note.
+   ⚠ IT HAD NOWHERE TO LIVE. `born` appeared ZERO times in this file, and whSnapshotWounds stored
+   num/label/dims/... and nothing else — so the birth order did not survive a single copy-to-PCC, and
+   "ordered earliest to latest" could not be built at all. Rule 4 of the spec had no mechanism.
+   ONLY EVER RISES to a real stamp, and never back to 0: a legacy card wound arrives with born
+   undefined, and letting that clear a stamp already in the chart would collapse the order of every
+   wound at once, once, invisibly. There is no path that legitimately un-births a wound. */
+function woundBorn(wid, b, p){ p=p||activePt(); const R=wreg(p); const k=String(wid);
+  woundNum(wid,p);                                     // the entry must exist before it can be stamped
+  const n=Number(b)||0;
+  if(n>0 && Number(R.byId[k].born||0)!==n){ R.byId[k].born=n; try{ persist(); }catch(e){} }
+  return Number(R.byId[k].born)||0;
+}
+/* THE ORDER THE NOTE PRINTS ITS WOUNDS IN — earliest-appeared first (Scott 2026-07-31: "it's ordered
+   from earliest to latest… if I end up changing the wound name the metadata might say that is now the
+   most recent wound. That is NOT the case, it's by date of creation").
+   Falls back to the NUMBER while numbers still exist, because a lower number has always meant "created
+   earlier" — that was the number's one honest job, and it is what makes the migration free. A wound
+   with neither sorts last rather than first: an unknown birth is a wound we have only just met. */
+function _wOrder(wid, p){ const b=Number(woundMeta(wid,p).born)||0;
+  return b>0 ? b : (Number(woundNum(wid,p))||0) || Number.MAX_SAFE_INTEGER; }
+function _wOrderCmp(a,b,p){ return _wOrder(a,p)-_wOrder(b,p); }
+/* ============ WHAT A WOUND IS CALLED (Scott 2026-07-31, numbering retired) =========================
+   Rule 2 of the spec: "The location IS the wound's name. No number anywhere she can see — not on the
+   card, not in the note, not on the nurses' sheet."
+
+   IT IS READ LIVE FROM THE EXAM, never from a copy. That is what makes rule 8 true for free —
+   "change the side or location and it changes for every date" — because the location is stored once,
+   on the wound, and every label is a read of that one place. Nothing is propagated and nothing can
+   drift.
+
+   THE FALLBACK IS NOT DECORATION. A wound can genuinely have no location: one added by hand in the
+   note and not yet filled in. Printing an empty heading would leave the chart with a bare ":" that
+   cleanForCopy then deletes, taking the separator with it and running two wounds' measurements
+   together. So it always returns something, and something that reads as a prompt. */
+const W_NO_NAME='Wound (site not entered)';
+function _wNameOf(loc){ const s=String(loc==null?'':loc).trim();
+  return (!s || (typeof hoBlank==='function' && hoBlank(s))) ? W_NO_NAME : s; }
+/* THE NAME A WOUND WILL HAVE IN THIS NOTE, worked out from the wid list and the store rather than from
+   the rendered registry — because the A&P order lines are written during the pull, before anything has
+   rendered, and there is no registry to ask yet.
+   ⚠ IT MUST SEE EVERY WOUND IN THE NOTE, not just the ones on this week's card. The first version
+   looked only at the card list, and a healed toe that carries (the card stops sending it) plus the toe
+   that replaced it gave: exam block headed "Right great toe (2)", order line headed "Right great toe".
+   One wound, two names, in one note — on the half a nurse actually acts on. Found by driving a real
+   follow-up, not by reading.
+   Ordered by birth through the same comparator _wLabel uses, so the two cannot disagree. */
+function _wNameInNote(wid, order, S){
+  const at=k=>_wNameOf((S||{})['1:w'+k+':0']);
+  const base=at(wid);
+  const list=Array.isArray(order)?order:[];
+  if(list.length<2) return base;
+  const key=base.toLowerCase();
+  const sibs=list.filter(k=>at(k).toLowerCase()===key).sort((a,b)=>_wOrderCmp(a,b));
+  if(sibs.length<2) return base;
+  let i=-1; sibs.forEach((k,n)=>{ if(String(k)===String(wid)) i=n; });
+  return i<=0 ? base : base+' ('+(i+1)+')';
+}
+/* The wound's plain site, with no disambiguating suffix. Kept separate from _wLabel because the
+   invariant compares what the note will print against what the CARD sent, and the card sends the plain
+   site — so comparing a suffixed label would report a disagreement that does not exist. */
+function _wLabelBase(wid, st){
+  try{
+    /* THE STORE MATTERS. A pull writes into STORE[noteType] and setMode only swaps the global STATE at
+       the very END of rcPrefill — so anything reading STATE mid-pull is reading the store of whatever
+       was on screen before. The invariant did exactly that and reported a disagreement that did not
+       exist, on every wound, on every follow-up. Callers that render pass nothing and get STATE, which
+       is correct for them. */
+    const S=(st && typeof st==='object') ? st : (typeof STATE!=='undefined' ? STATE : {});
+    const w=(typeof woundRegistry!=='undefined'&&woundRegistry||[]).filter(x=>String(x.id)===String(wid))[0];
+    /* The registry entry knows its own key prefix; '1:w<wid>' is the fallback for a caller that has a
+       wid but no rendered wound (the merge's dropped-wound report runs before a repaint). Section 1 is
+       the Physical Exam, which is where _rcWriteWound puts the location. */
+    const k=((w&&w.keyPrefix) ? w.keyPrefix : ('1:w'+wid))+':0';
+    return _wNameOf(S[k]);
+  }catch(e){ return W_NO_NAME; }
+}
+/* TWO WOUNDS AT ONE SITE GET "(2)" — rule 7 of the spec, not a nicety: "if it reopens it's a new
+   wound... two entries, and the second is where the (2) label comes from." Found by playing a real
+   follow-up: a healed Right great toe and the reopened Right great toe printed the identical heading,
+   so the note pasted into PCC had two blocks nobody could tell apart.
+   NUMBERED BY BIRTH, so the older wound keeps the plain name for as long as it exists — an established
+   wound's heading never changes underneath the chart because a new one appeared beside it. */
+function _wLabel(wid, st){
+  try{
+    const base=_wLabelBase(wid, st);
+    const reg=(typeof woundRegistry!=='undefined'&&woundRegistry||[]);
+    if(reg.length<2) return base;
+    const key=base.toLowerCase();
+    const sibs=reg.filter(w=>_wLabelBase(w.id, st).toLowerCase()===key)
+                  .sort((a,b)=>_wOrderCmp(a.id,b.id));
+    if(sibs.length<2) return base;
+    let i=-1; sibs.forEach((w,n)=>{ if(String(w.id)===String(wid)) i=n; });
+    return i<=0 ? base : base+' ('+(i+1)+')';
+  }catch(e){ return W_NO_NAME; }
+}
+/* The per-wound separator line in the copied note. ONE definition, used by the renderer that writes it
+   and by cleanForCopy that must not eat it — because those two disagreeing is precisely the defect
+   this replaced: cleanForCopy kept the separator only because it matched /^Wound\s+\d+:$/, and a
+   location-headed title would have been deleted by the empty-"Label:" rule, running every wound's
+   measurements together in one PCC block with nothing saying which was which. The preview could not
+   have shown it — the preview renders resolveRaw and never runs cleanForCopy. */
+function _wTitleLine(wid){ return _wLabel(wid)+':'; }
+function _isWoundTitleLine(t){
+  if(/^Wound\s+\d+:$/.test(t)) return true;            // the legacy shape, so an old draft still cleans
+  try{ return (typeof woundRegistry!=='undefined'&&woundRegistry||[]).some(w=>t===_wTitleLine(w.id)); }
+  catch(e){ return false; }
+}
 /* ============ THE CARD OWNS WOUND IDENTITY (Scott 2026-07-30) =======================================
    The Round Card now stamps every wound with a permanent `num`, so the composer stops inventing one and
    stops GUESSING which wound is which from the location text. That guessing produced the original
@@ -862,6 +973,11 @@ function _rcAdoptPriorWid(oldWid, newWid, p){
     if(e.committedHere) R.byId[nk].committedHere=true;
     if(e.openedOn && !R.byId[nk].openedOn) R.byId[nk].openedOn=e.openedOn;
     if(e.resolvedOn && !R.byId[nk].resolvedOn) R.byId[nk].resolvedOn=e.resolvedOn;
+    /* THE EARLIER BIRTH WINS. Two entries being folded are one wound, and that wound appeared when the
+       older of the two did — take the larger stamp and a wound that has been carried for six weeks
+       jumps to the end of the list on the visit it happens to get reconciled. */
+    { const a=Number(e.born)||0, b=Number(R.byId[nk].born)||0;
+      if(a>0 && (b===0 || a<b)) R.byId[nk].born=a; }
   }
   if(e) delete R.byId[ok];
   try{ const v=_whPrior && _whPrior.visit;              // the prior block must follow, or it reads blank
@@ -875,27 +991,59 @@ function _rcAdoptPriorWid(oldWid, newWid, p){
    added next. It reports rather than throws, because refusing to open a note at the bedside would be
    worse than a wrong number, but the disagreement is no longer invisible, which is the whole reason
    this drifted for seven rounds without anyone being able to point at it. */
-function _rcAssertNumbers(orderWids, cardWounds, p){
+/* ⚠ THIS GATE WAS WIRED TO THE FIELD BEING REMOVED. Every claim it made was about `num`: the number a
+   wound prints, whether two wounds share one, whether a card wid decodes to the number it prints. Once
+   nothing displays a number those checks are all vacuously true — the gate would return true on a
+   mapping that put one wound's exam under another's name, and it is the gate that would catch exactly
+   that. THE SAFETY-GATE-WIRED-TO-NOTHING PATTERN, FOR THE FOURTH TIME IN THIS CODEBASE, so it is
+   rewired to the three things that can now actually go wrong.
+
+   1. TWO ENTRIES FOR ONE WOUND. A wid appearing twice in the order means the note charts one wound in
+      two blocks — the "two wids holding one number" defect, in its post-numbering form.
+   2. A WOUND SHE CHARTED IS MISSING. Every card wound must reach the note. The old gate could not see
+      this at all: it walked the order and asked what each entry printed, so a card wound that never
+      made it into the order was invisible. That is the silent one — she measures a wound at the
+      bedside and it is simply not in the note.
+   3. THE NAME DISAGREES. The location IS the wound's name now, so "this wound prints the name the card
+      gave it" is the modern form of "this wound prints the number the card issued" — and it is the one
+      a nurse would notice. Skipped for a card wound with no location, because there is nothing to
+      disagree with.
+   Ordering is deliberately NOT asserted here: the three callers sort with _wOrderCmp immediately
+   before calling, so an assertion would only be re-running the sort. It is pinned by behaviour in the
+   journey suites instead.
+   REPORTS, NEVER THROWS — refusing to open a note at the bedside would be worse than a wrong name. */
+function _rcAssertWounds(orderWids, cardWounds, p, S){
   try{
     p=p||activePt(); if(!p) return true;
-    const want={}; (cardWounds||[]).forEach(cw=>{ const w=_rcWidFor(cw); if(w) want[w]=Number(cw.num)||0; });
     const bad=[]; const seen={};
-    (orderWids||[]).forEach(wid=>{
-      const k=String(wid), got=woundNum(wid,p);
-      if(seen[got]) bad.push('number '+got+' used by two wounds ('+seen[got]+' and '+k+')');
-      seen[got]=k;
-      if(want[k] && want[k]!==got) bad.push(k+' prints '+got+' but the card says '+want[k]);
-      const dec=_rcNumOfCardWid(k);                    // the key IS the number for a card wound
-      if(dec && dec!==got) bad.push(k+' decodes to '+dec+' but prints '+got);
+    const order=(orderWids||[]).map(String);
+    order.forEach(k=>{ if(seen[k]) bad.push('two entries for one wound ('+k+')'); seen[k]=1; });
+    (cardWounds||[]).forEach(cw=>{
+      const k=_rcWidFor(cw); if(!k) return;
+      if(order.indexOf(String(k))<0){ bad.push('the card has '+_wNameOf(cw&&cw.loc)+' but the note does not'); return; }
+      const loc=String((cw&&cw.loc)||'').trim(); if(!loc) return;
+      const shown=_wLabelBase(k, S);                  // the BASE: the card sends a plain site, not a suffix
+      if(shown!==loc) bad.push('the note calls it “'+shown+'” but the card says “'+loc+'”');
     });
     if(bad.length){
       (p.numWarnings=p.numWarnings||[]).push(bad.join('; '));
-      if(typeof console!=='undefined'&&console.error) console.error('WOUND NUMBERS DISAGREE WITH THE CARD: '+bad.join('; '));
-      if(typeof toast==='function') toast('Wound numbers disagree with the round card — check before copying');
+      if(typeof console!=='undefined'&&console.error) console.error('THE NOTE DISAGREES WITH THE ROUND CARD: '+bad.join('; '));
+      if(typeof toast==='function') toast('The note disagrees with the round card — check before copying');
       return false;
     }
   }catch(e){}
   return true;
+}
+/* Give a carried prior wound its name, if nothing has answered that box yet. Shared by both seeding
+   paths so they cannot drift — rcApplyMapping had the identical gap. */
+function _rcSeedPriorName(S, W, pw, recDate){
+  try{
+    const k='1:w'+pw.wid+':0';
+    const loc=String((pw&&pw.location)||'').trim();
+    if(!loc || String(S[k]||'').trim()) return;
+    S[k]=loc; W[k]=loc;
+    if(typeof _rcStamp==='function') _rcStamp(S,k,recDate);
+  }catch(e){}
 }
 function rcApplyByCardNum(S, priorList, cardWounds, edu, recDate){
   const order=[]; const seenW={};
@@ -903,6 +1051,7 @@ function rcApplyByCardNum(S, priorList, cardWounds, edu, recDate){
      the card's key. Only then is it safe to seed, because after this no prior wid can duplicate a card
      wid. A prior wound with no match on the card (a healed one the card has dropped) keeps its own key
      and still carries — Scott, 2026-07-29: "a resolved wound should carry into the note." */
+  const byWid={}; (cardWounds||[]).forEach(cw=>{ const w=_rcWidFor(cw); if(w!=null) byWid[String(w)]=cw; });
   const byNum={}; (cardWounds||[]).forEach(cw=>{ const n=Number(cw&&cw.num)||0; if(n) byNum[n]=cw; });
   const claimed={};
   /* ⚠ THIS LOOP TREATS A SHARED NUMBER AS PROOF OF A SHARED WOUND, AND IT IS NOT. Reproduced against
@@ -924,8 +1073,27 @@ function rcApplyByCardNum(S, priorList, cardWounds, edu, recDate){
      Until then this stays as it is, knowingly, and the defect is recorded in the vault rather than
      papered over. See "Wound Identity — Pitfall Analysis (2026-07-31)". */
   (priorList||[]).forEach(pw=>{
-    const n=Number(pw&&pw.num)||0;
-    if(n && byNum[n]){ const target=_rcWidFor(byNum[n]); if(target){ _rcAdoptPriorWid(pw.wid, target); pw.wid=target; claimed[target]=1; } }
+    if(!pw) return;
+    const k=String(pw.wid);
+    /* SAME ID = SAME WOUND, and nothing else needs to happen. This is the whole switch in one line:
+       the prior visit and the card both carry the wound's own id, so pairing them is a lookup rather
+       than an inference. Two wounds can no longer swap histories by sharing a number, because they no
+       longer share anything — c2 and c7 are different strings whatever numbers they once printed. */
+    if(byWid[k]){ claimed[k]=1; return; }
+    /* THE LEGACY BRIDGE, AND ONLY FOR LEGACY. A visit committed before the card carried an id has a
+       NUMERIC wid (0, 1, 3) while the card sends c1, c2, c4 — nothing else in this file bridges those,
+       and without it the note holds both and a two-wound patient charts four. So the number-based fold
+       survives, restricted to exactly the wounds that need it.
+       ⚠ THE RESTRICTION IS THE FIX. Reproduced on 2026-07-31 against the unrestricted version, both
+       silent and both reaching a chart: last visit's wound 2 was a healed right heel and this week's
+       card wound 2 is a left elbow — the heel was claimed by the elbow, vanished from the note, and
+       the elbow inherited its baseline, printing a fresh wound as a large improvement on the nurses'
+       sheet. A prior wound that already carries its own card id can never be folded onto a different
+       one now, however the numbers line up. */
+    if(_rcCardWid(k)) return;
+    const n=Number(pw.num)||0;
+    if(n && byNum[n]){ const target=_rcWidFor(byNum[n]);
+      if(target && !claimed[String(target)]){ _rcAdoptPriorWid(pw.wid, target); pw.wid=target; claimed[String(target)]=1; } }
   });
   /* REPAIRING WHAT ALREADY DRIFTED. A prior wound with NO number on the card is one of two things,
      and until now they were indistinguishable — so a stray printed as a phantom extra wound:
@@ -939,7 +1107,7 @@ function rcApplyByCardNum(S, priorList, cardWounds, edu, recDate){
   const strays=[];
   (priorList||[]).forEach(pw=>{
     const n=Number(pw&&pw.num)||0;
-    if(!pw || (n && byNum[n]) || pw.resolved) return;   // matched, or a healed wound that rightly carries
+    if(!pw || byWid[String(pw.wid)] || (n && byNum[n]) || pw.resolved) return;   // paired, or a healed wound that rightly carries
     let hit=null, ties=0;
     (cardWounds||[]).forEach(cw=>{
       const t=_rcWidFor(cw); if(!t || claimed[t]) return;
@@ -960,8 +1128,12 @@ function rcApplyByCardNum(S, priorList, cardWounds, edu, recDate){
          touched stores "" (hoBlank strips the placeholder) and cfRebuildWounds blanks it every week for
          every unhealed wound, so blank is the DEFAULT rather than an oddity. `pw.resolved` alone could
          never have held this line. */
-      const cn=Number(cw&&cw.num)||0;
-      if(!(n>0 && cn>0 && n>cn)) return;
+      /* BIRTH ORDER, not the number — same question, asked of the field that survives. A stray is a
+         wound the NOTE minted later than it should have, so its birth stamp is above the card's; a
+         REOPEN is a wound the CARD minted later, so the card's is above. born falls back to the number
+         for legacy data, so this is the identical test for every record written before today. */
+      const pb=Number(pw.born)||n, cb=Number(cw&&cw.born)||Number(cw&&cw.num)||0;
+      if(!(pb>0 && cb>0 && pb>cb)) return;
       ties++; hit=t;
     });
     if(hit && ties===1){ _rcAdoptPriorWid(pw.wid, hit); pw.wid=hit; claimed[hit]=1;
@@ -970,20 +1142,36 @@ function rcApplyByCardNum(S, priorList, cardWounds, edu, recDate){
   });
   if(strays.length){ try{ const _p=activePt(); if(_p) (_p.numWarnings=_p.numWarnings||[]).push(strays.join('; '));
     if(typeof console!=='undefined'&&console.warn) console.warn('wound carry-over: '+strays.join('; ')); }catch(e){} }
-  (priorList||[]).forEach(pw=>{ const k=String(pw.wid); if(!seenW[k]){ seenW[k]=1; order.push(pw.wid); } });
   const W=S['__rcw']=(S['__rcw']&&typeof S['__rcw']==='object')?S['__rcw']:{};
-  const ordLines=[];
+  (priorList||[]).forEach(pw=>{ const k=String(pw.wid); if(!seenW[k]){ seenW[k]=1; order.push(pw.wid);
+    /* A CARRIED WOUND STILL NEEDS ITS NAME. A resolved wound carries every week and the card stops
+       sending it, so _rcWriteWound never runs for it — and with the location as the label, it reached
+       the note called "Wound (site not entered)". Under numbering it had one, because the number came
+       from the registry rather than from the exam.
+       Written as a CARD-OWNED value (recorded in __rcw), because that is what it is: it came from the
+       card originally, by way of the committed history. So a later bedside correction can still
+       replace it, which a bare S[k]= would have blocked forever. */
+    _rcSeedPriorName(S, W, pw, recDate);
+  } });
+  const ordPairs=[];
   (cardWounds||[]).forEach(cw=>{
     const wid=_rcWidFor(cw); if(!wid) return;
     woundNumFromCard(wid, cw.num);
     if(order.indexOf(wid)<0) order.push(wid);
     _rcWriteWound(S, wid, cw, {recDate});
     const o=String(cw.orders||'').trim();
-    if(o){ const line='Wound '+woundNum(wid)+(String(cw.loc||'').trim()?' ('+String(cw.loc).trim()+')':'')+': '+o;
-      ordLines.push(line); W['__ap:w'+wid]=line; _rcStamp(S,'__ap:w'+wid,recDate); }
+    if(o) ordPairs.push({wid, o});
   });
-  order.sort((a,b)=>woundNum(a)-woundNum(b));
-  _rcAssertNumbers(order, cardWounds);
+  /* EARLIEST TO LATEST — by when each wound first appeared, never by a displayed figure and never by
+     the order the card happened to list them in (Scott 2026-07-31). _wOrder falls back to the number
+     for a wound with no birth stamp, so a legacy chart reads exactly as it did. */
+  order.sort((a,b)=>_wOrderCmp(a,b));
+  /* NAMED ONLY ONCE THE LIST IS COMPLETE. A wound added later in the loop can change what an earlier
+     one is called — the second toe is what makes the first one worth distinguishing. */
+  const ordLines=[];
+  ordPairs.forEach(x=>{ const line=_wNameInNote(x.wid, order, S)+': '+x.o;
+    ordLines.push(line); W['__ap:w'+x.wid]=line; _rcStamp(S,'__ap:w'+x.wid,recDate); });
+  _rcAssertWounds(order, cardWounds, null, S);
   S['__wc_1']=order;
   if(String(edu||'').trim()){ W['__ap:edu']='Additional info / education: '+String(edu).trim(); _rcStamp(S,'__ap:edu',recDate); }
   _rcSetAP(S, _rcComposeAP(ordLines, edu));
@@ -1003,11 +1191,21 @@ function _rcAllNumbered(cardWounds){ return !!(cardWounds && cardWounds.length &
    WoundHistory, and from that visit on the fast path takes over. No vault read from the card, and no
    data correction to anyone's records. */
 function _rcCardWid(wid){ return /^c\d+$/.test(String(wid)); }
-/* Wound numbers this provider has deleted from THIS patient's note by hand. Written by
-   releaseWoundNum, read by the card merge, which must never re-add one. A pure accessor so the
-   suite can drive both sides of the rule without a workspace. */
+/* WOUNDS this provider has deleted from THIS patient's note by hand. Written by releaseWoundNum,
+   read by the card merge, which must never re-add one. A pure accessor so the suite can drive both
+   sides of the rule without a workspace.
+   ⚠ IT WAS KEYED ON THE NUMBER, which is the field being removed. The moment the card stops sending
+   one, every lookup fails to `false` with no error anywhere, and a wound she deleted comes back on
+   the next card auto-save with last week's measurements and its A&P order line — Scott's rule from
+   2026-07-31 ("a wound that has history, deleted, stays deleted") with no mechanism behind it.
+   Keyed on the WID now, which is what identifies a wound across visits. Legacy numeric entries are
+   still honoured, so a tombstone written before this change keeps working. */
 function _rcDeletedNums(p){ const d=p&&p.wcDel; return Array.isArray(d)?d:[]; }
-function _rcWasDeleted(p, num){ const n=Number(num)||0; return !!n && _rcDeletedNums(p).indexOf(n)>=0; }
+function _rcWasDeleted(p, wid, num){
+  const d=_rcDeletedNums(p); if(!d.length) return false;
+  const k=(wid==null?'':String(wid)); if(k && d.some(x=>String(x)===k)) return true;
+  const n=Number(num)||0; return !!n && d.some(x=>Number(x)===n);   // legacy tombstones
+}
 /* THE NUMBER A CARD WID CARRIES. For a card-linked wound the key IS the number — c4 is Wound 4 — so
    identity and number are ONE fact stored ONCE and cannot drift apart. That is the whole repair. */
 function _rcNumOfCardWid(wid){ const m=/^c(\d+)$/.exec(String(wid)); return m?Number(m[1]):0; }
@@ -1058,16 +1256,16 @@ function releaseWoundNum(wid, p){ p=p||activePt(); const R=wreg(p); const k=Stri
      measurements and its A&P order line, silently.
      Keyed by NUMBER because that is what the card sends and what identifies a wound across visits;
      a committed number is pinned, so compaction can never move it onto a different wound. */
-  if(delNum && e.committed){ try{
+  if(e.committed){ try{
     const d=p.wcDel=Array.isArray(p.wcDel)?p.wcDel:[];
-    if(d.indexOf(delNum)<0) d.push(delNum);
+    if(!d.some(x=>String(x)===k)) d.push(k);        // the WID, not the number - see _rcWasDeleted
   }catch(e2){} }
   delete R.byId[k];
   /* THE DELETED WOUND'S ORDERS GO WITH IT — ON EVERY PATH. This used to sit below the pinned branch's
      early return, so removing a CARD-owned wound left its "Wound N (location): orders" line behind in
      the A&P, describing a wound that is no longer in the note. */
   ['new','fu'].forEach(m=>{ try{ const st=p&&p.store&&p.store[m]; const W=st&&st['__rcw']; if(W) delete W['__ap:w'+wid]; }catch(e2){} });
-  const stripped=_rcStripApLines(p, delNum);
+  const stripped=_rcStripApLines(p, k, delNum);
   if(wasCommitted){
     /* A number that has been in a chart is never handed to another wound.
        This ASSIGNED mx+1, which could LOWER the counter: delete the card's wound 5 out of {1,2,5} and
@@ -1084,10 +1282,18 @@ function releaseWoundNum(wid, p){ p=p||activePt(); const R=wreg(p); const k=Stri
   try{ persist(); }catch(e2){}
   return (Object.keys(ren).length || stripped) ? ren : null;
 }
-// Remove A&P lines that head with "Wound <num>" (the shape the card-pull writes: "Wound N (loc): orders").
-// Runs BEFORE compaction, while the deleted number is still unique. Returns true if any text changed.
-function _rcStripApLines(p, num){ if(!num) return false; let changed=false;
-  const re=new RegExp('^\\s*Wound '+num+'\\b');
+/* Remove the A&P lines belonging to a wound being deleted. The card-pull writes one line per wound,
+   headed by that wound's NAME now ("Right heel (posterior): collagen daily") — it used to be headed
+   by its number, so this matched on the number. BOTH shapes are stripped: a note open from before
+   this change still holds number-headed lines, and leaving them would describe a wound that is no
+   longer in the note. Returns true if any text changed. */
+function _rcStripApLines(p, wid, num){ let changed=false;
+  const alt=[];
+  if(num) alt.push('Wound '+num+'\\b');
+  const nm=(wid==null)?'':_wLabel(wid);
+  if(nm && nm!==W_NO_NAME) alt.push(nm.replace(/[.*+?^${}()|[\\]\\\\]/g,'\\$&')+'\\s*:');
+  if(!alt.length) return false;
+  const re=new RegExp('^\\s*(?:'+alt.join('|')+')');
   ['new','fu'].forEach(m=>{ try{ const key=_rcApKeyFor(m); const st=p&&p.store&&p.store[m];
     if(!key || !st || typeof st[key]!=='string' || !st[key]) return;
     const kept=String(st[key]).split('\n').filter(l=>!re.test(l)).join('\n')
@@ -1207,7 +1413,12 @@ function whSnapshotWounds(){
   (woundRegistry||[]).forEach(w=>{
     const t=w.resolve(); const meta=woundMeta(w.id);
     const s=woundSummary(t, STATE[w.keyPrefix+':priorSA']);
-    out[String(w.id)]={ num:meta.num, label:meta.label||'', dims:v(s.dims), sa:v(s.sa), vol:volOf(t),
+    /* `born` RIDES ALONG, and it has to: this snapshot is the note's whole memory of a visit, and until
+       today it stored the wound's NUMBER as its only ordering fact. Numbering is retired, so without
+       this line the birth order dies at the first copy-to-PCC and "earliest to latest" silently
+       becomes "whatever order the history file happened to be written in".
+       It is the CARD's stamp, carried, never recomputed here — the note must not invent an order. */
+    out[String(w.id)]={ num:meta.num, born:Number(meta.born)||0, label:meta.label||'', dims:v(s.dims), sa:v(s.sa), vol:volOf(t),
                         bed:v(s.bed), status:v(s.status), drainage:v(s.drainage),
                         undermining:v(s.undermining), tunneling:v(s.tunneling), location:v(s.location) };
   });
@@ -1358,8 +1569,16 @@ function _isResolvedStatus(s){
    order, or the note reads in whatever sequence the history file happened to be written. */
 function whSeedIds(){
   const v=_whPrior && _whPrior.visit; if(!v || !v.wounds) return null;
-  const ids=Object.keys(v.wounds)
-    .sort((a,b)=>((Number(v.wounds[a]&&v.wounds[a].num)||woundNum(a))-(Number(v.wounds[b]&&v.wounds[b].num)||woundNum(b))));
+  /* BIRTH ORDER FIRST, the number only as the legacy fallback. A visit committed before `born` existed
+     stores no birth stamp, and a lower number has always meant "created earlier" — so the fallback
+     gives exactly today's order for exactly those wounds, and the two agree by construction for
+     everything written since. Seeding the stamp as we go means the wounds this note re-opens carry
+     their real order even on the path that never sees a card (a follow-up opened before the pull
+     lands, which is the skipped-week case). */
+  const key=k=>{ const wd=v.wounds[k]||{}; const b=Number(wd.born)||0;
+    if(b>0){ try{ woundBorn(k, b); }catch(e){} return b; }
+    return Number(wd.num)||woundNum(k); };
+  const ids=Object.keys(v.wounds).sort((a,b)=>key(a)-key(b));
   return ids.length?ids:null;
 }
 function whPriorFor(wid){ const v=_whPrior&&_whPrior.visit; return (v&&v.wounds&&v.wounds[String(wid)])||null; }
@@ -2598,6 +2817,14 @@ function _rcStale(S, k, recDate){
 function _rcWriteWound(S, wid, w, opts){
   const P='1:w'+wid; const onlyEmpty=!!(opts&&opts.onlyEmpty);
   const recDate=String((opts&&opts.recDate)||'').slice(0,10);   // the round this record is FROM
+  /* THE BIRTH STAMP CROSSES HERE, AND ONLY HERE. All four paths that lay a card wound onto a wid —
+     rcApplyByCardNum, rcApplyMapping, rcPrefill's first-timer branch and rcMergeIntoPatient — funnel
+     through this function, so one line covers every one of them. Doing it beside each of the four
+     woundNumFromCard calls instead would be four chances to miss one, which is exactly how the
+     reconcile modal ended up writing undated values (2026-07-31: five parameters where six were
+     wanted, at the one call site nobody updated).
+     woundBorn only ever raises a stamp, never clears one — see its comment. */
+  try{ if(Number(w&&w.born)>0) woundBorn(wid, w.born); }catch(e){}
   // onlyEmpty (merge into a note the provider already started): never overwrite a value SHE typed — but a
   // value the CARD itself wrote on an earlier pull is still the card's to update (Scott 2026-07-21: fixing
   // a typo'd measurement on the card must reach the note, not die against fill-empty). S['__rcw'] remembers
@@ -2617,7 +2844,15 @@ function _rcWriteWound(S, wid, w, opts){
      an older record re-answering a question a newer round already answered is the defect. */
   const setK=(k,v)=>{ if(!onlyEmpty || isEmpty(S[k]) || (((k in W) && same(S[k],W[k])) && !_rcStale(S,k,recDate))){
     S[k]=v; W[k]=Array.isArray(v)?v.slice():v; _rcStamp(S,k,recDate); } };
-  if(String(w.loc||'').trim()) setK(P+':0',String(w.loc).trim());
+  /* THE LOCATION IS THE WOUND'S NAME NOW, so clearing it on the card has to reach the note — this was
+     guarded on the text being non-blank, on every path, and the note went on printing a name the card
+     no longer held. Two different names for one wound on the document the facility acts on.
+     A BLANK ONLY PROPAGATES AS A DELIBERATE CLEAR: the card must already own the value that is there.
+     A card record that simply never had a location cannot wipe a name the provider typed herself, and
+     cannot blank the template's own prompt on a first write. */
+  { const _loc=String(w.loc==null?'':w.loc).trim(), _lk=P+':0';
+    if(_loc) setK(_lk,_loc);
+    else if((_lk in W) && same(S[_lk],W[_lk]) && String(S[_lk]||'').trim()) setK(_lk,''); }
   if(String(w.l||'').trim())   setK(P+':1',String(w.l).trim());
   if(String(w.w||'').trim())   setK(P+':2',String(w.w).trim());
   if(String(w.d||'').trim())   setK(P+':3',String(w.d).trim());
@@ -2863,8 +3098,10 @@ function rcMatchWounds(cardWounds, priorList){
 // wound). Rebuilds __wc_1 (prior wids in number order + any new wids) and the A&P orders text.
 function rcApplyMapping(S, priorList, cardWounds, mapping, edu, recDate){
   const orderWids=priorList.map(pw=>pw.wid);
-  const ordLines=[];
+  const ordPairs=[];
   const W=S['__rcw']=(S['__rcw']&&typeof S['__rcw']==='object')?S['__rcw']:{};
+  // Same gap as the numbered path: a carried wound the card no longer sends has no name without this.
+  (priorList||[]).forEach(pw=>_rcSeedPriorName(S, W, pw, recDate));
   (cardWounds||[]).forEach((cw,ci)=>{
     /* TAKE THE CARD'S NUMBER. This branch used to call woundNum(wid), which reads the note's OWN
        counter and never looks at cw.num — so a wound the matcher failed to recognise was stamped with
@@ -2873,17 +3110,27 @@ function rcApplyMapping(S, priorList, cardWounds, mapping, edu, recDate){
        author of a NUMBER. */
     let wid=mapping[ci];
     const _cn=Number(cw&&cw.num)||0;
-    if(wid==null){ wid=(_cn && _rcWidFor(cw))||mintWid(); orderWids.push(wid); }
+    /* THE CARD'S ID, WHETHER OR NOT IT SENT A NUMBER. This read `_cn && _rcWidFor(cw)`, so a card
+       wound carrying a real wid but no number had that wid thrown away and a fresh one minted —
+       orphaning its exam, Procedures and orders from the wound they belong to. Harmless only while
+       every card wound is numbered; the moment numbering stops it is every wound, every visit.
+       _rcWidFor already falls back to 'c'+num for a legacy record, so this is strictly safer. */
+    if(wid==null){ wid=_rcWidFor(cw)||mintWid(); orderWids.push(wid); }
     if(_cn) woundNumFromCard(wid, _cn); else woundNum(wid);
     _rcWriteWound(S, wid, cw, {recDate});
     const o=String(cw.orders||'').trim();
-    if(o){ const line='Wound '+woundNum(wid)+(String(cw.loc||'').trim()?' ('+String(cw.loc).trim()+')':'')+': '+o;
-      ordLines.push(line); W['__ap:w'+wid]=line; _rcStamp(S,'__ap:w'+wid,recDate); }   // card-owned line — a later card edit may replace it
+    if(o) ordPairs.push({wid, o});
   });
   // Number order, same as the numbered path — or the note reads in whatever order the matcher happened
   // to return and the card's 1,2,4 prints as 2,4,1.
-  orderWids.sort((a,b)=>woundNum(a)-woundNum(b));
-  _rcAssertNumbers(orderWids, cardWounds);
+  // Birth order, same as both sibling paths — or the note reads in whatever order the matcher happened
+  // to return and the card's oldest wound prints last.
+  orderWids.sort((a,b)=>_wOrderCmp(a,b));
+  // Named once the list is complete, exactly as the numbered path does it.
+  const ordLines=[];
+  ordPairs.forEach(x=>{ const line=_wNameInNote(x.wid, orderWids, S)+': '+x.o;
+    ordLines.push(line); W['__ap:w'+x.wid]=line; _rcStamp(S,'__ap:w'+x.wid,recDate); });   // card-owned line — a later card edit may replace it
+  _rcAssertWounds(orderWids, cardWounds, null, S);
   S['__wc_1']=orderWids;
   if(String(edu||'').trim()){ W['__ap:edu']='Additional info / education: '+String(edu).trim(); _rcStamp(S,'__ap:edu',recDate); }
   _rcSetAP(S, _rcComposeAP(ordLines, edu));
@@ -2939,9 +3186,14 @@ async function rcPrefill(rec){
        Card 1,2,3,4,5 charted as 1,2,5,6,7 — one piece of anatomy carrying two numbers. */
     const priorList=Object.keys(pv.wounds)
       .map(k=>{ const wid=isNaN(+k)?k:+k; return {wid, location:pv.wounds[k].location||'',
-        num:(pv.wounds[k].num||woundNum(wid)), resolved:_isResolvedStatus(pv.wounds[k].status)}; })
-      .sort((a,b)=>(a.num||0)-(b.num||0));
-    priorList.forEach(pw=>woundNum(pw.wid));
+        num:(pv.wounds[k].num||woundNum(wid)), born:Number(pv.wounds[k].born)||0,
+        resolved:_isResolvedStatus(pv.wounds[k].status)}; })
+      /* EARLIEST TO LATEST, by when the wound first appeared — not by any number and not by the order
+         Object.keys happened to hand them over. `born` falls back to the number for a visit committed
+         before the stamp existed, which is the same answer for those wounds and is what makes this a
+         free migration rather than a re-order of everyone's chart. */
+      .sort((a,b)=>((a.born||a.num||0)-(b.born||b.num||0)));
+    priorList.forEach(pw=>{ woundNum(pw.wid); if(pw.born>0) woundBorn(pw.wid, pw.born); });
     /* THE CARD NUMBERED THEM, SO THERE IS NOTHING TO GUESS. Identity comes from the number, the wid is
        derived from it, and a prior wound and the card wound continuing it land on the same key by
        construction. Location text stops mattering entirely — which is the whole point, because scoring
@@ -2975,7 +3227,7 @@ async function rcPrefill(rec){
     const W=S['__rcw']=(S['__rcw']&&typeof S['__rcw']==='object')?S['__rcw']:{};
     const ord=cardWounds.map((w,i)=>{ const o=String(w.orders||'').trim();
       if(!o) return '';
-      const line='Wound '+woundNum(wids[i])+(String(w.loc||'').trim()?' ('+String(w.loc).trim()+')':'')+': '+o;
+      const line=_wNameInNote(wids[i], wids, S)+': '+o;
       W['__ap:w'+wids[i]]=line; _rcStamp(S,'__ap:w'+wids[i],recDate);   // card-owned line — a later card edit may replace it
       return line; });
     if(edu){ W['__ap:edu']='Additional info / education: '+edu; _rcStamp(S,'__ap:edu',recDate); }
@@ -3396,9 +3648,25 @@ function rcMergeIntoPatient(pid, rec){
     const v=S[k];
     return Array.isArray(v) ? v.length>0 : String(v==null?'':v).trim()!=='';
   });
-  const shells=existList.filter(e=>!takenW.has(String(e.wid)) && _blank(e))
-    .sort((a,b)=>(a.num||0)-(b.num||0)).map(e=>e.wid);
+  /* ============ IDENTITY FIRST, HEURISTICS SECOND ============================================
+     Every card wound that names a wid the note already holds is paired with it HERE, before the
+     matcher or the empty-shell claim get a look in. Both of those are guesses, and a guess must never
+     be allowed to consume a key that identity had already answered for.
+     Found by the suite: a note holding one blank wound keyed c2, and a card sending c1 and c2. The
+     shell claim ran first, handed c2 to the card's c1, and then the card's own c2 found c2 already in
+     the list and took it too — two card wounds, one key, one of them gone from the note. It survived
+     before the switch only because renumbering happened to move the number out from under the second
+     lookup, which is not a mechanism anyone should rely on. */
   const wids=(Array.isArray(S['__wc_1'])?S['__wc_1'].slice():(woundRegistry||[]).map(w=>w.id));
+  const ownById={}, reserved={};
+  (cardWounds||[]).forEach((cw,ci)=>{
+    const cwid=_rcWidFor(cw); if(cwid==null) return;
+    const k=String(cwid); if(reserved[k]) return;
+    let ex; wids.forEach(w=>{ if(String(w)===k) ex=w; });
+    if(ex!==undefined || wreg().byId[k]){ ownById[ci]=(ex!==undefined)?ex:cwid; reserved[k]=1; }
+  });
+  const shells=existList.filter(e=>!takenW.has(String(e.wid)) && !reserved[String(e.wid)] && _blank(e))
+    .sort((a,b)=>(a.num||0)-(b.num||0)).map(e=>e.wid);
   const ordPairs=[];
   cardWounds.forEach((cw,ci)=>{
     const m=props[ci]; let wid;
@@ -3406,7 +3674,7 @@ function rcMergeIntoPatient(pid, rec){
        the bedside record and she removed it from the NOTE — and it does not come back. Skipped
        before anything is written, so no key is minted, no measurement lands, and no A&P order line
        is appended for it. See releaseWoundNum. */
-    if(_rcWasDeleted(WS.patients[pid], cw&&cw.num)) return;
+    if(_rcWasDeleted(WS.patients[pid], _rcWidFor(cw), cw&&cw.num)) return;
     /* THE NUMBER IS THE IDENTITY, SO WHOEVER ALREADY HOLDS IT IS THE WOUND.
        This used to take the c<num> key FIRST, ahead of the matcher and the empty-shell claim — so a
        wound the note already had under a different wid (typed by hand, added by hand after a pull, or
@@ -3418,24 +3686,36 @@ function rcMergeIntoPatient(pid, rec){
        test discards a real key and lets every branch below overwrite it. Same trap as the wid-0 case
        already guarded in _rcNumberedSafe. */
     const cn=Number(cw&&cw.num)||0;
-    if(cn){ const _R=wreg();
-      const ownerKey=Object.keys(_R.byId||{}).find(k=>Number(_R.byId[k]&&_R.byId[k].num)===cn);
+    /* WHOEVER ALREADY HOLDS THIS ID IS THE WOUND. Was "whoever already holds this NUMBER"; the id says
+       the same thing and keeps saying it once numbers are gone. Settled above, before any guess ran. */
+    if(ownById[ci]!==undefined) wid=ownById[ci];
+    if(wid===undefined && cn){ const _R=wreg();
+      const ownerKey=Object.keys(_R.byId||{}).find(k=>!_rcCardWid(k) && Number(_R.byId[k]&&_R.byId[k].num)===cn);
       /* Object.keys gives STRINGS while the note's wid list may hold NUMBERS. Hand back the entry that
-         is already in the list, or "0" and 0 end up in __wc_1 as two entries for one wound. */
+         is already in the list, or "0" and 0 end up in __wc_1 as two entries for one wound.
+         LEGACY KEYS ONLY: a card-shaped key is claimed by id above or not at all — matching one by
+         number is how a reopened site was charted onto the wound it replaced. */
       if(ownerKey!=null){ let ex; wids.forEach(w=>{ if(String(w)===ownerKey) ex=w; }); wid=(ex!==undefined)?ex:ownerKey; } }
-    if(wid===undefined && m && m.priorWid!=null && m.confident) wid=m.priorWid;        // fill an existing wound's blanks
+    /* THE REOPEN GUARD. rcMatchWounds scores LOCATION, and with a closed vocabulary a wound reopened
+       at a site produces a byte-identical string to the healed one it replaced — so it matched
+       CONFIDENTLY, on the silent path, with no dialog, and the new wound inherited the closed one's
+       baseline. A candidate that carries its own card id is identified by that id or not at all; the
+       matcher may still claim a LEGACY key, which is the migration path it exists for. */
+    if(wid===undefined && m && m.priorWid!=null && m.confident && !_rcCardWid(m.priorWid)) wid=m.priorWid;
     if(wid===undefined && shells.length) wid=shells.shift();                           // claim an empty shell
     /* NEVER HAND BACK A KEY THIS PULL HAS ALREADY GIVEN AWAY. _rcWidFor is derived from the card's
        number, so if an empty shell above happened to be that same key, two card wounds landed on one
        key and one of them disappeared from the note entirely. The card still wins the NUMBER below —
        only the key falls back to a fresh one. */
-    if(wid===undefined){ const want=(cn && _rcWidFor(cw))||null;
-      wid=(want!=null && wids.indexOf(want)<0) ? want : mintWid(); }                    // genuinely new -> append
+    // Same gate as rcApplyMapping's: the card's id does not depend on the card sending a number.
+    if(wid===undefined){ const want=_rcWidFor(cw)||null;
+      wid=(want!=null && wids.indexOf(want)<0 && !reserved[String(want)]) ? want : mintWid(); }   // genuinely new -> append
+    reserved[String(wid)]=1;                            // nothing later in this pull may take it too
     if(wids.indexOf(wid)<0) wids.push(wid);
     if(cn) woundNumFromCard(wid, cn); else woundNum(wid);
     _rcWriteWound(S, wid, cw, {onlyEmpty:true, recDate});
     const o=String(cw.orders||'').trim();
-    if(o) ordPairs.push({wid, line:'Wound '+woundNum(wid)+(String(cw.loc||'').trim()?' ('+String(cw.loc).trim()+')':'')+': '+o});
+    if(o) ordPairs.push({wid, o});
   });
   /* A WOUND THE CARD NO LONGER HAS. This path is add-only by construction: wids starts from the note's
      existing list and only ever grows, so a wound removed at the bedside kept rendering, kept its
@@ -3448,16 +3728,18 @@ function rcMergeIntoPatient(pid, rec){
      message are character-identical, which is the worse half: it devalues the one case it exists for. */
   { const gone=olderThanNote ? [] : wids.filter(w=>_rcCardWid(w) && !(cardWounds||[]).some(cw=>_rcWidFor(cw)===w));
     if(gone.length){ try{
-      const msg='the round card no longer has wound '+gone.map(w=>woundNum(w)).join(', ')+
+      const msg='the round card no longer has '+gone.map(w=>_wLabel(w)).join(', ')+
                 ' — it is still in this note; remove it here if the bedside removal was intended';
       const _p=activePt(); if(_p) (_p.numWarnings=_p.numWarnings||[]).push(msg);
       if(typeof console!=='undefined'&&console.warn) console.warn('wound merge: '+msg);
-      if(typeof toast==='function') toast('Card dropped wound '+gone.map(w=>woundNum(w)).join(', ')+' — still in your note');
+      if(typeof toast==='function') toast('Card dropped '+gone.map(w=>_wLabel(w)).join(', ')+' — still in your note');
     }catch(e){} } }
-  /* NUMBER ORDER, like both sibling paths (rcApplyByCardNum and rcApplyMapping each sort, with the
+  /* BIRTH ORDER, like both sibling paths (rcApplyByCardNum and rcApplyMapping each sort, with the
      comment explaining why). This one appended, so a wound the merge added printed after the wounds
-     already in the note whatever its number — the note could read Wound 2, Wound 3, Wound 1. */
-  wids.sort((a,b)=>woundNum(a)-woundNum(b));
+     already in the note however old it was — a six-week-old wound could print below this morning's. */
+  wids.sort((a,b)=>_wOrderCmp(a,b));
+  // Named once the list is complete — see _wNameInNote.
+  ordPairs.forEach(x=>{ if(x.line===undefined) x.line=_wNameInNote(x.wid, wids, S)+': '+x.o; });
   S['__wc_1']=wids;
   // A&P sync, CARD-OWNED-LINE aware (same __rcw contract as the wound fields): the exact line the card
   // wrote per wound is remembered; while it still sits in the A&P untouched, a card edit REPLACES it in
@@ -4207,7 +4489,7 @@ function renderLines(text, container, keyPrefix, opts){
       wrap.innerHTML=''; const ws=wlist(), n=ws.length;
       ws.forEach(w=>{ const st=read(w);
         const row=document.createElement('div'); row.style.cssText='display:flex;flex-wrap:wrap;gap:6px;align-items:center';
-        if(n>1){ const lbl=document.createElement('span'); lbl.textContent='Wound '+woundNum(w.id)+':'; lbl.style.cssText='font-size:11.5px;color:var(--muted);min-width:62px'; row.appendChild(lbl); }
+        if(n>1){ const lbl=document.createElement('span'); lbl.textContent=_wTitleLine(w.id); lbl.style.cssText='font-size:11.5px;color:var(--muted);min-width:62px'; row.appendChild(lbl); }
         OPTS.forEach(o=>{ const lbl=document.createElement('label'); lbl.style.cssText='display:inline-flex;align-items:center;gap:5px;font-size:13px;color:var(--ink)';
           const cb=document.createElement('input'); cb.type='checkbox'; cb.style.width='auto'; cb.checked=st.sel.includes(o);
           cb.onchange=()=>{ const s=read(w); const x=s.sel.indexOf(o); if(cb.checked){ if(x<0)s.sel.push(o);} else if(x>=0)s.sel.splice(x,1); write(w,s); resolveAll(); };
@@ -4225,8 +4507,8 @@ function renderLines(text, container, keyPrefix, opts){
       // Only emit a "Wound N:" line for wounds that actually have a dressing. A wound with none used to
       // paste a dangling "Wound N:" into the Plan (that label is exempt from the empty-line stripper so
       // multi-wound titles survive, so it wouldn't get cleaned) — omit it here instead.
-      return ws.map((w,i)=>({num:woundNum(w.id), p:parts[i]})).filter(x=>x.p)
-               .map(x=>'\nWound '+x.num+': '+x.p).join('');
+      return ws.map((w,i)=>({name:_wLabel(w.id), p:parts[i]})).filter(x=>x.p)
+               .map(x=>'\n'+x.name+': '+x.p).join('');
     });
     return wrap;
   }
@@ -4636,7 +4918,7 @@ function buildSection(name,idx,text){
         const dk=pref+':__done';
         const card=document.createElement('div'); card.className='wound-card';
         const head=document.createElement('div'); head.className='wound-head';
-        const title=document.createElement('span'); title.className='wound-title'; title.textContent='Wound '+woundNum(w.id);
+        const title=document.createElement('span'); title.className='wound-title'; title.textContent=_wLabel(w.id);
         head.appendChild(title);
         // A CLEAR yes/no QUESTION, not a skippable checkbox (Scott 2026-07-20: the greyed toggle "looks
         // very easy to skip over" — and a performed procedure silently dropping is a billing miss). Until
@@ -4679,7 +4961,7 @@ function buildSection(name,idx,text){
       const parts=[];
       blocks.forEach(b=>{ if(!b.on()) return; const t=raw?b.resolve():stripStars(dropUnfilledSentences(b.resolve()));
         if(!raw && !t.trim()) return;
-        parts.push(multi ? ('Wound '+woundNum(b.wid)+':\n'+t) : t); });
+        parts.push(multi ? (_wTitleLine(b.wid)+'\n'+t) : t); });
       return parts.join('\n\n');
     };
     sectionResolvers.push({name,
@@ -4755,7 +5037,7 @@ function buildSection(name,idx,text){
     // releaseWoundNum/compactWoundNums (uncommitted wounds close gaps; committed numbers never move) —
     // this just repaints whatever the registry says.
     function paintWoundHeads(){
-      wounds.forEach(w=> w.title.textContent='Wound '+woundNum(w.id));
+      wounds.forEach(w=> w.title.textContent=_wLabel(w.id));
       woundsWrap.querySelectorAll('.wound-rm').forEach(b=> b.style.display = wounds.length>1?'inline-block':'none');
     }
     function saveWounds(){ STATE['__wc_'+idx]=wounds.map(w=>w.id); persist(); }
@@ -4764,7 +5046,7 @@ function buildSection(name,idx,text){
       woundNum(id);   // assign the permanent number now, so it exists before anything paints or resolves
       const card=document.createElement('div'); card.className='wound-card';
       const head=document.createElement('div'); head.className='wound-head';
-      const title=document.createElement('span'); title.className='wound-title'; title.textContent='Wound';
+      const title=document.createElement('span'); title.className='wound-title'; title.textContent=W_NO_NAME;
       const rm=document.createElement('button'); rm.className='wound-rm'; rm.textContent='Remove';
       head.appendChild(title); head.appendChild(rm);
       const inner=document.createElement('div'); inner.className='wound-body';
@@ -4823,7 +5105,9 @@ function buildSection(name,idx,text){
       // "Per-wound findings below." marker line, and cleanForCopy blanks that whole marker line — a space
       // here glued the wound's first line (Location) onto the marker, so the location was silently wiped
       // from every single-wound paste. A newline keeps the marker on its own line so only it is blanked.
-      const tail = wt.length<=1 ? '\n'+(wt[0]||'') : '\n\n'+wt.map((t,i)=>'Wound '+woundNum(wounds[i].id)+':\n'+t).join('\n\n');
+      // THE WOUND'S NAME IS ITS LOCATION now (numbering retired). _wTitleLine is shared with
+      // cleanForCopy, which must recognise this exact line or it deletes it as an empty "Label:".
+      const tail = wt.length<=1 ? '\n'+(wt[0]||'') : '\n\n'+wt.map((t,i)=>_wTitleLine(wounds[i].id)+'\n'+t).join('\n\n');
       return pre.resolve()+tail;
     };
     // resolve() = what COPIES (stars stripped) — unchanged. resolveRaw() = display only: keeps the
@@ -5051,10 +5335,15 @@ function cleanForCopy(text, freeSet){
     const t=l.trim();
     if(!t) return '';
     if(isHeaderLine(t)) return l;                                                     // group header — pruned in pass 2 if orphaned
-    // "Wound 1:" / "Wound 2:" are the per-wound SEPARATORS on a multi-wound note, not empty labels.
-    // Without this they hit the /:$/ rule below and get eaten — every wound's findings then run together
-    // in PCC with nothing saying which measurements belong to which wound. Keep them. (2026-07-16)
-    if(/^Wound\s+\d+:$/.test(t)) return l;
+    /* The per-wound SEPARATORS on a multi-wound note are not empty labels. Without this they hit the
+       /:$/ rule below and get eaten — every wound's findings then run together in PCC with nothing
+       saying which measurements belong to which wound. Keep them. (2026-07-16)
+       ⚠ THIS USED TO BE /^Wound\s+\d+:$/, AND THAT WAS A COINCIDENCE, NOT A RULE. The moment the
+       heading became the wound's LOCATION (2026-07-31, numbering retired) that regex stopped matching,
+       and every wound's measurements would have pasted into ONE undivided block — invisibly, because
+       the preview renders resolveRaw and never runs this function. _isWoundTitleLine asks the wound
+       registry what the titles ARE, so the writer and the cleaner cannot disagree. */
+    if(_isWoundTitleLine(t)) return l;
     const noTail=t.replace(/[.\s]+$/,'');
     if(/:$/.test(noTail)) return '';                                                  // empty "Label:" (with or without a trailing period)
     // Empty measurement/units line. cm³ added for the new "Volume (auto)" field — `cm²?` matched "cm"
@@ -5069,14 +5358,14 @@ function cleanForCopy(text, freeSet){
     return l;
   });
   // pass 2: drop orphan group headers (none of their OWN fields survived). A group header owns only
-  // the lines up to the next BOUNDARY — the next group header, a "Wound N:" title, or the per-wound
+  // the lines up to the next BOUNDARY — the next group header, a wound title, or the per-wound
   // zone (perWoundStart). Per-wound findings must NOT count as a systemic group's content, or an
   // all-empty "Vascular:" / "Extremities:" would wrongly survive just because a wound follows it.
   const boundaryIdx = perWoundStart>=0 ? perWoundStart : lines.length;
   for(let i=0;i<lines.length;i++){
     if(lines[i].trim() && isHeaderLine(lines[i].trim())){
       let hasContent=false;
-      for(let j=i+1;j<lines.length;j++){ if(j>=boundaryIdx) break; const tj=lines[j].trim(); if(!tj) continue; if(isHeaderLine(tj)||/^Wound\s+\d+:$/.test(tj)) break; hasContent=true; break; }
+      for(let j=i+1;j<lines.length;j++){ if(j>=boundaryIdx) break; const tj=lines[j].trim(); if(!tj) continue; if(isHeaderLine(tj)||_isWoundTitleLine(tj)) break; hasContent=true; break; }
       if(!hasContent) lines[i]='';
     }
   }
