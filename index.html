@@ -810,7 +810,16 @@ function woundMeta(wid, p){ p=p||activePt(); const R=wreg(p); woundNum(wid,p); r
    The wid is derived FROM the number, so a prior visit's wound and the card wound continuing it land on
    the same key by construction — no matching, no confidence, no reconcile screen. A committed number is
    never overwritten: the chart wins over a card that disagrees. */
-function _rcWidFor(w){ const n=Number(w&&w.num)||0; return n?('c'+n):null; }
+/* THE CARD NOW CARRIES THE ID RATHER THAN THIS DERIVING IT (Scott 2026-07-31, wound numbering retired).
+   `w.wid` is minted once on the card and carried through every carry-forward, so it says "which wound"
+   without a number existing at all. Deriving 'c'+num stays as the FALLBACK for records written before
+   the card carried it — and the two agree by construction, because the card backfills a legacy wound's
+   wid to exactly 'c'+num. So this returns the same value it always did for every wound that exists
+   today, and keeps returning the right one for wounds created after numbering is gone. */
+function _rcWidFor(w){
+  const id=String((w&&w.wid)||'').trim(); if(id) return id;
+  const n=Number(w&&w.num)||0; return n?('c'+n):null;
+}
 /* Record a card-over-chart correction. Kept on the patient so the UI can show it and a test can assert
    it — a silent correction is indistinguishable from a bug, which is the lesson of the last seven. */
 function _rcNumOverride(p, wid, was, now){
