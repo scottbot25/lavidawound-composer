@@ -669,6 +669,15 @@ function _wBase(w){ return String((w&&w.loc)||'').trim() || W_NO_NAME; }
    w.loc still holds the plain site, so identity, matching and the vocabulary are untouched.
    The list argument is optional — every renderer already walks the patient's wound array (woundHTML
    gets it as map's third argument), and a caller without one simply gets the plain name. */
+/* THE HEADING FORM. Scott, 2026-07-31: "i think we should still see the word Wound". A bare place name
+   reads as a stray line rather than the start of a wound block — on the nurse's sheet it sits among
+   other rows, and in the note it sits between systemic findings.
+   ONLY headings get it. wLabel stays bare for prose: "Remove Wound: Right great toe?" and "Wound: Right
+   heel is recorded as healed" both read badly, and so would an A&P full of doubled colons.
+   The unnamed case shortens rather than nesting — "Wound: (site not entered)", never
+   "Wound: a wound with no location yet". */
+const W_UNNAMED_HEAD='(site not entered)';
+function wHead(w, list){ const n=wLabel(w, list); return 'Wound: '+(n===W_NO_NAME ? W_UNNAMED_HEAD : n); }
 function wLabel(w, list){
   const base=_wBase(w);
   if(!Array.isArray(list)) return base;
@@ -1527,7 +1536,7 @@ function woundHTML(w,i,list){
       + '“+ Add another wound”, and pick the same place again. The note keeps them apart.</div>'
     : '';
   return '<div class="card">'
-    + '<div class="wound-head"><b>'+esc(wLabel(w,list))+'</b>'
+    + '<div class="wound-head"><b>'+esc(wHead(w,list))+'</b>'
     + (isHealedWound(w)?'<span class="muted" style="font-size:11px;margin-left:8px">healed</span>':'')
     + (pr?'<span class="muted" style="font-size:11px;margin-left:8px">carried from last visit</span>':'')
     + '<button class="tiny no-print" onclick="delWound('+i+')">Remove</button></div>'
@@ -1757,7 +1766,7 @@ function sheetHTML(list, roundOverride){
     p.wounds.forEach((w,i)=>{
       const odor=disp(w,'odor'), status=disp(w,'status');
       const stCls = status ? (String(status).toLowerCase().indexOf('improv')>=0?'b-imp':(String(status).toLowerCase().indexOf('wors')>=0?'b-wor':'b-stb')) : '';
-      b += '<div class="w'+(i===0?' w-first':'')+'"><div class="w-title"><span class="loc">'+esc(wLabel(w,p.wounds))+'</span></div>'
+      b += '<div class="w'+(i===0?' w-first':'')+'"><div class="w-title"><span class="loc">'+esc(wHead(w,p.wounds))+'</span></div>'
          + '<table>'
          + '<tr><td class="k">Type</td><td class="val">'+esc(v(disp(w,'type')))
          +   (isPressure(w) ? ' &nbsp;·&nbsp; <b>'+esc(v(disp(w,'stage')))+'</b>' : '')+'</td></tr>'
