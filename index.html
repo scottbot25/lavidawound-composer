@@ -383,7 +383,7 @@
    the identical value and we pass ours into its URL, so the two can tell whether they shipped as a
    pair. See build-stamp.js for why, and why it cannot be a number someone remembers to raise.
    Declared here, on the first line of the first script, so every later block can see it. */
-const BUILD = '2026-08-02.093814c';
+const BUILD = '2026-08-02.4f03c4e';
 /* SANDBOX MODE (?sandbox=1, LOCALHOST ONLY — the hosted site ignores it): points uploads at the
    ToolSandbox site so end-to-end tests (incl. the Round Card overlay, which inherits it) never touch
    the real vault. Belt = sitePath swap (done where VAULT_CFG is declared); suspenders = _gfetch
@@ -2895,8 +2895,30 @@ let _rcRecs=[];
    re-downloaded the building's entire history several times a minute. Memory only (never localStorage:
    these records carry patient data), and capped so a long day can't grow it without bound. */
 const _rcDocCache=new Map();
-const RC_DOC_CACHE_MAX=600;
-function _rcCacheGet(k){ return _rcDocCache.get(k); }
+/* SIZED FOR THE BUILDINGS ONE PROVIDER WORKS, NOT FOR THE NETWORK.
+   A 60-day window is roughly 129 records per building (about 15 patients, rounded weekly), so this
+   covers ten buildings — far past the two or three anyone actually rounds.
+   It was 600, and that thrashes at FIVE buildings: the pull walks EVERY facility folder, so one pull
+   inserts 129 × F records, and at F=5 that is 645 inserts against a 600-slot cache. The pull evicted
+   what it had just inserted, so the next pull — 45 seconds later on a tab refocus — started completely
+   cold. The cache written to stop "the pull getting slower every week" stopped working one building
+   past where the practice actually was. */
+const RC_DOC_CACHE_MAX=1500;
+/* LRU, NOT FIFO — and this matters more than the cap does.
+   A Map iterates in insertion order, and eviction takes the first key, so the old version threw out the
+   OLDEST-INSERTED entry regardless of whether it was still being used every single pull. Because the
+   pull walks every building, the provider's own records are a small minority of what passes through
+   here at scale — under FIFO they were evicted by other buildings' records they have nothing to do
+   with. Re-inserting on read moves the entry to the newest end, so eviction takes the genuinely
+   coldest key and a provider's own buildings stay hot however many others stream past.
+   The contract is unchanged: undefined means MISS. Only a successful parse is ever stored (see the note
+   at the read site), so `undefined` can never be a cached value and a failure still retries. */
+function _rcCacheGet(k){
+  if(!_rcDocCache.has(k)) return undefined;
+  const v=_rcDocCache.get(k);
+  _rcDocCache.delete(k); _rcDocCache.set(k,v);
+  return v;
+}
 function _rcCachePut(k,v){
   if(_rcDocCache.size>=RC_DOC_CACHE_MAX){ const first=_rcDocCache.keys().next(); if(!first.done) _rcDocCache.delete(first.value); }
   _rcDocCache.set(k,v);
