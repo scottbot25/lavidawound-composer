@@ -265,7 +265,7 @@
    it is a hash of BOTH shipped files, so editing either one makes it provably stale and the sweep says
    so. The composer carries the identical value and passes its own into our URL (?b=), which is how the
    two can tell whether they shipped as a pair. See build-stamp.js. */
-const BUILD = '2026-08-02.d219175';
+const BUILD = '2026-08-02.23f7e58';
 /* A top-level `const` is NOT a property of window — only `var` and function declarations are. So the
    composer, reading across the frame, gets `undefined` for our build no matter what we declared here,
    and would conclude on EVERY open that this card is too old to have one. Found by opening the overlay
@@ -281,6 +281,10 @@ window.BUILD = BUILD;
 
    PHI discipline (same as the Note Composer):
    - Note-authoring makes ZERO network calls. Everything below is generated in the browser.
+   - ONE exception, added 2026-08-02 and stated here so this list stays true: a GET for `build.json`
+     on the host that already served this page, to notice we are running an out-of-date copy. It sends
+     no query data and no body, and the answer is a version string. No patient data, no new
+     destination, and it fails silently. See _checkBuildFresh.
    - The ONE cloud action is "Save to ClinicalVault": Microsoft-only egress
      (login.microsoftonline.com + graph.microsoft.com) into the practice's own
      BAA-covered SharePoint tenant, with the provider's own Entra sign-in. It files
@@ -2469,6 +2473,49 @@ function _rcCheckBuild(search, framed, myBuild){
   try{ if(window.parent && window.parent!==window) window.parent.postMessage({type:'rc-build', verdict:v, host:hostB, card:myBuild}, location.origin); }catch(e){}
   return v;
 }
+/* ============ AM I CURRENT? — the other half, and the likelier one ==============================
+   The stamp above answers "did these two ship together". It cannot answer "are we BOTH old", because
+   two stale tools carry the same stale stamp and agree perfectly. So we ask the site: build.json is
+   ~30 characters and is written by `node sweep.js --stamp`.
+
+   ONLY WHEN NOT FRAMED — the mirror of the rule above. Framed, the composer around us runs this same
+   check for the whole page, and a second banner about it would just be noise. Standalone, nothing else
+   is watching, and a stale card writes records the composer reads later. Between the two rules every
+   mode is covered exactly once.
+
+   FAILS SILENT-OPEN, deliberately. Any error at all — offline, facility wifi, a 404 from a deploy that
+   predates build.json, junk JSON — returns 'unknown' and NOTHING is shown. A provider at a bedside
+   must never be told they are out of date because the building's wifi dropped. `!r.ok` is checked
+   because GitHub Pages answers a missing file with an HTML 404 page, which is neither JSON nor a build.
+
+   PHI: this sends nothing. A GET to the same host that already served this page, no query data, no
+   body, and the answer is a version string. It is the only non-Microsoft call either tool makes. */
+function _buildFreshness(mine, served){
+  const m=String(mine==null?'':mine), s=String(served==null?'':served);
+  if(!m || !s) return 'unknown';
+  return m===s ? 'ok' : 'stale';
+}
+async function _checkBuildFresh(){
+  if(window.self!==window.top) return 'framed';
+  let served='';
+  try{
+    const r=await fetch('build.json?cb='+Date.now(), {cache:'no-store'});
+    if(!r.ok) return 'unknown';
+    const j=await r.json();
+    served=(j && j.build) || '';
+  }catch(e){ return 'unknown'; }
+  const v=_buildFreshness(BUILD, served);
+  if(v==='stale'){
+    const el=document.getElementById('rcBuildBanner');
+    if(el){
+      el.innerHTML='⚠ There is a newer version of this Round Card. You are on '+esc(BUILD)+', the current one is '+esc(served)+'.'
+        +' <button onclick="rcBuildUpdate()" style="margin-left:4px;background:#fff;color:#7a2e12;border:none;'
+        +'border-radius:7px;padding:5px 10px;font:inherit;font-size:12px;font-weight:650;cursor:pointer">Get the current version</button>';
+      el.style.display='block';
+    }
+  }
+  return v;
+}
 /* NOT called "Reload". The composer already has a "Reload patients from the card" button that means
    something completely different, and two buttons saying Reload in one workflow is how the wrong one
    gets pressed. A new query value is a new cache key at the browser AND at the CDN edge, which is the
@@ -3062,6 +3109,7 @@ if(window.self !== window.top){
 /* AFTER the slimming above, so the banner is painted into the layout it will actually live in, and
    BEFORE the vault restore below, so a mismatch is on screen before any network work starts. */
 _rcCheckBuild(location.search, window.self!==window.top, BUILD);
+_checkBuildFresh();   // fire and forget; no-op when framed, silent on any error
 
 /* ---------- RESTORE TODAY'S ROUND FROM CLINICALVAULT ON OPEN (Scott 2026-07-21) ----------
    "I exited the browser and came back and my round card was gone." The screen copy is deliberately
