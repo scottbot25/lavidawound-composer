@@ -265,7 +265,7 @@
    it is a hash of BOTH shipped files, so editing either one makes it provably stale and the sweep says
    so. The composer carries the identical value and passes its own into our URL (?b=), which is how the
    two can tell whether they shipped as a pair. See build-stamp.js. */
-const BUILD = '2026-08-02.23f7e58';
+const BUILD = '2026-08-02.093814c';
 /* A top-level `const` is NOT a property of window — only `var` and function declarations are. So the
    composer, reading across the frame, gets `undefined` for our build no matter what we declared here,
    and would conclude on EVERY open that this card is too old to have one. Found by opening the overlay
@@ -2183,6 +2183,32 @@ async function _vaultUpload(token,driveId,segs,filename,blob,ctype){
    404 is the one status that really does mean nothing is there: the folder has never been
    created, so nothing was ever uploaded for it. Everything else throws, tagged, so a caller can
    tell the difference and say "couldn't check" instead of inventing an answer. */
+/* GRAPH PAGES, AND NOTHING FOLLOWED IT — a WRONG answer, not a slow one.
+   Graph caps a listing at $top and hands back an @odata.nextLink for the rest, so reading `value` once
+   returns the FIRST PAGE as if it were the whole folder. No error, no status, nothing to notice.
+   RoundCards/<facility>/ is FLAT and grows by one file per patient per round, so a busy building
+   crosses the cap on its own — and then the round picker stops seeing rounds, restore-on-open rebuilds
+   a partial round, and a follow-up finds no prior visit. Every one of those looks like "the tool
+   forgot", which is the most alarming thing this tool can say to a provider.
+   Returns {items, complete}. `complete` is false when a page failed or the page cap was hit, and a
+   caller MUST NOT present an incomplete list as the whole set — a short list that looks complete is
+   the exact defect being removed here.
+   The page cap is a runaway guard, not a data limit: 25 pages of 200 is 5,000 records, far past any
+   real building, and it stops a bad nextLink loop spinning on a phone at the bedside. */
+const VAULT_MAX_PAGES=25;
+async function _vaultDrain(first, token){
+  const items=(first && first.value) ? first.value.slice() : [];
+  let next=(first && first['@odata.nextLink'])||'', pages=1;
+  while(next){
+    if(pages>=VAULT_MAX_PAGES) return { items, complete:false };
+    let r; try{ r=await _gfetch(next, token); }catch(e){ return { items, complete:false }; }
+    if(!r.ok) return { items, complete:false };
+    const p=await r.json();
+    if(p && p.value) p.value.forEach(v=>items.push(v));
+    next=(p && p['@odata.nextLink'])||''; pages++;
+  }
+  return { items, complete:true };
+}
 async function _vaultList(token,driveId,rel){
   const r=await _gfetch('https://graph.microsoft.com/v1.0/drives/'+driveId+'/root:/'+_encPath(rel)+':/children?$top=200',token);
   if(r.status===404) return [];                    // never created = genuinely nothing there
@@ -2190,7 +2216,15 @@ async function _vaultList(token,driveId,rel){
     const e=new Error('Couldn’t read '+rel+' (HTTP '+r.status+')');
     e.vaultUnreadable=true; e.status=r.status; throw e;
   }
-  return (await r.json()).value||[];
+  const page=await _vaultDrain(await r.json(), token);
+  /* Tagged the same way as an HTTP failure, and for the same reason the comment above gives: this
+     function's contract is that [] means "genuinely nothing there". Handing back half a folder would
+     let a caller invent an answer, which is worse than saying it could not check. */
+  if(!page.complete){
+    const e=new Error('Couldn’t read all of '+rel+' — the listing was cut short.');
+    e.vaultUnreadable=true; e.partial=true; throw e;
+  }
+  return page.items;
 }
 async function _vaultReadJson(token,driveId,rel){
   const m=await _gfetch('https://graph.microsoft.com/v1.0/drives/'+driveId+'/root:/'+_encPath(rel),token);

@@ -383,7 +383,7 @@
    the identical value and we pass ours into its URL, so the two can tell whether they shipped as a
    pair. See build-stamp.js for why, and why it cannot be a number someone remembers to raise.
    Declared here, on the first line of the first script, so every later block can see it. */
-const BUILD = '2026-08-02.23f7e58';
+const BUILD = '2026-08-02.093814c';
 /* SANDBOX MODE (?sandbox=1, LOCALHOST ONLY — the hosted site ignores it): points uploads at the
    ToolSandbox site so end-to-end tests (incl. the Round Card overlay, which inherits it) never touch
    the real vault. Belt = sitePath swap (done where VAULT_CFG is declared); suspenders = _gfetch
@@ -2346,6 +2346,32 @@ async function _vaultDriveId(token,siteId){
   if(!r.ok) throw new Error('Couldn’t open the document library (HTTP '+r.status+').');
   return (await r.json()).id;
 }
+/* GRAPH PAGES, AND NOTHING FOLLOWED IT — a WRONG answer, not a slow one.
+   Graph caps a listing at $top and hands back an @odata.nextLink for the rest, so reading `value` once
+   returns the FIRST PAGE as if it were the whole folder. No error, no status, nothing to notice.
+   RoundCards/<facility>/ is FLAT and grows by one file per patient per round, so a busy building
+   crosses the cap on its own — and then the pull stops seeing records and a follow-up finds no prior
+   visit. That reads to a provider as "the card isn't autofilling", which is exactly how the $select
+   trap below was reported.
+   Returns {items, complete}. `complete` is false when a page failed or the page cap was hit, and a
+   caller MUST NOT present an incomplete list as the whole set — a short list that looks complete is
+   the exact defect being removed here.
+   The page cap is a runaway guard, not a data limit: 25 pages of 200 is 5,000 records, far past any
+   real building, and it stops a bad nextLink loop spinning on a phone at the bedside. */
+const VAULT_MAX_PAGES=25;
+async function _vaultDrain(first, token){
+  const items=(first && first.value) ? first.value.slice() : [];
+  let next=(first && first['@odata.nextLink'])||'', pages=1;
+  while(next){
+    if(pages>=VAULT_MAX_PAGES) return { items, complete:false };
+    let r; try{ r=await _gfetch(next, token); }catch(e){ return { items, complete:false }; }
+    if(!r.ok) return { items, complete:false };
+    const p=await r.json();
+    if(p && p.value) p.value.forEach(v=>items.push(v));
+    next=(p && p['@odata.nextLink'])||''; pages++;
+  }
+  return { items, complete:true };
+}
 // Folders are created once and never deleted (purge removes FILES, not the Drafts/<user> folder), so
 // re-checking them on every autosave was 2 wasted sequential round-trips per save on top of the upload
 // — a big chunk of the "syncing takes forever." Remember what we've already ensured this session and
@@ -2512,7 +2538,10 @@ async function listDrafts(){
   const ctx=await _draftContext(); if(!ctx) return [];
   const url='https://graph.microsoft.com/v1.0/drives/'+ctx.driveId+'/root:/'+_encPath(_draftSegs().join('/'))+':/children?$select=name,lastModifiedDateTime,size&$top=90';
   const r=await _gfetch(url, ctx.token); if(!r.ok) return [];
-  const j=await r.json(); return (j.value||[]).filter(f=>/\.json$/i.test(f.name))
+  /* Paged. Graph is under no obligation to return the newest 90 — the sort below is ours, applied to
+     whatever came back, so a truncated page could hide the most recent draft behind older ones. */
+  const page=await _vaultDrain(await r.json(), ctx.token);
+  return page.items.filter(f=>/\.json$/i.test(f.name))
     .sort((a,b)=>(b.lastModifiedDateTime||'').localeCompare(a.lastModifiedDateTime||''));
 }
 async function loadDraft(fileName){
@@ -2889,7 +2918,12 @@ async function rcList(facility){
   const r=await _gfetch(url, ctx.token);
   if(r.status===404) return [];                                   // no records for this building yet
   if(!r.ok) throw new Error('Couldn’t read Round Cards (HTTP '+r.status+').');
-  const items=(await r.json()).value||[];
+  /* Thrown, not truncated. This folder is FLAT and unbounded, so it is the one that actually crosses
+     the cap — and half a building's records handed back as if they were all of them is how a patient
+     silently stops being pulled into the note. Failing loudly is the whole point. */
+  const _page=await _vaultDrain(await r.json(), ctx.token);
+  if(!_page.complete) throw new Error('Couldn’t read all of this building’s Round Cards — the listing was cut short.');
+  const items=_page.items;
   // Skip stale files BEFORE downloading them. A record's file cannot pre-date the round it describes,
   // so anything last touched before the listing window can't be inside it — checking the stamp we
   // already have costs nothing, while fetching the file costs a round trip.
@@ -3694,7 +3728,9 @@ async function rcListAllRecent(){
   const rootUrl='https://graph.microsoft.com/v1.0/drives/'+ctx.driveId+'/root:/RoundCards:/children?$top=200';
   let rr; try{ rr=await _gfetch(rootUrl, ctx.token); }catch(e){ return []; }
   if(!rr || !rr.ok) return [];                                  // 404 = no RoundCards folder yet -> nothing to pull
-  const facs=((await rr.json()).value||[]).filter(it=>it.folder).map(it=>it.name);
+  // Buildings, not records — a provider covers two or three, so this cannot realistically page. Drained
+  // anyway, because "it cannot happen here" is how the flat folder below got missed in the first place.
+  const facs=(await _vaultDrain(await rr.json(), ctx.token)).items.filter(it=>it.folder).map(it=>it.name);
   const cutoff=_rcRecentCutoff(); const out=[];
   // A record this workspace has ALREADY pulled always passes — its updates must keep flowing even if
   // the provider stamp drifts (box retyped, name variant); the provider filter gates NEW records only.
