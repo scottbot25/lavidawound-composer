@@ -265,7 +265,7 @@
    it is a hash of BOTH shipped files, so editing either one makes it provably stale and the sweep says
    so. The composer carries the identical value and passes its own into our URL (?b=), which is how the
    two can tell whether they shipped as a pair. See build-stamp.js. */
-const BUILD = '2026-08-02.4f03c4e';
+const BUILD = '2026-08-02.adfaaa7';
 /* A top-level `const` is NOT a property of window — only `var` and function declarations are. So the
    composer, reading across the frame, gets `undefined` for our build no matter what we declared here,
    and would conclude on EVERY open that this card is too old to have one. Found by opening the overlay
@@ -1137,7 +1137,15 @@ function delPt(i,btn){
         if(!token){ why='you’re not signed in'; }
         else{
           const {driveId}=await _vaultCtx(token);
-          ok=await _vaultDelete(token,driveId,'RoundCards/'+fac+'/'+doomedId+'.json');
+          /* BOTH LAYOUTS. The record is written under the round's month now, but a record saved before
+             that change — or under a round with no date — is still in the flat folder. Deleting the
+             wrong one of the two would report success while the record lived on and restore-on-open
+             brought the patient straight back, which is exactly the failure the comment above
+             describes. Try the month path, fall back to the flat one, and only then call it refused. */
+          const monthPath=_rcRecFolder(fac, S.round.date)+'/'+doomedId+'.json';
+          const flatPath='RoundCards/'+fac+'/'+doomedId+'.json';
+          ok=await _vaultDelete(token,driveId,monthPath);
+          if(!ok && monthPath!==flatPath) ok=await _vaultDelete(token,driveId,flatPath);
           if(!ok) why='ClinicalVault refused it';
         }
       }catch(e){ why=(e&&e.message)||'the delete failed'; }
@@ -2226,6 +2234,68 @@ async function _vaultList(token,driveId,rel){
   }
   return page.items;
 }
+/* ============ WHERE A RECORD LIVES =============================================================
+   Records used to go in ONE flat folder per building. That folder is unbounded — one file per patient
+   per round — so every read cost a function of everything ever written for that building rather than
+   of what the provider needed, and at 30+ buildings it stops working (see the vault note 2026-08-02).
+   New records go in a MONTH folder: RoundCards/<facility>/<YYYY-MM>/<id>.json.
+
+   NOTHING IS MIGRATED, and nothing needs to be. Reads look in both places, and retention (~45 days)
+   drains the flat folder on its own, so the old shape disappears without a single file being moved.
+
+   The month comes from the ROUND'S OWN DATE, never from the clock: a round saved after midnight, or
+   re-saved days later, has to land in the month it happened in or a date-windowed read will miss it. */
+function _rcRecFolder(fac, dateISO){
+  const m=/^(\d{4})-(\d{2})/.exec(String(dateISO||''));
+  return 'RoundCards/'+fac+(m ? '/'+m[1]+'-'+m[2] : '');
+}
+/* Every month folder a window could touch, COMPUTED rather than discovered — so a read costs one
+   listing per month in its own window, not a listing per month that has ever existed. */
+function _rcMonthsSince(sinceISO, today){
+  const a=/^(\d{4})-(\d{2})/.exec(String(sinceISO||'')), b=/^(\d{4})-(\d{2})/.exec(String(today||''));
+  if(!a||!b) return [];
+  const out=[]; let y=+a[1], mo=+a[2]; const ey=+b[1], em=+b[2];
+  while(y<ey || (y===ey && mo<=em)){
+    out.push(y+'-'+String(mo).padStart(2,'0'));
+    if(++mo>12){ mo=1; y++; }
+    if(out.length>=36) break;                                   // a nonsense `since` must not spin
+  }
+  return out;
+}
+/* A window in whole days, back from today. Callers pass a DAY count rather than an hour count on
+   purpose: a 36-hour window rounded down can start on the far side of a month boundary, and the month
+   folder it needs would then never be listed. Widening costs one extra listing and cannot lose a record. */
+function _rcDaysBackISO(days){
+  const d=new Date(); d.setDate(d.getDate()-(Number(days)||0));
+  return d.toISOString().slice(0,10);
+}
+/* Lists a building's records across BOTH layouts and tags every entry with its OWN path.
+   THE PATH IS THE POINT. A caller that rebuilds 'RoundCards/<fac>/'+name from the name alone is
+   guessing which layout the file came from, and would guess wrong for every month-foldered record.
+   That is the one way this change could quietly corrupt a read, so the path travels WITH the entry and
+   no caller ever rebuilds it. A missing month folder is a 404, which _vaultList already reports as
+   genuinely nothing there. */
+async function _rcListRecords(token, driveId, fac, sinceISO, untilISO){
+  const base='RoundCards/'+fac;
+  const top=await _vaultList(token,driveId,base);
+  /* With a window, the months are COMPUTED — one listing per month the window touches, and a month
+     folder that does not exist is a 404, which _vaultList already reports as nothing there.
+     Without one (the purge, which must see everything ever written), they are DISCOVERED from the
+     folders the base listing just returned. Discovery is the expensive shape, which is why every
+     provider-facing caller passes a window. */
+  const months=sinceISO
+    ? _rcMonthsSince(sinceISO, untilISO || todayISO())
+    : top.filter(f=>f.folder && /^\d{4}-\d{2}$/.test(f.name||'')).map(f=>f.name);
+  const more=await Promise.all(months.map(m=>
+    _vaultList(token,driveId,base+'/'+m).then(fs=>({rel:base+'/'+m, fs}))));
+  const out=[];
+  [{rel:base, fs:top}].concat(more).forEach(({rel,fs})=>fs.forEach(f=>{
+    if(f.folder) return;                                        // the month folders themselves
+    if(!/\.json$/i.test(f.name||'')) return;
+    out.push(Object.assign({}, f, {path:rel+'/'+f.name}));
+  }));
+  return out;
+}
 async function _vaultReadJson(token,driveId,rel){
   const m=await _gfetch('https://graph.microsoft.com/v1.0/drives/'+driveId+'/root:/'+_encPath(rel),token);
   if(!m.ok) return null; const meta=await m.json(); const dl=meta['@microsoft.graph.downloadUrl'];
@@ -2774,7 +2844,9 @@ async function rcAutoSaveCloud(){
     const {driveId}=await _netTmo(_vaultCtx(token), 15000);
     const fac=cleanSeg(S.round.fac)||'Unfiled';
     const date=/^\d{4}-\d{2}-\d{2}/.test(String(S.round.date||''))?S.round.date.slice(0,10):'undated';
-    const recSegs=['RoundCards',fac];
+    /* Split on the ROUND'S date, not the clock — see _rcRecFolder. An undated round has no month to
+       file under and keeps the flat path, which reads still cover. */
+    const recSegs=_rcRecFolder(fac, date).split('/');
     await _netTmo(_vaultEnsureFolders(token,driveId,recSegs), 15000);
     /* ONE READ FOR THE WHOLE BATCH, like saveVault. The loop below awaits an upload per record, and
        three ordinary actions - removing the last patient, changing the date, changing the facility -
@@ -2878,7 +2950,8 @@ async function saveVault(){
     _sheetOnFile=true; _sheetCheckKey=_sheetKey();     // the sheet now exists for this round
     _paintSheetWarn();
     st('Saving patient records…');
-    const recSegs=['RoundCards',fac];
+    // Same month split as the auto-save above, from the round's own date.
+    const recSegs=_rcRecFolder(fac, date).split('/');
     await _vaultEnsureFolders(token,driveId,recSegs);
     /* Each patient's record is filed under their STABLE id (RoundCards/<fac>/<id>.json), not a
        name-slug — so two genuinely-different same-name patients get separate files, and the composer
@@ -3209,18 +3282,19 @@ async function rcRestoreFromVault(){
     // Now: all facility folders list IN PARALLEL, and every fresh record downloads IN PARALLEL via
     // the downloadUrl the listing already carries (one trip per record, not two).
     const facs=(await _vaultList(token,driveId,'RoundCards')).filter(it=>it.folder).map(it=>it.name);
+    // A 36-hour window, widened to whole days so it cannot fall off the end of a month folder.
+    const since=_rcDaysBackISO(3);
     const listings=await Promise.all(facs.map(fac=>
-      _vaultList(token,driveId,'RoundCards/'+fac).then(files=>({fac,files})).catch(()=>({fac,files:[]}))));
+      _rcListRecords(token,driveId,fac,since).then(files=>({fac,files})).catch(()=>({fac,files:[]}))));
     const fresh=[];
     listings.forEach(({fac,files})=>files.forEach(f=>{
-      if(!/\.json$/i.test(f.name||'')) return;
       const t=Date.parse(f.lastModifiedDateTime||''); if(isNaN(t) || t<cut) return;   // only fresh — the folder accumulates
       fresh.push({fac,f});
     }));
     const recs=await Promise.all(fresh.map(({fac,f})=>{
       const dl=f['@microsoft.graph.downloadUrl'];
       if(dl) return fetch(dl).then(r=>r.ok?r.json():null).catch(()=>null);
-      return _vaultReadJson(token,driveId,'RoundCards/'+fac+'/'+f.name).catch(()=>null);   // fallback if the annotation is absent
+      return _vaultReadJson(token,driveId,f.path).catch(()=>null);   // f.path, never rebuilt — see _rcListRecords
     }));
     /* Keep each record's FOLDER. Two records in one folder are one building, whatever the body says -
        that is the only fact here that cannot drift, and the next step depends on it. */
@@ -3329,11 +3403,12 @@ async function openRecentRounds(){
     const {driveId}=await _vaultCtx(token);
     const cut=Date.now()-RR_LOOKBACK_DAYS*24*3600*1000;
     const facs=(await _vaultList(token,driveId,'RoundCards')).filter(it=>it.folder).map(it=>it.name);
+    // Only the months this picker's own look-back can touch, +1 day so a boundary cannot clip one off.
+    const since=_rcDaysBackISO(RR_LOOKBACK_DAYS+1);
     const listings=await Promise.all(facs.map(fac=>
-      _vaultList(token,driveId,'RoundCards/'+fac).then(files=>({fac,files})).catch(()=>({fac,files:[]}))));
+      _rcListRecords(token,driveId,fac,since).then(files=>({fac,files})).catch(()=>({fac,files:[]}))));
     const fresh=[];
     listings.forEach(({fac,files})=>files.forEach(f=>{
-      if(!/\.json$/i.test(f.name||'')) return;
       const t=Date.parse(f.lastModifiedDateTime||''); if(isNaN(t)||t<cut) return;
       fresh.push({fac,f});
     }));
@@ -3359,7 +3434,7 @@ async function openRecentRounds(){
          retries it. A record that parses but is not roundcard.v1 IS cached: it will never become
          a record, so re-reading it is pure waste. */
       const read = dl ? fetch(dl).then(r=>r.ok?r.json():Promise.reject(new Error('HTTP '+r.status)))
-                      : _vaultReadJson(token,driveId,'RoundCards/'+fac+'/'+f.name);
+                      : _vaultReadJson(token,driveId,f.path);   // f.path, never rebuilt
       return read.then(rec=>{ _rrCachePut(key, rec); return rec; })
                  .catch(()=>{ _rrFailed++; return null; });
     }));
@@ -3469,15 +3544,17 @@ async function purgeScan(){
     const facs=(await _vaultList(token,driveId,'RoundCards')).filter(it=>it.folder).map(it=>it.name);
     const liveKey=_sheetKey();
     for(const fac of facs){
-      const files=(await _vaultList(token,driveId,'RoundCards/'+fac)).filter(f=>/\.json$/i.test(f.name||''));
+      /* No window: the purge is the one caller that must see EVERY record ever written, so it takes the
+         discovery path and lists every month folder the building has. */
+      const files=await _rcListRecords(token,driveId,fac,'');
       const recs=await Promise.all(files.map(f=>{
         const dl=f['@microsoft.graph.downloadUrl'];
         if(dl) return fetch(dl).then(r=>r.ok?r.json():null).catch(()=>null);
-        return _vaultReadJson(token,driveId,'RoundCards/'+fac+'/'+f.name).catch(()=>null);
+        return _vaultReadJson(token,driveId,f.path).catch(()=>null);
       }));
       const sheetByDate={};                             // one Daily Handoffs listing per date, per scan
       for(let i=0;i<files.length;i++){
-        const f=files[i], rec=recs[i], path='RoundCards/'+fac+'/'+f.name;
+        const f=files[i], rec=recs[i], path=f.path;     // the file's OWN path — it may be in a month folder
         if(!rec || rec.schema!=='roundcard.v1'){ out.keep.push({path, why:'not a round-card record — left alone'}); continue; }
         const date=String(rec.date||'').slice(0,10);
         const age=_purgeDaysOld(date);
@@ -3567,13 +3644,12 @@ async function _cfFetchCandidates(facRaw, okProv){
   const today=todayISO();
   const cut=Date.now()-CF_ACTIVE_DAYS*24*3600*1000;
   const activeFrom=(function(){ const d=new Date(); d.setDate(d.getDate()-CF_ACTIVE_DAYS); return d.toISOString().slice(0,10); })();
-  const files=(await _vaultList(token,driveId,'RoundCards/'+cleanSeg(facRaw)))
-    .filter(f=>/\.json$/i.test(f.name||''))
+  const files=(await _rcListRecords(token,driveId,cleanSeg(facRaw),_rcDaysBackISO(CF_ACTIVE_DAYS+1)))
     .filter(f=>{ const t=Date.parse(f.lastModifiedDateTime||''); return !isNaN(t) && t>=cut; });
   const recs=(await Promise.all(files.map(f=>{
     const dl=f['@microsoft.graph.downloadUrl'];
     if(dl) return fetch(dl).then(r=>r.ok?r.json():null).catch(()=>null);
-    return _vaultReadJson(token,driveId,'RoundCards/'+cleanSeg(facRaw)+'/'+f.name).catch(()=>null);
+    return _vaultReadJson(token,driveId,f.path).catch(()=>null);
   }))).filter(Boolean);
   return _cfPickCandidates(recs, okProv, today, activeFrom);
 }
@@ -3854,8 +3930,12 @@ async function rcLoadRoundFor(dateStr, facRaw){
     /* A folder that has never existed really is "no round". Anything ELSE - an expired token, a
        429, a dropped connection - means we could not check, and saying "No round on file" then is
        a lie that reads exactly like a lost round. Say what is true: we could not look. */
+    /* ONE month, not the whole building. This asks for a round on a KNOWN date, and it used to read
+       every record the folder held and then throw away everything with a different date in memory —
+       the one provider-facing path that downloaded the lot. Scoped to that date's own month (plus the
+       flat folder, which reads still cover), it now costs what the answer is worth. */
     let files=null;
-    try{ files=await _vaultList(token, driveId, 'RoundCards/'+fac); }
+    try{ files=await _rcListRecords(token, driveId, fac, date, date); }
     catch(e){
       if(e && e.vaultUnreadable){
         toast('Couldn’t check ClinicalVault for that round just now — anything already saved is still there. Set the date again to retry.');
@@ -3864,11 +3944,11 @@ async function rcLoadRoundFor(dateStr, facRaw){
       _rcNoRoundNotice(date, facR); return 'empty';                 // folder never created = no round
     }
 
-    const cands=(files||[]).filter(f=>/\.json$/i.test(f.name||''));
+    const cands=(files||[]);
     const recs=await Promise.all(cands.map(f=>{
       const dl=f['@microsoft.graph.downloadUrl'];
       if(dl) return fetch(dl).then(r=>r.ok?r.json():null).catch(()=>null);
-      return _vaultReadJson(token, driveId, 'RoundCards/'+fac+'/'+f.name).catch(()=>null);
+      return _vaultReadJson(token, driveId, f.path).catch(()=>null);
     }));
 
     const mine=[];

@@ -383,7 +383,7 @@
    the identical value and we pass ours into its URL, so the two can tell whether they shipped as a
    pair. See build-stamp.js for why, and why it cannot be a number someone remembers to raise.
    Declared here, on the first line of the first script, so every later block can see it. */
-const BUILD = '2026-08-02.4f03c4e';
+const BUILD = '2026-08-02.adfaaa7';
 /* SANDBOX MODE (?sandbox=1, LOCALHOST ONLY — the hosted site ignores it): points uploads at the
    ToolSandbox site so end-to-end tests (incl. the Round Card overlay, which inherits it) never touch
    the real vault. Belt = sitePath swap (done where VAULT_CFG is declared); suspenders = _gfetch
@@ -2923,6 +2923,39 @@ function _rcCachePut(k,v){
   if(_rcDocCache.size>=RC_DOC_CACHE_MAX){ const first=_rcDocCache.keys().next(); if(!first.done) _rcDocCache.delete(first.value); }
   _rcDocCache.set(k,v);
 }
+/* A window in whole days, back from today. Days rather than hours on purpose: an hour-based window
+   rounded down can start on the far side of a month boundary, and that month folder would then never
+   be listed. Widening costs one extra listing and cannot lose a record. */
+function _rcDaysBackISO(days){
+  const d=new Date(); d.setDate(d.getDate()-(Number(days)||0));
+  return d.toISOString().slice(0,10);
+}
+/* Every month folder a window could touch, COMPUTED rather than discovered — so a read costs one
+   listing per month in its own window, not a listing per month that has ever existed. */
+function _rcMonthsSince(sinceISO, today){
+  const a=/^(\d{4})-(\d{2})/.exec(String(sinceISO||'')), b=/^(\d{4})-(\d{2})/.exec(String(today||''));
+  if(!a||!b) return [];
+  const out=[]; let y=+a[1], mo=+a[2]; const ey=+b[1], em=+b[2];
+  while(y<ey || (y===ey && mo<=em)){
+    out.push(y+'-'+String(mo).padStart(2,'0'));
+    if(++mo>12){ mo=1; y++; }
+    if(out.length>=36) break;                                   // a nonsense `since` must not spin
+  }
+  return out;
+}
+/* One folder's children, drained. A month folder that has never been written is a 404, which is
+   genuinely nothing there — but any OTHER failure still throws, and a listing cut short by the page
+   cap still throws, because half a building's records handed back as if they were all of them is how
+   a patient silently stops being pulled into the note. */
+async function _rcListFolder(ctx, rel){
+  const url='https://graph.microsoft.com/v1.0/drives/'+ctx.driveId+'/root:/'+_encPath(rel)+':/children?$top=200';
+  const r=await _gfetch(url, ctx.token);
+  if(r.status===404) return {rel, list:[]};
+  if(!r.ok) throw new Error('Couldn’t read Round Cards (HTTP '+r.status+').');
+  const page=await _vaultDrain(await r.json(), ctx.token);
+  if(!page.complete) throw new Error('Couldn’t read all of this building’s Round Cards — the listing was cut short.');
+  return {rel, list:page.items};
+}
 async function rcList(facility){
   const ctx=await _draftContext(); if(!ctx) throw new Error('Sign in to read Round Cards.');
   const seg=_rcFacSeg(facility);
@@ -2935,17 +2968,20 @@ async function rcList(facility){
      the note simply never filled, which is exactly what a provider would report as "the card isn't
      autofilling". The round card hit this same trap on 2026-07-21 and had its $select removed; this
      copy was missed. */
-  const url='https://graph.microsoft.com/v1.0/drives/'+ctx.driveId+'/root:/'+_encPath(['RoundCards',seg].join('/'))
-    +':/children?$top=200';
-  const r=await _gfetch(url, ctx.token);
-  if(r.status===404) return [];                                   // no records for this building yet
-  if(!r.ok) throw new Error('Couldn’t read Round Cards (HTTP '+r.status+').');
-  /* Thrown, not truncated. This folder is FLAT and unbounded, so it is the one that actually crosses
-     the cap — and half a building's records handed back as if they were all of them is how a patient
-     silently stops being pulled into the note. Failing loudly is the whole point. */
-  const _page=await _vaultDrain(await r.json(), ctx.token);
-  if(!_page.complete) throw new Error('Couldn’t read all of this building’s Round Cards — the listing was cut short.');
-  const items=_page.items;
+  /* BOTH LAYOUTS. Records are written under the round's month now (RoundCards/<fac>/<YYYY-MM>/), and
+     anything written before that change is still in the flat folder. Only the months this pull's own
+     window can touch are asked for, so the cost is a function of the window rather than of everything
+     the building has ever had — and the flat folder empties itself under retention.
+     Every entry carries its OWN path: rebuilding it from the name would guess the wrong layout for
+     half the records. */
+  const base=['RoundCards',seg].join('/');
+  const rels=[base].concat(_rcMonthsSince(_rcDaysBackISO(RC_LIST_DAYS+1), todayISO()).map(m=>base+'/'+m));
+  const per=await Promise.all(rels.map(rel=>_rcListFolder(ctx, rel)));
+  const items=[];
+  per.forEach(({rel,list})=>list.forEach(it=>{
+    if(it.folder) return;
+    items.push(Object.assign({}, it, {path:rel+'/'+it.name}));
+  }));
   // Skip stale files BEFORE downloading them. A record's file cannot pre-date the round it describes,
   // so anything last touched before the listing window can't be inside it — checking the stamp we
   // already have costs nothing, while fetching the file costs a round trip.
@@ -2976,7 +3012,7 @@ async function rcList(facility){
     const read = dl
       ? fetch(dl).then(c=>c.ok?c.json():Promise.reject(new Error('HTTP '+c.status)))
       : _gfetch('https://graph.microsoft.com/v1.0/drives/'+ctx.driveId+'/root:/'
-          +_encPath(['RoundCards',seg,it.name].join('/'))+':/content', ctx.token)
+          +_encPath(it.path)+':/content', ctx.token)   // it.path, never rebuilt — the layout may be either
           .then(c=>c.ok?c.json():Promise.reject(new Error('HTTP '+c.status)));
     return read.then(rec=>{ _rcCachePut(key, rec); return rec; })
                .catch(()=>null);
