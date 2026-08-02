@@ -1176,8 +1176,13 @@ function rcApplyByCardNum(S, priorList, cardWounds, edu, recDate){
   if(String(edu||'').trim()){ W['__ap:edu']='Additional info / education: '+String(edu).trim(); _rcStamp(S,'__ap:edu',recDate); }
   _rcSetAP(S, _rcComposeAP(ordLines, edu));
 }
-// Every card wound carries a number -> identity is known and the matcher is skipped entirely.
-function _rcAllNumbered(cardWounds){ return !!(cardWounds && cardWounds.length && cardWounds.every(w=>Number(w&&w.num)>0)); }
+/* Every card wound carries an ID -> identity is known and the matcher is skipped entirely.
+   ⚠ THIS ASKED FOR A NUMBER until 2026-07-31, and that was the tripwire under the whole retirement:
+   the moment the card stopped minting numbers this would have gone false for every patient, sending
+   EVERY follow-up to the location matcher — which, with a closed vocabulary, scores a reopened site
+   against the wound it replaced at exactly 1 and merges them. _rcWidFor still falls back to 'c'+num,
+   so a legacy record answers this the same way it always did. */
+function _rcAllIdentified(cardWounds){ return !!(cardWounds && cardWounds.length && cardWounds.every(w=>_rcWidFor(w)!=null)); }
 /* A card-derived wid looks like c<number>. A prior visit committed BEFORE the card had wound numbers
    uses NUMERIC wids from mintWid, and the two schemes cannot be mixed: seeding prior wid 0 and then
    laying card wid c1 beside it puts BOTH in the note, so a patient with two wounds gets four.
@@ -1206,24 +1211,21 @@ function _rcWasDeleted(p, wid, num){
   const k=(wid==null?'':String(wid)); if(k && d.some(x=>String(x)===k)) return true;
   const n=Number(num)||0; return !!n && d.some(x=>Number(x)===n);   // legacy tombstones
 }
-/* THE NUMBER A CARD WID CARRIES. For a card-linked wound the key IS the number — c4 is Wound 4 — so
-   identity and number are ONE fact stored ONCE and cannot drift apart. That is the whole repair. */
-function _rcNumOfCardWid(wid){ const m=/^c(\d+)$/.exec(String(wid)); return m?Number(m[1]):0; }
 /* ONE PREDICATE FOR "THIS NUMBER MAY NEVER BE REASSIGNED", used by every site that could move a number.
    Scott, 2026-07-30, after this drifted for the seventh time: "how do we sync these im tired of going
    back and forth on it." It kept coming back because each site had its OWN idea of what was safe to
    renumber — compactWoundNums tested `committed`, releaseWoundNum tested `committedHere`, and neither
    had heard of the card. A card-owned wound is pinned no matter what those flags say. */
 function _rcPinned(k, e){ return !!(e && (e.committed || e.committedHere)) || _rcCardWid(k); }
-/* Can the card's numbers be trusted as identity for this patient?
+/* Can this patient be paired by IDENTITY rather than by guessing at her location text?
    It used to demand every prior wid be card-SHAPED (c<n>), which is a proxy for the real question and a
    bad one: a patient whose history predates numbering — i.e. everyone mid-treatment — failed it forever
    and fell to the location matcher, which is what printed Scott's card 1,2,4 as note 1,2,5.
-   The real question is whether every prior wound CARRIES A NUMBER. If it does, rcApplyByCardNum can
-   reconcile it onto the card wid by number and no duplicate is possible. Note `!=null` rather than a
+   The real question is whether every prior wound can be PAIRED: by its own id, or — for a visit
+   committed before ids existed — by the number the legacy bridge folds on. Note `!=null` rather than a
    truthiness test: a legacy wid can legitimately be the integer 0. */
-function _rcNumberedSafe(cardWounds, priorList){
-  if(!_rcAllNumbered(cardWounds)) return false;
+function _rcIdentifiedSafe(cardWounds, priorList){
+  if(!_rcAllIdentified(cardWounds)) return false;
   return !(priorList||[]).length ||
     (priorList||[]).every(pw=>pw && pw.wid!=null && String(pw.wid)!=='' &&
       (_rcCardWid(pw.wid) || Number(pw.num)>0));
@@ -3199,7 +3201,7 @@ async function rcPrefill(rec){
        construction. Location text stops mattering entirely — which is the whole point, because scoring
        it is what turned a retyped "sacral" into a phantom second wound. The matcher below survives only
        for legacy records written before the card had numbers. */
-    if(_rcNumberedSafe(cardWounds, priorList)){
+    if(_rcIdentifiedSafe(cardWounds, priorList)){
       rcApplyByCardNum(S, priorList, cardWounds, edu, recDate);
     } else {
     const props=rcMatchWounds(cardWounds, priorList);
@@ -3684,7 +3686,7 @@ function rcMergeIntoPatient(pid, rec){
        what stops a second key ever being created for a number the note already has. */
     /* `wid===undefined`, never `!wid`: a legacy wid is the NUMBER 0, which is falsy, so a truthiness
        test discards a real key and lets every branch below overwrite it. Same trap as the wid-0 case
-       already guarded in _rcNumberedSafe. */
+       already guarded in _rcIdentifiedSafe. */
     const cn=Number(cw&&cw.num)||0;
     /* WHOEVER ALREADY HOLDS THIS ID IS THE WOUND. Was "whoever already holds this NUMBER"; the id says
        the same thing and keeps saying it once numbers are gone. Settled above, before any guess ran. */

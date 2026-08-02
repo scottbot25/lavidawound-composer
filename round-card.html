@@ -537,32 +537,12 @@ function normalizePts(o){
        next new wound would silently reuse a number that is already in the chart. */
     if(!Array.isArray(p.wounds)) p.wounds=[];
     let seq=Number(p.woundSeq)||0;
-    /* The high-water mark now has to stay above every BIRTH STAMP as well as every number, or the next
-       addWound issues a born a live wound already holds and two wounds sort to the same place. */
-    p.wounds.forEach(w=>{ if(w && w.num>seq) seq=w.num; });        // never below a number already in use
+    /* THE HIGH-WATER MARK, and it must stay above every stamp of EITHER kind. A legacy record carries
+       numbers and no birth stamps; a current one carries birth stamps and no new numbers; a record
+       written across the change carries both. Lifting past both is what stops the next wound being
+       born at a moment a live wound already holds. */
+    p.wounds.forEach(w=>{ if(w && Number(w.num)>seq) seq=Number(w.num); });
     p.wounds.forEach(w=>{ if(w && Number(w.born)>seq) seq=Number(w.born); });
-    p.wounds.forEach(w=>{ if(w && !w.num) w.num=++seq; });    // unnumbered take the next FREE number
-    p.woundSeq=seq;
-    /* Two passes, not one, and NOT positional. Backfilling an unnumbered wound with its array index
-       collides the moment a wound has been deleted: {num 2} plus a new wound would hand the new one
-       index 1+1=2, a number already in this patient's chart. A legacy record where nothing is numbered
-       still comes out 1,2,3 because seq starts at 0 — same answer, without the collision. */
-    /* KEEP THE LIST IN NUMBER ORDER. Scott hit a real handoff sheet printing "Wound 2" above
-       "Wound 1". Everything that renders wounds — the card, the sheet text, the .doc — walks the
-       array, and once the label is a permanent NUMBER rather than the array index, array order and
-       number order can disagree. Sorting here, in the one place every load path already funnels
-       through, means they never can. A new wound always takes the highest number, so it still lands
-       at the bottom of the list where the provider expects it. */
-    /* KEEP THE LIST IN BIRTH ORDER — earliest-appeared first (Scott 2026-07-31). Everything that
-       renders wounds — the card, the sheet text, the .doc, the note — walks the array, so this one
-       line is what makes "ordered from earliest to latest" true everywhere at once. It is the only
-       place every load path funnels through.
-       BY `born`, NEVER BY THE LABEL. Scott named the trap himself: "if I end up changing the wound
-       name the metadata might say that is now the most recent wound. That is NOT the case, it's by
-       date of creation." A renamed wound must not move.
-       The number is the fallback while it still exists, and it gives the identical answer, because a
-       lower number has always meant "created earlier" — that was its one honest job. */
-    p.wounds.sort((a,b)=>((Number(a&&a.born)||Number(a&&a.num)||0)-(Number(b&&b.born)||Number(b&&b.num)||0)));
     /* THE WOUND'S OWN ID, AND ITS BIRTH ORDER — the linked-list pointer and the ordering, which are two
        different things and must never be confused (Scott 2026-07-31: "it's a linked list, it doesn't
        exist in a vacuum" / "if I end up changing the wound name the metadata might say that is now the
@@ -572,13 +552,15 @@ function normalizePts(o){
        Until now the wound's identity across visits WAS its number: cfRebuildWounds carries `num` and
        says so — "THE NUMBER IS THE WOUND'S IDENTITY". Numbering is retired, so both jobs move here.
 
-       ⚠ THIS MUST RUN **AFTER** THE NUMBER BACKFILL ABOVE, AND IT DID NOT. Written above the numbering
-       block first, it saw `num` still 0 on a legacy record and minted a wid of 'w1-<pid>' — for exactly
-       the wounds the backfill exists to protect. Those wounds are already filed in a note under '1:wc1:*',
-       so the card would have started calling them something else and orphaned the provider's exam,
-       Procedures and orders. Both `num` and the sort are settled by the time we get here, so:
+       ⚠ ORDER OF OPERATIONS HAS BITTEN THIS BLOCK TWICE, in opposite directions. It was first written
+       ABOVE the number backfill, saw `num` still 0 on a legacy record, and minted a wid of 'w1-<pid>'
+       for exactly the wounds the backfill exists to protect — orphaning an exam already filed under
+       '1:wc1:*'. Then, when numbers stopped being minted, it sat BELOW the sort — and with `born` the
+       only sort key left, every wound that had not been stamped yet sorted as 0 and the list came out
+       in whatever order it arrived. It runs BEFORE the sort and AFTER the high-water lift, and both
+       halves of that matter.
          - wid = 'c<num>' is byte-for-byte the key the composer already derives (_rcWidFor), so every
-           wound that exists keeps the key its exam, Procedures block, A&P memory and wound history are
+           legacy wound keeps the key its exam, Procedures block, A&P memory and wound history are
            already filed under. Nothing orphans; there is no migration to run.
          - born = num preserves today's order exactly, because a lower number HAS meant "created
            earlier" all along. That was the number's one honest job, and lifting it out is what lets
@@ -587,9 +569,33 @@ function normalizePts(o){
        wound would send it to the end of the list. */
     p.wounds.forEach(w=>{
       if(!w) return;
-      if(!w.wid)  w.wid  = 'c'+(Number(w.num)||0);
-      if(!w.born) w.born = Number(w.num)||0;
+      const n=Number(w.num)||0;
+      /* FROM THE NUMBER WHEN THERE IS ONE, and that is what makes the migration free: 'c'+num is
+         byte-for-byte the key the composer already derives, so every wound keeps the key its exam,
+         Procedures block, A&P memory and wound history are already filed under. */
+      if(!w.wid && n>0)        w.wid  = 'c'+n;
+      if(!Number(w.born) && n>0) w.born = n;
+      /* AND FROM THE HIGH-WATER MARK WHEN THERE IS NOT. Numbers stopped being minted on 2026-07-31,
+         so a wound can now arrive with neither — one written by a build in between, or a record that
+         predates both. It takes the next FREE stamp, never its array index: a positional answer
+         collides the moment a wound above it has been deleted, which is the whole reason the old
+         two-pass number backfill was not positional either. */
+      if(!w.wid || !Number(w.born)){
+        const fresh=++seq;
+        if(!w.wid)          w.wid  = 'c'+fresh;
+        if(!Number(w.born)) w.born = fresh;
+      }
     });
+    p.woundSeq=seq;
+    /* KEEP THE LIST IN BIRTH ORDER — earliest-appeared first (Scott 2026-07-31). Everything that
+       renders wounds — the card, the sheet text, the .doc, the note — walks the array, so this one
+       line is what makes "ordered from earliest to latest" true everywhere at once, and it is the only
+       place every load path funnels through.
+       BY THE BIRTH STAMP, NEVER BY THE LABEL. Scott named the trap himself: "if I end up changing the
+       wound name the metadata might say that is now the most recent wound. That is NOT the case, it's
+       by date of creation." A renamed wound must not move.
+       Every wound is guaranteed a stamp by the block above, which is why there is no fallback here. */
+    p.wounds.sort((a,b)=>((Number(a&&a.born)||0)-(Number(b&&b.born)||0)));
   });
 }
 /* WHAT WE KNOW IS ALREADY IN THE VAULT, persisted alongside the round.
@@ -640,7 +646,7 @@ function toast(m){ const t=document.getElementById('toast'); t.textContent=m; t.
 /* The procedure fields all live on the wound, alongside everything else, so one wound is still one
    object — the record shape, carry-forward and the composer's writer all keep working without a second
    container to keep in step. They stay empty unless a debridement was actually done. */
-function newWound(){ return { num:0, loc:'', type:[], stage:'', wagner:'', l:'', w:'', d:'', drain:'', odor:'', status:'', wbGran:'', wbSlough:'', wbFib:'', wbEpi:'', wbEschar:'', exposed:[], periwound:[], undermining:'', tunneling:'', debride:'',
+function newWound(){ return { wid:'', born:0, loc:'', type:[], stage:'', wagner:'', l:'', w:'', d:'', drain:'', odor:'', status:'', wbGran:'', wbSlough:'', wbFib:'', wbEpi:'', wbEschar:'', exposed:[], periwound:[], undermining:'', tunneling:'', debride:'',
   tissueRemoved:'', postL:'', postW:'', postD:'', deepest:'', debType:'', instrument:'', ebl:'', bloodCtl:'', consent:'', anesthesia:'', cleansing:'', endpoint:'', tolerance:'',
   orders:'' }; }
 /* WHAT THE WOUND IS CALLED — its location, and nothing else (Scott 2026-07-31: "rely on titles and
@@ -696,7 +702,7 @@ function newId(){ return 'rc-'+Date.now().toString(36)+'-'+Math.random().toStrin
    by driving the live card: `+ Patient` produced a wound with num 1 and no wid at all. Harmless while
    numbers exist (the composer derives 'c'+num, and the next load backfills), and DATA LOSS the moment
    numbers stop being written: the record reaches the vault with nothing saying which wound it is. */
-function newPt(){ return { id:newId(), name:'', edu:'', wounds:[Object.assign(newWound(),{num:1, born:1, wid:'c1'})], woundSeq:1, send:true, visitType:'', dispo:'' }; }   // visitType: ''=Auto (history decides) | 'new' | 'fu'
+function newPt(){ return { id:newId(), name:'', edu:'', wounds:[Object.assign(newWound(),{born:1, wid:'c1'})], woundSeq:1, send:true, visitType:'', dispo:'' }; }   // visitType: ''=Auto (history decides) | 'new' | 'fu'
 function activePt(){ return S.pts[S.active] || null; }
 
 /* ---------- disposition: was this patient actually seen? (Scott 2026-07-27) ----------
@@ -1135,7 +1141,7 @@ function addWound(){ const p=activePt(); if(!p) return;
      value FOREVER, even after the wound it belonged to is removed. Ordering is by birth, never by
      position in the array and never by anything an edit can move (Scott 2026-07-31). wid is minted here
      and never again — it is this wound, in every visit, for the rest of its life. */
-  p.wounds.push(Object.assign(newWound(),{ num:p.woundSeq, born:p.woundSeq, wid:'c'+p.woundSeq }));
+  p.wounds.push(Object.assign(newWound(),{ born:p.woundSeq, wid:'c'+p.woundSeq }));
   save(); render(); }
 function delWound(i){
   const p=activePt(); if(!p) return;
@@ -1479,7 +1485,10 @@ function cfRebuildWounds(rec){
          and an edit to the location must not move a wound to the end of the list (Scott 2026-07-31). */
       wid:  w.wid || (Number(w.num)>0 ? ('c'+Number(w.num)) : ''),
       born: w.born || (Number(w.num)||0),
-      // Retiring, kept for one build so the composer can fall back while both sides land. See the spec.
+      /* THE NUMBER IS NOT MINTED ANY MORE — but a number a LEGACY record already carries is passed
+         on, because the composer's legacy bridge folds a pre-id prior visit onto the card by exactly
+         that number. Drop it here and every patient whose history predates ids orphans on her next
+         visit. It is data being carried, not a field being maintained: nothing writes a new one. */
       num: Number(w.num)||0,
       status: wasHealed ? 'Healed' : '',
       loc: w.loc||'',
