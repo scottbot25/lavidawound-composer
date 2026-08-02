@@ -900,13 +900,22 @@ function _wLabel(wid, st){
     return i<=0 ? base : base+' ('+(i+1)+')';
   }catch(e){ return W_NO_NAME; }
 }
+/* THE HEADING FORM. Scott, 2026-07-31: "i think we should still see the word Wound". A bare place name
+   reads as a stray line rather than the start of a wound block — in the note it sits directly between
+   systemic findings. Only HEADINGS take it; the A&P plan lines stay bare, or every one of them would
+   carry a doubled colon.
+   The unnamed case shortens rather than nesting: "Wound: (site not entered)". */
+const W_UNNAMED_HEAD='(site not entered)';
+function _wHead(wid){ const n=_wLabel(wid); return 'Wound: '+(n===W_NO_NAME ? W_UNNAMED_HEAD : n); }
 /* The per-wound separator line in the copied note. ONE definition, used by the renderer that writes it
    and by cleanForCopy that must not eat it — because those two disagreeing is precisely the defect
-   this replaced: cleanForCopy kept the separator only because it matched /^Wound\s+\d+:$/, and a
+   this replaced: cleanForCopy kept the separator only because it matched /^Wound\s+\d+:$/, and a bare
    location-headed title would have been deleted by the empty-"Label:" rule, running every wound's
    measurements together in one PCC block with nothing saying which was which. The preview could not
-   have shown it — the preview renders resolveRaw and never runs cleanForCopy. */
-function _wTitleLine(wid){ return _wLabel(wid)+':'; }
+   have shown it — the preview renders resolveRaw and never runs cleanForCopy.
+   It no longer ENDS in a colon, so that rule cannot reach it either way; it is still recognised
+   explicitly, because pass 2 uses this to find where one wound's block stops. */
+function _wTitleLine(wid){ return _wHead(wid); }
 function _isWoundTitleLine(t){
   if(/^Wound\s+\d+:$/.test(t)) return true;            // the legacy shape, so an old draft still cleans
   try{ return (typeof woundRegistry!=='undefined'&&woundRegistry||[]).some(w=>t===_wTitleLine(w.id)); }
@@ -4491,7 +4500,7 @@ function renderLines(text, container, keyPrefix, opts){
       wrap.innerHTML=''; const ws=wlist(), n=ws.length;
       ws.forEach(w=>{ const st=read(w);
         const row=document.createElement('div'); row.style.cssText='display:flex;flex-wrap:wrap;gap:6px;align-items:center';
-        if(n>1){ const lbl=document.createElement('span'); lbl.textContent=_wTitleLine(w.id); lbl.style.cssText='font-size:11.5px;color:var(--muted);min-width:62px'; row.appendChild(lbl); }
+        if(n>1){ const lbl=document.createElement('span'); lbl.textContent=_wLabel(w.id)+':'; lbl.style.cssText='font-size:11.5px;color:var(--muted);min-width:62px'; row.appendChild(lbl); }
         OPTS.forEach(o=>{ const lbl=document.createElement('label'); lbl.style.cssText='display:inline-flex;align-items:center;gap:5px;font-size:13px;color:var(--ink)';
           const cb=document.createElement('input'); cb.type='checkbox'; cb.style.width='auto'; cb.checked=st.sel.includes(o);
           cb.onchange=()=>{ const s=read(w); const x=s.sel.indexOf(o); if(cb.checked){ if(x<0)s.sel.push(o);} else if(x>=0)s.sel.splice(x,1); write(w,s); resolveAll(); };
@@ -4920,7 +4929,7 @@ function buildSection(name,idx,text){
         const dk=pref+':__done';
         const card=document.createElement('div'); card.className='wound-card';
         const head=document.createElement('div'); head.className='wound-head';
-        const title=document.createElement('span'); title.className='wound-title'; title.textContent=_wLabel(w.id);
+        const title=document.createElement('span'); title.className='wound-title'; title.textContent=_wHead(w.id);
         head.appendChild(title);
         // A CLEAR yes/no QUESTION, not a skippable checkbox (Scott 2026-07-20: the greyed toggle "looks
         // very easy to skip over" — and a performed procedure silently dropping is a billing miss). Until
@@ -5039,7 +5048,7 @@ function buildSection(name,idx,text){
     // releaseWoundNum/compactWoundNums (uncommitted wounds close gaps; committed numbers never move) —
     // this just repaints whatever the registry says.
     function paintWoundHeads(){
-      wounds.forEach(w=> w.title.textContent=_wLabel(w.id));
+      wounds.forEach(w=> w.title.textContent=_wHead(w.id));
       woundsWrap.querySelectorAll('.wound-rm').forEach(b=> b.style.display = wounds.length>1?'inline-block':'none');
     }
     function saveWounds(){ STATE['__wc_'+idx]=wounds.map(w=>w.id); persist(); }
@@ -5048,7 +5057,7 @@ function buildSection(name,idx,text){
       woundNum(id);   // assign the permanent number now, so it exists before anything paints or resolves
       const card=document.createElement('div'); card.className='wound-card';
       const head=document.createElement('div'); head.className='wound-head';
-      const title=document.createElement('span'); title.className='wound-title'; title.textContent=W_NO_NAME;
+      const title=document.createElement('span'); title.className='wound-title'; title.textContent='Wound: '+W_UNNAMED_HEAD;
       const rm=document.createElement('button'); rm.className='wound-rm'; rm.textContent='Remove';
       head.appendChild(title); head.appendChild(rm);
       const inner=document.createElement('div'); inner.className='wound-body';
