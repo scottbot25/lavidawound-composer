@@ -123,6 +123,13 @@
     <h1>Round Card</h1>
     <div class="sub" id="hdrSub">orders for the nurse, before you leave</div>
     <div id="rcSyncStatusHdr" style="font-size:12px;margin-top:2px;color:rgba(255,255,255,.9)"></div>
+    <!-- Build mismatch, painted by _rcCheckBuild. Inside <header> on purpose: the header is sticky, so
+         this cannot scroll away on a phone; it is killed by @media print, so it can never land on a
+         nurse's sheet; and it survives the framed-mode slimming below, which hides `header h1` and
+         `header .sub` only. It must NOT live in #hdrSub (hidden when framed — which is why the sandbox
+         notice is already invisible inside the overlay) or in #rcSyncStatusHdr (whose textContent is
+         rewritten by _rcPaintSync on every save). -->
+    <div id="rcBuildBanner" style="display:none;font-size:12px;margin-top:4px;line-height:1.45;color:#ffd9a0;font-weight:600"></div>
   </div>
   <div class="row" style="gap:8px;flex:0 0 auto">
     <a id="rcNotesLink" href="index.html" title="Back to the Note Composer" style="color:#fff;text-decoration:none;border:1px solid rgba(255,255,255,.55);border-radius:8px;padding:7px 11px;font-size:13px;font-weight:600">Notes</a>
@@ -254,6 +261,18 @@
      so it's ONE sign-in across both tools. -->
 <script src="msal-browser.min.js"></script>
 <script>
+/* WHICH BUILD THIS IS. Written by `node sweep.js --stamp` in the Note Composer folder, never by hand —
+   it is a hash of BOTH shipped files, so editing either one makes it provably stale and the sweep says
+   so. The composer carries the identical value and passes its own into our URL (?b=), which is how the
+   two can tell whether they shipped as a pair. See build-stamp.js. */
+const BUILD = '2026-08-02.d219175';
+/* A top-level `const` is NOT a property of window — only `var` and function declarations are. So the
+   composer, reading across the frame, gets `undefined` for our build no matter what we declared here,
+   and would conclude on EVERY open that this card is too old to have one. Found by opening the overlay
+   and looking, not by any test: the suite asserted the composer's read exists, and it does. A source
+   regex is not a test of behaviour. Exported deliberately, on its own line, so it cannot be dropped by
+   someone tidying the declaration. */
+window.BUILD = BUILD;
 /* ============================================================================
    LaVida ROUND CARD — Phase 1 (tap/type)
    The problem this solves: nurses are measured on how fast orders land, and today
@@ -2369,6 +2388,104 @@ function _rcPaintSync(state, when){
 }
 // On load, show whether we're backed-up-capable (signed in) or device-only. Silent — never prompts.
 (async function _rcSyncInit(){ try{ const t=await _vaultTokenSilent(); _rcPaintSync(t?'ready':'local'); }catch(e){ _rcPaintSync('local'); } })();
+
+/* ============ IS THIS CARD THE SAME BUILD AS THE PAGE AROUND IT? ==============================
+   The card and the composer are two separate files with two separate browser caches. Measured against
+   the live host on 2026-08-02: GitHub Pages serves both with `Cache-Control: max-age=600` and nothing
+   else, so for ten minutes after a fetch the browser does not even ask — and three consecutive requests
+   came back from three different edge nodes holding objects of different ages. Nothing anywhere makes
+   the two files go live together in one browser. Load the note writer at 9am, deploy at noon, open this
+   card at 2pm: a NEW card inside an OLD composer, with every contract between them (the record shape,
+   the option lists, the wound identity) written assuming they shipped as a pair.
+
+   The composer passes its own build in our URL. WE compare and WE decide, then tell it the verdict —
+   one decision in one place, shown in two, rather than the same rule written twice in two files, which
+   is the drift this stamp exists to catch in the first place.
+
+   WHAT THIS DOES NOT CATCH, stated so nobody reads more into a quiet banner than it means: the ?b= key
+   is itself half the cure, because a composer on a NEW build asks for a URL nothing has ever cached and
+   therefore always gets a fresh card. A STALE composer asks for a stale key and may be handed the
+   matching stale card — the two then agree, both are old, and this says nothing. Catching that needs a
+   third opinion (build.json), which is written at deploy but not yet consulted here. */
+function _rcBuildVerdict(framed, hostB, own){
+  /* ONLY INSIDE THE OVERLAY. Opened in its own tab, the b in our URL can be a week-old bookmark, and a
+     banner that is permanently on is a banner that is off — at a bedside that is the worse failure.
+     The own-tab card is also the loosely-coupled case: it files records to the vault and the composer
+     reads them later, by fields the record carries itself. The overlay is the TIGHT coupling — one
+     page, one session, one token, values handed straight across — and that is what this guards. */
+  if(!framed) return 'silent';
+  const h=String(hostB==null?'':hostB), o=String(own==null?'':own);
+  if(!h) return 'no-host-stamp';                 // a composer built before this check existed
+  if(h===o) return 'ok';
+  /* Ranked by the DATE only. Two builds stamped on the same day cannot be ordered — the hash is not a
+     clock — and telling a provider "the page is the old one" when that is unknown is a confident guess
+     in a tool being used at a bedside. Say they differ and leave it there. */
+  const dh=h.slice(0,10), dO=o.slice(0,10);
+  if(dh===dO) return 'differs';
+  return dh<dO ? 'host-older' : 'card-older';
+}
+function _rcBuildSay(v){
+  /* WHAT THIS DELIBERATELY DOES NOT SAY. It used to end "what you fill in here may not reach the note
+     the way you expect" — a clinical claim, and one that is usually false. The stamp is a hash of BOTH
+     files, so a deploy touching only ONE of them restamps both, and this then fires with nothing
+     whatsoever out of step between the two tools. Measured across the deploy repo's whole history on
+     2026-08-02: of 208 deploys that changed either page, 124 changed only the composer and 49 only the
+     card — 173 of 208, five out of six. Telling a provider at a bedside that what they just typed may
+     be wrong, five times out of six when it is not, is how a warning becomes furniture and takes the
+     next real one down with it. So it states the fact, which is always true, and offers the fix. */
+  const tail=' They are meant to be updated together.';
+  switch(v){
+    // no-host-stamp means the page around us predates this check, so it is by definition the older one.
+    case 'host-older':
+    case 'no-host-stamp': return 'The note writer this card is open inside is an older update than the card.'+tail;
+    case 'card-older':    return 'This Round Card is an older update than the note writer around it.'+tail;
+    case 'differs':       return 'This Round Card and the note writer around it came from different updates.'+tail;
+    default:              return '';
+  }
+}
+/* Called once at boot, AFTER the framed-mode header slimming below, so the banner is painted into its
+   final layout. It is deliberately not in a DOMContentLoaded handler: this script is the last thing in
+   <body>, so the DOM already exists, and a DCL handler runs after the slimming — which is exactly how
+   the sandbox notice ended up written into an element framed mode had already hidden. */
+/* EVERYTHING IT NEEDS IS PASSED IN — the query string, whether we are framed, and our own build — so a
+   test can run the REAL wiring rather than only the pure verdict beside it. A suite that supplies both
+   builds to _rcBuildVerdict stays green if this function compares the host build to itself, or never
+   calls the verdict, or is never called at boot. "A fixture the suite supplies is a decision the suite
+   cannot test", and the wiring is where that bites. Returns the verdict so the test can read it. */
+function _rcCheckBuild(search, framed, myBuild){
+  let hostB='';
+  try{ hostB=new URLSearchParams(String(search||'')).get('b')||''; }catch(e){}
+  const v=_rcBuildVerdict(framed, hostB, myBuild), msg=_rcBuildSay(v);
+  const el=document.getElementById('rcBuildBanner');
+  if(el){
+    if(msg){
+      el.innerHTML='⚠ '+esc(msg)
+        +' <button onclick="rcBuildUpdate()" style="margin-left:4px;background:#fff;color:#7a2e12;border:none;'
+        +'border-radius:7px;padding:5px 10px;font:inherit;font-size:12px;font-weight:650;cursor:pointer">Get the current version</button>';
+      el.style.display='block';
+    } else el.style.display='none';
+  }
+  // Always reported, including 'ok' — so the composer can also CLEAR a banner it is already showing.
+  try{ if(window.parent && window.parent!==window) window.parent.postMessage({type:'rc-build', verdict:v, host:hostB, card:myBuild}, location.origin); }catch(e){}
+  return v;
+}
+/* NOT called "Reload". The composer already has a "Reload patients from the card" button that means
+   something completely different, and two buttons saying Reload in one workflow is how the wrong one
+   gets pressed. A new query value is a new cache key at the browser AND at the CDN edge, which is the
+   only thing that gets past a stale copy — location.reload(true) has been ignored by every browser for
+   years. When we are inside the composer the stale side is usually the PAGE, so move the whole tab;
+   reloading the card alone would leave the provider exactly where they started. Dropping b is
+   deliberate: it is the HOST's build and means nothing after a reload, so a card URL that was
+   bookmarked out of its own tab stops warning about a composer that is no longer there. */
+function rcBuildUpdate(){
+  try{
+    const top=(window.self!==window.top) ? window.parent : window;
+    const u=new URL(top.location.href);
+    u.searchParams.delete('b');
+    u.searchParams.set('cb', Date.now());
+    top.location.replace(u.toString());
+  }catch(e){ try{ location.reload(); }catch(x){} }
+}
 /* dp MUST be in here. The signature is how auto-save decides a patient changed; leave a field
    out and editing it reads as "already saved", so it silently never uploads. That exact bug
    ate wound edits typed during an in-flight save (2026-07-21). */
@@ -2942,6 +3059,9 @@ if(window.self !== window.top){
   const h=document.querySelector('header'); if(h){ h.style.paddingTop='6px'; h.style.paddingBottom='6px'; }
   const st=document.getElementById('rcSyncStatusHdr'); if(st) st.style.marginTop='0';
 }
+/* AFTER the slimming above, so the banner is painted into the layout it will actually live in, and
+   BEFORE the vault restore below, so a mismatch is on screen before any network work starts. */
+_rcCheckBuild(location.search, window.self!==window.top, BUILD);
 
 /* ---------- RESTORE TODAY'S ROUND FROM CLINICALVAULT ON OPEN (Scott 2026-07-21) ----------
    "I exited the browser and came back and my round card was gone." The screen copy is deliberately

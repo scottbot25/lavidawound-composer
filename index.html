@@ -350,6 +350,9 @@
       <span style="font-size:12px;color:var(--muted)" class="rc-sub">bedside orders — saves to ClinicalVault</span>
       <button onclick="closeRoundCard()" style="margin-left:auto;background:var(--accent);color:#fff;border:none;border-radius:8px;padding:8px 15px;font:inherit;font-weight:650;cursor:pointer">✕ Close</button>
     </div>
+    <!-- Shown only when the card inside reports a build different from this page's. Painted by
+         _rcShowBuildWarn from the card's rc-build message; the card makes the decision, this shows it. -->
+    <div id="rcBuildWarn" style="display:none;padding:10px 14px;background:#7a2e12;color:#fff;font-size:13px;line-height:1.5"></div>
     <div id="rcLoading" style="display:none;flex:1;align-items:center;justify-content:center;padding:30px">
       <div style="font-size:14px;color:var(--muted)">Loading the Round Card…</div>
     </div>
@@ -371,6 +374,12 @@
   </div>
 </div>
 <script>
+/* WHICH BUILD THIS IS. Written by `node sweep.js --stamp`, never by hand — it is a hash of BOTH
+   shipped files, so editing either one makes it provably stale and the sweep says so. The card carries
+   the identical value and we pass ours into its URL, so the two can tell whether they shipped as a
+   pair. See build-stamp.js for why, and why it cannot be a number someone remembers to raise.
+   Declared here, on the first line of the first script, so every later block can see it. */
+const BUILD = '2026-08-02.d219175';
 /* Round Card overlay: same-origin iframe of round-card.html, opened OVER the composer (no new
    tab). Lazy-loads on first open. Because the provider is already signed in here, the card's
    Save-to-ClinicalVault reuses the same session (shared sessionStorage), no second sign-in. */
@@ -380,7 +389,72 @@
    its own tab: standalone it runs its own sign-in, and rcAutoPull picks its saves up on tab refocus.
    (Scott 2026-07-20 PM: "every time i open the round card i cant fill anything in".) */
 var _rcFrameOK=false, _rcFrameTimer=null;
-function _rcCardUrl(){ return 'round-card.html'+(_CSANDBOX?'?sandbox=1':''); }
+/* ONE query string, assembled once. The obvious edit —
+      'round-card.html'+(_CSANDBOX?'?sandbox=1':'')+'?b='+BUILD
+   puts TWO '?' in the URL, and URLSearchParams then reads a single parameter named sandbox whose value
+   is "1?b=…". So the card's own sandbox check goes FALSE and a sandboxed composer's embedded card
+   writes to the REAL ClinicalVault, while b arrives missing and the card reports a mismatch that is not
+   real. Both halves silent, both wrong. build-stamp-test PARSES this back rather than string-matching
+   it, because a string match passes on the broken version. */
+function _rcCardUrl(){
+  const q=[];
+  if(_CSANDBOX) q.push('sandbox=1');
+  q.push('b='+encodeURIComponent(BUILD));
+  return 'round-card.html?'+q.join('&');
+}
+/* ABSENCE MUST BE A SIGNAL, NOT A PASS. A round-card.html from before this check existed never posts
+   rc-build at all, so a composer that simply waits for a message shows nothing — which looks exactly
+   like "they agree". This is the one question the message cannot answer, so this end asks it directly.
+   Everything else is the card's call: it knows which of the two is older, and this does not. */
+function _rcHostVerdict(frameBuild, myBuild){
+  var f=String(frameBuild==null?'':frameBuild);
+  if(!f) return 'card-too-old';
+  return f===String(myBuild==null?'':myBuild) ? 'ok' : 'mismatch';
+}
+/* Deliberately NOT folded into _rcEvalFrame. That one stops early the moment any rc-* message has
+   proved the frame alive — and an old card still forwards rc-activity on the first focus event, so
+   riding along with it would skip this check in exactly the case it exists for. If the card DID report
+   its build, its own answer is better (it knows which side is older) and this stands down. */
+var _rcCardSaidBuild=false;
+function _rcProbeFrameBuild(){
+  if(_rcCardSaidBuild) return;
+  try{
+    var f=document.getElementById('rcFrame'), w=f && f.contentWindow;
+    if(w && w.document && _rcHostVerdict(w.BUILD, BUILD)==='card-too-old') _rcShowBuildWarn('card-too-old', BUILD, '');
+  }catch(e){}
+}
+/* The card compares the build we passed it against its own and sends back the verdict; this end only
+   shows it. ONE decision in one place — the alternative is the same rule written twice in two files,
+   which is the drift this whole stamp exists to catch. */
+function _rcShowBuildWarn(verdict, hostB, cardB){
+  var el=document.getElementById('rcBuildWarn'); if(!el) return;
+  if(!verdict || verdict==='ok' || verdict==='silent'){ el.style.display='none'; return; }
+  var who = (verdict==='card-older' || verdict==='card-too-old') ? 'The Round Card is the older one.'
+          : verdict==='differs'    ? ''
+          : 'This page is the older one.';   // host-older and no-host-stamp both mean: reload THIS page
+  el.innerHTML = '<b>The Round Card and this page came from different updates.</b> '
+    + (who ? esc(who)+' ' : '')
+    /* States the fact, not a consequence. A deploy that touches only one of the two files restamps
+       both, so this fires with nothing actually out of step five times out of six — the measurement is
+       in the note on _rcBuildSay in Round-Card.html. Claiming a provider's bedside entries are at risk
+       that often is how a warning stops being read. */
+    + 'They are meant to be updated together. '
+    + '<button onclick="rcBuildUpdate()" style="margin-left:6px;background:#fff;color:#7a2e12;border:none;'
+    + 'border-radius:7px;padding:6px 12px;font:inherit;font-weight:650;cursor:pointer">Get the current version</button>'
+    + '<div style="opacity:.8;margin-top:5px;font-size:12px">card '+esc(cardB||'—')+' · this page '+esc(hostB||'older than this check')+'</div>';
+  el.style.display='block';
+}
+/* NOT called "Reload": this tool already has a "Reload patients from the card" button that means
+   something completely different, and two buttons saying Reload is how the wrong one gets pressed.
+   A new query value is a new cache key at the browser AND at the CDN edge, which is the only thing
+   that gets past a stale copy — location.reload(true) has been ignored by every browser for years.
+   searchParams.set overwrites rather than appends, so cb cannot pile up, and replace() keeps the old
+   build out of the back button. Nothing in progress is lost: the workspace and the sign-in both live
+   in sessionStorage, which a same-tab navigation keeps. */
+function rcBuildUpdate(){
+  try{ var u=new URL(location.href); u.searchParams.set('cb', Date.now()); location.replace(u.toString()); }
+  catch(e){ location.reload(); }
+}
 // Reuse ONE card tab (named target) instead of spawning a fresh blank one each click. The card keeps
 // its round in the tab's own memory, so opening a NEW tab every time looked like "my patients vanished"
 // — clicking Round Card again now returns to the SAME card with everything still there (Scott 2026-07-20).
@@ -436,7 +510,7 @@ function openRoundCard(){
   // Pass sandbox mode INTO the overlay iframe so a sandboxed composer never lets the card touch the real vault.
   if(!f.getAttribute('src')){
     _rcEvalTries=0; _rcShowState('loading');
-    f.addEventListener('load', function(){ setTimeout(_rcEvalFrame, 120); });   // error pages fire load too — probe decides
+    f.addEventListener('load', function(){ setTimeout(_rcEvalFrame, 120); setTimeout(_rcProbeFrameBuild, 500); });   // error pages fire load too — probe decides
     f.setAttribute('src',_rcCardUrl());
     clearTimeout(_rcFrameTimer); _rcFrameTimer=setTimeout(_rcEvalFrame, 3000);  // backstop if load never fires
   } else if(_rcFrameOK){ _rcShowState('ok'); }
@@ -466,6 +540,9 @@ window.addEventListener('message', async function(e){
     var ov=document.getElementById('rcOverlay');
     if(ov && ov.style.display!=='none'){ window._rcDeferredPull=true; return; }
     if(typeof rcAutoPull==='function') rcAutoPull('overlay-save'); return; }
+  // The card has compared the build we passed in its URL against its own. It decides; we display.
+  // Recording that it spoke is what stands the direct frame probe down — see _rcProbeFrameBuild.
+  if(d && d.type==='rc-build'){ _rcCardSaidBuild=true; _rcShowBuildWarn(d.verdict, d.host, d.card); return; }
   // The overlay card asks who's signed in so it can pre-fill its Provider box (Scott 2026-07-20).
   if(d && d.type==='rc-provider-request'){
     var pn='';
