@@ -301,6 +301,10 @@
 </style>
 </head>
 <body>
+<!-- "There is a newer version of this tool." Painted by _checkBuildFresh. It sits ABOVE the header,
+     not in the overlay: #rcBuildWarn is only visible while the Round Card is open, and this is about
+     THIS page being behind. Never appears unless the live site actually reports a different build. -->
+<div id="buildStaleBar" style="display:none;padding:10px 16px;background:#7a2e12;color:#fff;font-size:13.5px;line-height:1.5"></div>
 <header>
   <h1>LaVida Wound Note Composer</h1>
   <div class="toggle" title="Each patient is an Initial OR a Follow-up, chosen once. Click the other type to change it (asks first).">
@@ -379,7 +383,22 @@
    the identical value and we pass ours into its URL, so the two can tell whether they shipped as a
    pair. See build-stamp.js for why, and why it cannot be a number someone remembers to raise.
    Declared here, on the first line of the first script, so every later block can see it. */
-const BUILD = '2026-08-02.d219175';
+const BUILD = '2026-08-02.23f7e58';
+/* SANDBOX MODE (?sandbox=1, LOCALHOST ONLY — the hosted site ignores it): points uploads at the
+   ToolSandbox site so end-to-end tests (incl. the Round Card overlay, which inherits it) never touch
+   the real vault. Belt = sitePath swap (done where VAULT_CFG is declared); suspenders = _gfetch
+   refuses real-vault URLs while sandboxed.
+
+   IT LIVES HERE, NOT BESIDE VAULT_CFG, AND THAT IS THE FIX FOR A REAL COLD-LOAD BUG. `_rcCardUrl`
+   reads it, and `_rcCardUrl` is called from three buttons that are clickable the moment this block
+   parses. The declaration used to sit ~1,800 lines later in the THIRD script block, behind a 265KB
+   parser-blocking `<script src="msal-browser.min.js">` — so on a slow or cold load, the markup through
+   that point is built and clickable while the third block has not run, and pressing Round Card threw
+   `Cannot access '_CSANDBOX' before initialization` and did nothing at all. A `const` in the temporal
+   dead zone throws even under `typeof`, so no guard could have covered it; the declaration had to move
+   ahead of its readers. It has no dependencies of its own — just the URL and the hostname. */
+const _CSANDBOX = (()=>{ const q=new URLSearchParams(location.search);
+  return q.get('sandbox')==='1' && (location.hostname==='localhost'||location.hostname==='127.0.0.1'); })();
 /* Round Card overlay: same-origin iframe of round-card.html, opened OVER the composer (no new
    tab). Lazy-loads on first open. Because the provider is already signed in here, the card's
    Save-to-ClinicalVault reuses the same session (shared sessionStorage), no second sign-in. */
@@ -443,6 +462,46 @@ function _rcShowBuildWarn(verdict, hostB, cardB){
     + 'border-radius:7px;padding:6px 12px;font:inherit;font-weight:650;cursor:pointer">Get the current version</button>'
     + '<div style="opacity:.8;margin-top:5px;font-size:12px">card '+esc(cardB||'—')+' · this page '+esc(hostB||'older than this check')+'</div>';
   el.style.display='block';
+}
+/* ============ AM I CURRENT? — the other half, and the likelier one ==============================
+   The stamp above answers "did these two ship together". It cannot answer "are we both OLD", because
+   two stale tools carry the same stale stamp and agree perfectly. That is the more common case, not the
+   rarer one: this page only reloads if someone reloads it, the idle lock is 12 hours and is fed by the
+   card forwarding activity, so a working provider's composer never refreshes itself all day.
+   So we ask the site. build.json is ~30 characters and is written by `node sweep.js --stamp`.
+
+   FAILS SILENT-OPEN, deliberately. Any error at all — offline, facility wifi, a 404 on an older
+   deploy, junk JSON — returns 'unknown' and NOTHING is shown. A provider at a bedside must never be
+   told they are out of date because the building's wifi dropped; a missed notice costs far less than a
+   notice nobody can act on. `!r.ok` is checked because GitHub Pages answers a missing file with an
+   HTML 404 page, which parses as neither JSON nor a build.
+
+   PHI: this sends nothing. It is a GET to the same host that already served this page, with no query
+   data and no body, and the answer is a version string. No new egress destination. */
+function _buildFreshness(mine, served){
+  var m=String(mine==null?'':mine), s=String(served==null?'':served);
+  if(!m || !s) return 'unknown';
+  return m===s ? 'ok' : 'stale';
+}
+function _paintBuildStale(served){
+  var el=document.getElementById('buildStaleBar'); if(!el) return;
+  el.innerHTML='<b>There is a newer version of this tool.</b> You are on '+esc(BUILD)+', the current one is '
+    +esc(served)+'. '
+    +'<button onclick="rcBuildUpdate()" style="margin-left:6px;background:#fff;color:#7a2e12;border:none;'
+    +'border-radius:7px;padding:6px 12px;font:inherit;font-weight:650;cursor:pointer">Get the current version</button>';
+  el.style.display='block';
+}
+async function _checkBuildFresh(){
+  var served='';
+  try{
+    var r=await fetch('build.json?cb='+Date.now(), {cache:'no-store'});
+    if(!r.ok) return 'unknown';
+    var j=await r.json();
+    served=(j && j.build) || '';
+  }catch(e){ return 'unknown'; }
+  var v=_buildFreshness(BUILD, served);
+  if(v==='stale') _paintBuildStale(served);
+  return v;
 }
 /* NOT called "Reload": this tool already has a "Reload patients from the card" button that means
    something completely different, and two buttons saying Reload is how the wrong one gets pressed.
@@ -560,6 +619,10 @@ window.addEventListener('message', async function(e){
   }catch(err){ resp.error=(err&&err.message)||'Could not get access.'; }
   try{ (e.source||window).postMessage(resp, location.origin); }catch(x){}
 });
+/* Fire and forget. Nothing waits on it, nothing breaks if it never answers, and it paints only when
+   the site actually reports a different build. #buildStaleBar is declared above this script, so the
+   element already exists. */
+_checkBuildFresh();
 </script>
 <div id="authGate" style="display:none;position:fixed;inset:0;z-index:100;background:#f4f2ec;align-items:center;justify-content:center;flex-direction:column;gap:16px;text-align:center;padding:24px">
   <div style="font-size:20px;font-weight:650">LaVida Wound Note Composer</div>
@@ -2249,11 +2312,8 @@ const VAULT_CFG = {
   sitePath:  '/sites/ClinicalVault',
   scopes:    ['Sites.ReadWrite.All']
 };
-/* SANDBOX MODE (?sandbox=1, LOCALHOST ONLY — the hosted site ignores it): points uploads at the
-   ToolSandbox site so end-to-end tests (incl. the Round Card overlay, which inherits it) never touch
-   the real vault. Belt = sitePath swap; suspenders = _gfetch refuses real-vault URLs while sandboxed. */
-const _CSANDBOX = (()=>{ const q=new URLSearchParams(location.search);
-  return q.get('sandbox')==='1' && (location.hostname==='localhost'||location.hostname==='127.0.0.1'); })();
+/* _CSANDBOX ITSELF IS DECLARED IN THE FIRST SCRIPT BLOCK, near _rcCardUrl — see the note there for
+   why it had to move. Only the config swap belongs here, because VAULT_CFG lives in this block. */
 if(_CSANDBOX) VAULT_CFG.sitePath='/sites/ToolSandbox';
 let _pca=null;
 async function _getPca(){
