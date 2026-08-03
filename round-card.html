@@ -265,7 +265,7 @@
    it is a hash of BOTH shipped files, so editing either one makes it provably stale and the sweep says
    so. The composer carries the identical value and passes its own into our URL (?b=), which is how the
    two can tell whether they shipped as a pair. See build-stamp.js. */
-const BUILD = '2026-08-03.b23db5f';
+const BUILD = '2026-08-03.a54a1f4';
 /* A top-level `const` is NOT a property of window — only `var` and function declarations are. So the
    composer, reading across the frame, gets `undefined` for our build no matter what we declared here,
    and would conclude on EVERY open that this card is too old to have one. Found by opening the overlay
@@ -341,6 +341,18 @@ const WOUND_LOCATION_GROUPS = [
     'Right nostril / nare','Left nostril / nare','Right corner of the mouth','Left corner of the mouth',
     'Right cheek','Left cheek','Right temple','Left temple','Right jaw','Left jaw','Right side of neck',
     'Left side of neck',
+    /* WHOLE-REGION PARENTS, added 2026-08-03. Scott, on finding a wound charted as "abdomen"
+       with nowhere to put it: "so if your missing abdomen your obviously missing some anatomical
+       locations..." The list had no whole-region entry ANYWHERE - every region gave the parts and
+       nowhere to name the region itself - so providers typed around it, which is where the free
+       text came from. Note these are NOT the same as "- midline": midline is a positive statement
+       that the wound is on the midline; these mean the side or sub-part was not recorded.
+       LAST IN THE GROUP ON PURPOSE (Scott: "plain and last for all of them") - they are a
+       fallback, not a first reach, and sitting under the specific options nudges toward those. */
+    'Scalp',
+    'Forehead',
+    'Occiput',
+    'Posterior neck',
   ]],
   ['Chest & abdomen', [
     'Sternum / mid chest','Periumbilical','Suprapubic','Perineum','Right abdomen - upper',
@@ -350,20 +362,51 @@ const WOUND_LOCATION_GROUPS = [
     'Right ostomy / stoma site','Left ostomy / stoma site','Ostomy / stoma site - midline',
     'Right chest wall','Left chest wall','Right breast','Left breast',
     'Right under the breast (inframammary fold)','Left under the breast (inframammary fold)',
-    'Right axilla','Left axilla','Right flank (anterior)','Left flank (anterior)','Right groin',
+    'Right axilla','Left axilla','Right flank - front','Left flank - front','Right groin',
     'Left groin','Right inner groin fold','Left inner groin fold','Right iliac crest',
     'Left iliac crest',
+    /* WHOLE-REGION PARENTS, added 2026-08-03. Scott, on finding a wound charted as "abdomen"
+       with nowhere to put it: "so if your missing abdomen your obviously missing some anatomical
+       locations..." The list had no whole-region entry ANYWHERE - every region gave the parts and
+       nowhere to name the region itself - so providers typed around it, which is where the free
+       text came from. Note these are NOT the same as "- midline": midline is a positive statement
+       that the wound is on the midline; these mean the side or sub-part was not recorded.
+       LAST IN THE GROUP ON PURPOSE (Scott: "plain and last for all of them") - they are a
+       fallback, not a first reach, and sitting under the specific options nudges toward those. */
+    'Abdomen',
+    'Under the abdominal fold (pannus)',
+    'Right flank',
+    'Left flank',
+    /* ASPECTS FOR THE SIX STRUCTURES THAT HAD NONE, added 2026-08-03. The list gave the knee,
+       forearm, wrist, ankle, chest wall and the FRONT of the elbow no way to say which surface,
+       while the thigh and lower leg had four each. Plain English, per Scott: providers type
+       "outer" and "front", not "lateral" and "anterior". */
+    'Right chest wall - front',
+    'Left chest wall - front',
+    'Right chest wall - side',
+    'Left chest wall - side',
   ]],
   ['Back, sacrum & pelvis', [
     'Spine','Sacrum','Sacrococcygeal','Coccyx','Gluteal cleft','Perianal / anus','Genitalia',
     'Spanning back, buttock and hip','Right upper back','Left upper back','Upper back - midline',
     'Right mid back','Left mid back','Mid back - midline','Right lower back','Left lower back',
-    'Lower back - midline','Right scapula','Left scapula','Right flank (posterior)',
-    'Left flank (posterior)','Right buttock','Left buttock','Right buttock - upper',
+    'Lower back - midline','Right scapula','Left scapula','Right flank - back',
+    'Left flank - back','Right buttock','Left buttock','Right buttock - upper',
     'Left buttock - upper','Right buttock - lower','Left buttock - lower','Right buttock - inner',
     'Left buttock - inner','Right buttock - outer','Left buttock - outer',
     'Right ischium (ischial tuberosity)','Left ischium (ischial tuberosity)','Right greater trochanter',
     'Left greater trochanter','Right hip','Left hip',
+    /* WHOLE-REGION PARENTS, added 2026-08-03. Scott, on finding a wound charted as "abdomen"
+       with nowhere to put it: "so if your missing abdomen your obviously missing some anatomical
+       locations..." The list had no whole-region entry ANYWHERE - every region gave the parts and
+       nowhere to name the region itself - so providers typed around it, which is where the free
+       text came from. Note these are NOT the same as "- midline": midline is a positive statement
+       that the wound is on the midline; these mean the side or sub-part was not recorded.
+       LAST IN THE GROUP ON PURPOSE (Scott: "plain and last for all of them") - they are a
+       fallback, not a first reach, and sitting under the specific options nudges toward those. */
+    'Upper back',
+    'Mid back',
+    'Lower back',
   ]],
   ['Arm & hand', [
     'Right shoulder','Left shoulder','Right upper arm','Left upper arm','Right elbow','Left elbow',
@@ -372,6 +415,32 @@ const WOUND_LOCATION_GROUPS = [
     'Right index finger','Left index finger','Right middle finger','Left middle finger',
     'Right ring finger','Left ring finger','Right little finger','Left little finger',
     'Right finger (unspecified)','Left finger (unspecified)','Right fingernail','Left fingernail',
+    /* WHOLE-REGION PARENTS, added 2026-08-03. Scott, on finding a wound charted as "abdomen"
+       with nowhere to put it: "so if your missing abdomen your obviously missing some anatomical
+       locations..." The list had no whole-region entry ANYWHERE - every region gave the parts and
+       nowhere to name the region itself - so providers typed around it, which is where the free
+       text came from. Note these are NOT the same as "- midline": midline is a positive statement
+       that the wound is on the midline; these mean the side or sub-part was not recorded.
+       LAST IN THE GROUP ON PURPOSE (Scott: "plain and last for all of them") - they are a
+       fallback, not a first reach, and sitting under the specific options nudges toward those. */
+    'Right arm',
+    'Left arm',
+    'Right hand',
+    'Left hand',
+    /* ASPECTS FOR THE SIX STRUCTURES THAT HAD NONE, added 2026-08-03. The list gave the knee,
+       forearm, wrist, ankle, chest wall and the FRONT of the elbow no way to say which surface,
+       while the thigh and lower leg had four each. Plain English, per Scott: providers type
+       "outer" and "front", not "lateral" and "anterior". */
+    'Right elbow - front',
+    'Left elbow - front',
+    'Right forearm - front',
+    'Left forearm - front',
+    'Right forearm - back',
+    'Left forearm - back',
+    'Right wrist - front',
+    'Left wrist - front',
+    'Right wrist - back',
+    'Left wrist - back',
   ]],
   ['Leg', [
     'Right thigh','Left thigh','Right thigh - front','Left thigh - front','Right thigh - back',
@@ -379,10 +448,32 @@ const WOUND_LOCATION_GROUPS = [
     'Left inner thigh','Right knee','Left knee','Right patella','Left patella',
     'Right popliteal fossa (behind knee)','Left popliteal fossa (behind knee)',
     'Right shin (anterior lower leg)','Left shin (anterior lower leg)',
-    'Right calf (posterior lower leg)','Left calf (posterior lower leg)','Right lower leg - medial',
-    'Left lower leg - medial','Right lower leg - lateral','Left lower leg - lateral','Right ankle',
+    'Right calf (posterior lower leg)','Left calf (posterior lower leg)','Right lower leg - inner (medial)',
+    'Left lower leg - inner (medial)','Right lower leg - outer (lateral)','Left lower leg - outer (lateral)','Right ankle',
     'Left ankle','Right medial malleolus','Left medial malleolus','Right lateral malleolus',
     'Left lateral malleolus','Right Achilles tendon','Left Achilles tendon',
+    /* WHOLE-REGION PARENTS, added 2026-08-03. Scott, on finding a wound charted as "abdomen"
+       with nowhere to put it: "so if your missing abdomen your obviously missing some anatomical
+       locations..." The list had no whole-region entry ANYWHERE - every region gave the parts and
+       nowhere to name the region itself - so providers typed around it, which is where the free
+       text came from. Note these are NOT the same as "- midline": midline is a positive statement
+       that the wound is on the midline; these mean the side or sub-part was not recorded.
+       LAST IN THE GROUP ON PURPOSE (Scott: "plain and last for all of them") - they are a
+       fallback, not a first reach, and sitting under the specific options nudges toward those. */
+    'Right lower leg',
+    'Left lower leg',
+    /* ASPECTS FOR THE SIX STRUCTURES THAT HAD NONE, added 2026-08-03. The list gave the knee,
+       forearm, wrist, ankle, chest wall and the FRONT of the elbow no way to say which surface,
+       while the thigh and lower leg had four each. Plain English, per Scott: providers type
+       "outer" and "front", not "lateral" and "anterior". */
+    'Right knee - inner',
+    'Left knee - inner',
+    'Right knee - outer',
+    'Left knee - outer',
+    'Right ankle - inner',
+    'Left ankle - inner',
+    'Right ankle - outer',
+    'Left ankle - outer',
   ]],
   ['Foot', [
     'Right heel (posterior)','Left heel (posterior)','Right plantar heel','Left plantar heel',
@@ -394,6 +485,18 @@ const WOUND_LOCATION_GROUPS = [
     'Right 3rd toe','Left 3rd toe','Right 4th toe','Left 4th toe','Right 5th toe','Left 5th toe',
     'Right toe (unspecified)','Left toe (unspecified)','Right interdigital / web space',
     'Left interdigital / web space','Right toenail','Left toenail',
+    /* WHOLE-REGION PARENTS, added 2026-08-03. Scott, on finding a wound charted as "abdomen"
+       with nowhere to put it: "so if your missing abdomen your obviously missing some anatomical
+       locations..." The list had no whole-region entry ANYWHERE - every region gave the parts and
+       nowhere to name the region itself - so providers typed around it, which is where the free
+       text came from. Note these are NOT the same as "- midline": midline is a positive statement
+       that the wound is on the midline; these mean the side or sub-part was not recorded.
+       LAST IN THE GROUP ON PURPOSE (Scott: "plain and last for all of them") - they are a
+       fallback, not a first reach, and sitting under the specific options nudges toward those. */
+    'Right foot',
+    'Left foot',
+    'Right plantar foot',
+    'Left plantar foot',
   ]],
   ['Amputation & surgical sites', [
     'Right surgical incision','Left surgical incision','Surgical incision - midline',
