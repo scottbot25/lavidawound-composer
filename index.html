@@ -385,7 +385,7 @@
    the identical value and we pass ours into its URL, so the two can tell whether they shipped as a
    pair. See build-stamp.js for why, and why it cannot be a number someone remembers to raise.
    Declared here, on the first line of the first script, so every later block can see it. */
-const BUILD = '2026-08-03.b23db5f';
+const BUILD = '2026-08-03.a54a1f4';
 /* SANDBOX MODE (?sandbox=1, LOCALHOST ONLY — the hosted site ignores it): points uploads at the
    ToolSandbox site so end-to-end tests (incl. the Round Card overlay, which inherits it) never touch
    the real vault. Belt = sitePath swap (done where VAULT_CFG is declared); suspenders = _gfetch
@@ -1244,7 +1244,32 @@ function rcApplyByCardNum(S, priorList, cardWounds, edu, recDate){
     if(_rcCardWid(k)) return;
     const n=Number(pw.num)||0;
     if(n && byNum[n]){ const target=_rcWidFor(byNum[n]);
-      if(target && !claimed[String(target)]){ _rcAdoptPriorWid(pw.wid, target); pw.wid=target; claimed[String(target)]=1; } }
+      if(target && !claimed[String(target)]){ _rcAdoptPriorWid(pw.wid, target); pw.wid=target; claimed[String(target)]=1; return; } }
+    /* ⚠ A 'c'+num FALLBACK WAS ADDED HERE ON 2026-08-03 AND REMOVED THE SAME DAY. DO NOT RE-ADD IT.
+       It looked airtight: mintWid seeds from 0 while wreg seeds num from 1, so a note wound with
+       numeric wid k carries num k+1, and normalizePts:599 derives the card's id as 'c'+num — therefore
+       numeric 1 IS c2, arithmetic rather than inference. On that reasoning it folded any prior numeric
+       wid onto byWid['c'+n].
+
+       THE ARITHMETIC IS REAL AND THE CONCLUSION DOES NOT FOLLOW. 'c'+num is how the card names a
+       MIGRATED legacy wound (normalizePts:599). It is NOT how the card names a wound added at the
+       bedside: addWound (Round-Card:1187) mints 'c'+p.woundSeq off its OWN counter, which has no
+       relationship to the note's num. So a card 'c2' is either the note's num-2 wound or simply the
+       card's second wound, and NOTHING IN THE RECORD SAYS WHICH.
+
+       Driven against the case that matters: a patient with a real wound carried since week 1 (note wid
+       1, num 2) and a genuinely NEW second wound at the same site (card wid c2) — the fold merged them
+       and returned one wound. Scott, from the chart: "2 wounds. slightly different descriptions and
+       orders thats how i know." Two real wounds, two A&Ps, one destroyed.
+
+       The signal that WOULD justify a fold is the card wound carrying a non-zero num, which proves its
+       id was derived rather than minted — and that is exactly what byNum above already tests. There is
+       no second, weaker version of that evidence to fall back on.
+
+       So an unmatched prior numeric wid is LEFT IN PLACE and reported by the stray loop below. That
+       charts a wound twice when it really was one wound, which is visible, complained about and
+       repairable. The merge is none of those: it deletes a wound and its assessment from a note and
+       nothing downstream can tell it happened. See wound-split-identity-test.js section 1. */
   });
   /* REPAIRING WHAT ALREADY DRIFTED. A prior wound with NO number on the card is one of two things,
      and until now they were indistinguishable — so a stray printed as a phantom extra wound:
@@ -1259,6 +1284,15 @@ function rcApplyByCardNum(S, priorList, cardWounds, edu, recDate){
   (priorList||[]).forEach(pw=>{
     const n=Number(pw&&pw.num)||0;
     if(!pw || byWid[String(pw.wid)] || (n && byNum[n]) || pw.resolved) return;   // paired, or a healed wound that rightly carries
+    /* AMBIGUITY IS TWO-SIDED, and counting only one side still merges wounds. Two PRIOR wounds at one
+       site competing for a single card wound is the same problem as two card wounds competing for one
+       prior: whichever is visited first claims it and the other is left over, so the result depends on
+       array order. Driven 2026-08-03 — two real left-buttock wounds and one card wound folded the
+       second prior onto it. If the site is not unique among the priors either, nothing is provable and
+       the fold is refused. */
+    const sameSitePriors=(priorList||[]).filter(function(o){ return o && !o.resolved &&
+        !byWid[String(o.wid)] && _rcLocScore(o.location, pw.location)===1; }).length;
+    if(sameSitePriors>1){ strays.push('prior wound '+n+' shares a site with another prior wound - not matched, left in place'); return; }
     let hit=null, ties=0;
     (cardWounds||[]).forEach(cw=>{
       const t=_rcWidFor(cw); if(!t || claimed[t]) return;
@@ -1267,6 +1301,17 @@ function rcApplyByCardNum(S, priorList, cardWounds, edu, recDate){
          to auto-confirm, and here the cost of being wrong is a real wound disappearing from a note
          rather than a reconcile prompt. */
       if(_rcLocScore(pw.location, cw.loc)!==1) return;
+      /* COUNT THE SITE MATCHES HERE, BEFORE THE BIRTH TEST BELOW — and this line is the whole fix.
+         `ties` used to be incremented AFTER the birth-order test, so two card wounds at ONE site were
+         never seen as ambiguous: whichever one happened to satisfy pb>cb became a unique match and the
+         fold went ahead. Driven on 2026-08-03 against a patient with two real wounds at one site, this
+         folded prior wound 6 onto card wound c4 — the OTHER wound's id — merging two wounds and taking
+         one A&P with it. Scott, from the chart: "2 wounds. slightly different descriptions and orders
+         thats how i know."
+         Ambiguity is a property of the SITE, not of the tiebreak. If two card wounds are at this
+         location, this prior wound cannot be assigned to either of them by location, whatever their
+         birth stamps say, and the caller's `ties===1` guard then refuses. */
+      ties++;
       /* AND THE NUMBERS MUST POINT THE RIGHT WAY. This is what separates a wound the NOTE mis-numbered
          from a genuinely NEW wound the CARD minted at the same site — Scott's rule: "if the wound
          reopens, it becomes a brand new wound and they will label it as a new wound".
@@ -1285,7 +1330,7 @@ function rcApplyByCardNum(S, priorList, cardWounds, edu, recDate){
          for legacy data, so this is the identical test for every record written before today. */
       const pb=Number(pw.born)||n, cb=Number(cw&&cw.born)||Number(cw&&cw.num)||0;
       if(!(pb>0 && cb>0 && pb>cb)) return;
-      ties++; hit=t;
+      hit=t;   /* ties is counted above, on the SITE match */
     });
     if(hit && ties===1){ _rcAdoptPriorWid(pw.wid, hit); pw.wid=hit; claimed[hit]=1;
       strays.push('folded a stray onto '+hit+' (was number '+n+')'); }
@@ -1721,7 +1766,33 @@ async function whCommit(){
        these numbers marked committed; that is the conservative direction (a number stays reserved, it
        is never handed out twice) and is what the high-water comment already asks for. */
     const fac=whFacility();
-    const hdr=currentHeader(); const date=(hdr.date||todayISO()); const provider=hdr.provider||'';
+    const hdr=currentHeader(); let date=(hdr.date||todayISO()); const provider=hdr.provider||'';
+    /* THE DATE OF THE VISIT, NOT THE DATE OF THE TYPING. Scott, 2026-08-03: a Crestmoor round happened
+       on 7-30 and four wounds are filed under 7-31 — a note written the next morning. "we fixed in PCC
+       already ... I just want it right moving forward."
+       The date above is whatever is in the Date box, and that box falls back to todayISO() whenever the
+       note was not filled from a card. So a note finished the morning after a round lands on the wrong
+       day, silently, in the record the composer reads for "last visit" and the one the facility bills
+       from. This file's own words: "a note dated the wrong day is a billing and record problem, not a
+       preference."
+       _p.rcDate is the date of the ROUND RECORD this note was built from, stamped at pull time. When
+       the two disagree, the round is almost always the right answer — but almost always is not always,
+       so it ASKS rather than silently rewriting a date a provider may have set deliberately. It cannot
+       fire for a hand-started note, which has no source round at all. */
+    try{
+      const _pd=activePt(), srcDate=String((_pd&&_pd.rcDate)||'').slice(0,10);
+      if(srcDate && date && srcDate!==date){
+        const useRound=confirm('This note is dated '+date+', but it was built from the '+srcDate+' round.\n\n'+
+          'A note dated the wrong day is a billing and record problem.\n\n'+
+          'OK — file it under '+srcDate+' (the day the visit happened)\n'+
+          'Cancel — keep '+date);
+        /* The box is set too, not just the committed value: leaving the field showing the old date
+           after agreeing to change it would have the note and the screen disagree, and the next save
+           would read the box and put it straight back. */
+        if(useRound){ date=srcDate;
+          try{ const _e=document.getElementById('ho_date'); if(_e) _e.value=srcDate; }catch(e){} }
+      }
+    }catch(e){}
     const mode=MODE, me=_whPtId();
     // These wounds are now COMMITTED — lock their numbers in permanently (a later delete won't reclaim them,
     // and next visit's carry-forward matches on them). Must run before the wreg snapshot so it's recorded.
@@ -4238,6 +4309,32 @@ function _rcSayRecUnread(){
   toast('Couldn’t read '+_rcRecUnread+' Round Card record'+(_rcRecUnread===1?'':'s')
       + ' just now, so this pull may be missing patients. Nothing is lost — try again in a moment.');
 }
+/* THE FOLDER-LEVEL TWIN OF _rcSayRecUnread — and the thing the ⚠ above was actually written about.
+   _rcRecUnread got its outside-the-branch report; _rcPullUnreadable never did. It stayed readable only
+   inside `if(!rounds.length)` and `if(!fresh.length)`, which is the precise shape the ⚠ forbids: a whole
+   BUILDING's folder failing to list (429, 5xx, expired token) while another building answers fine leaves
+   rounds.length > 0, so every one of those branches is skipped and the missing building says nothing at
+   all. The picker then presents one building's five patients as the whole round.
+   Scott, 2026-08-02, on the 7-22 round: "i only see university heights and none of crestmoor."
+   A partial read is the case this flag exists for. It is also the case it could never report. */
+function _rcSayPullUnreadable(){
+  if(!_rcPullUnreadable) return;
+  toast('Couldn’t read part of ClinicalVault just now, so a whole building may be missing from this '
+      + 'round. Nothing is lost — try again in a moment.');
+}
+/* RECORDS THIS ROUND HAS THAT ARE NOT YOURS. Counted, never named: the fence is right to drop another
+   provider's patients, but dropping them SILENTLY is what makes a short round look like the whole round.
+   _rcRoundsAvailable's own comment claims the menu "describes the round as it stands on the CARD" — it
+   cannot, because the list it counts has already been through this fence. Either the claim is true or
+   the difference is said out loud; this says it out loud. A count only — whose they are is not this
+   tool's business to announce. */
+let _rcProvExcluded=0;
+function _rcSayProvExcluded(){
+  if(!_rcProvExcluded) return;
+  toast(_rcProvExcluded+' record'+(_rcProvExcluded===1?'':'s')+' on the card '+(_rcProvExcluded===1?'is':'are')
+      + ' stamped to another provider, so '+(_rcProvExcluded===1?'it is':'they are')+' not in this list. '
+      + 'If that round was yours, check the Provider box matches the name on the card.');
+}
 function _rcProvOk(rec){
   try{
     /* ORDER MATTERS AGAIN. This used to end in .sort().join(' '), which made the comparison a token
@@ -4308,7 +4405,12 @@ async function rcListAllRecent(){
   /* Per building, the same distinction. One building failing must not silently shrink the round — and
      with thirty buildings, one 429 among them is the likely case, not the rare one. */
   const perFac=await Promise.all(facs.map(fac=>rcList(fac).catch(()=>{ _rcPullUnreadable=true; return []; })));
-  perFac.forEach(recs=>recs.forEach(r=>{ const d=String(r.date||'').slice(0,10); if(!d || d>=cutoff){ if((r&&r.id&&(seenIds[r.id]||everIds[r.id]!==undefined)) || _rcProvOk(r)) out.push(r); } }));
+  /* The `else` is the whole point: a record dropped by the provider fence used to leave no trace at all,
+     so a round of seventeen showed up as five with nothing to explain the other twelve. */
+  perFac.forEach(recs=>recs.forEach(r=>{ const d=String(r.date||'').slice(0,10); if(!d || d>=cutoff){
+    if((r&&r.id&&(seenIds[r.id]||everIds[r.id]!==undefined)) || _rcProvOk(r)) out.push(r);
+    else _rcProvExcluded++;
+  } }));
   return out;
 }
 
@@ -4695,12 +4797,17 @@ async function rcRepull(){
     toast('Looking for your rounds…');
     /* The listing already filters to THIS provider, and a record this workspace has pulled before still
        passes — which is exactly the set a reload should be able to choose from. */
-    _rcPullBlocked=false; _rcPullUnreadable=false; _rcRecUnread=0;
+    _rcPullBlocked=false; _rcPullUnreadable=false; _rcRecUnread=0; _rcProvExcluded=0;
     const recs=await rcListAllRecent();
     const rounds=_rcRoundsAvailable(recs);
     // BEFORE the empty check, because a dropped record is the PARTIAL case — the one this counter
     // exists for. Inside the branch below it could never fire.
     _rcSayRecUnread();
+    /* THE OTHER TWO PARTIAL CASES, said BEFORE the picker opens rather than inside the empty branch
+       below — the menu is about to be presented as the list of rounds, and if a building would not list
+       or a dozen records belong to someone else, it is not that. Choosing from a list you have not been
+       told is incomplete is the failure being fixed. */
+    if(rounds.length){ _rcSayPullUnreadable(); _rcSayProvExcluded(); }
     if(!rounds.length){
       /* "No records" is a claim about the clinical record store. An expired token, a 503 on the folder
          listing and "I cannot tell who you are" all reach here with an empty array — and until
@@ -4801,7 +4908,7 @@ async function rcAutoPull(reason){
   // when this one finishes (the card fires rc-saved per upload; back-to-back saves raced this guard).
   if(_rcPulling){ _rcPullAgain=true; return RES({reason:'in-flight'}); }
   _rcPulling=true;
-  _rcPullBlocked=false; _rcPullUnreadable=false; _rcRecUnread=0;   // fresh verdict per pull, or a stale one alarms forever
+  _rcPullBlocked=false; _rcPullUnreadable=false; _rcRecUnread=0; _rcProvExcluded=0;   // fresh verdict per pull, or a stale one alarms forever
   try{
     const recs=await rcListAllRecent();
     // BEFORE any early return, because a record that would not download is the PARTIAL case: most of the
@@ -4859,6 +4966,11 @@ async function rcAutoPull(reason){
       return RES({ran:true, blocked:_rcPullBlocked, lastDate:sel.lastDate, olderSkipped:sel.olderSkipped,
                   newerSkipped:sel.newerSkipped, futureSkipped:sel.futureSkipped});
     }
+    /* THE PARTIAL PULL, reported on the path where patients DID arrive. Everything above this point is
+       the "nothing came back" branch, which already had its say; below it the note fills up and looks
+       complete. A building that would not list, or a dozen records stamped to someone else, is exactly
+       as invisible here as it was in the picker until now. */
+    _rcSayPullUnreadable(); _rcSayProvExcluded();
     // Don't yank a provider off a note they're mid-way through: remember where they were, go back after.
     const returnPid=activePid, returnNamed=!!((((WS.patients[returnPid]||{}).name)||'').trim());
     const now=Date.now(), byFac={};
