@@ -383,7 +383,7 @@
    the identical value and we pass ours into its URL, so the two can tell whether they shipped as a
    pair. See build-stamp.js for why, and why it cannot be a number someone remembers to raise.
    Declared here, on the first line of the first script, so every later block can see it. */
-const BUILD = '2026-08-02.adfaaa7';
+const BUILD = '2026-08-03.b9fa95a';
 /* SANDBOX MODE (?sandbox=1, LOCALHOST ONLY — the hosted site ignores it): points uploads at the
    ToolSandbox site so end-to-end tests (incl. the Round Card overlay, which inherits it) never touch
    the real vault. Belt = sitePath swap (done where VAULT_CFG is declared); suspenders = _gfetch
@@ -3737,6 +3737,18 @@ function _rcRenamePrompt(oldName, newName){
    quietly returns nothing looks identical to a day with no rounds, and "cannot decide automatically" is
    not "nothing to do" — so the pull reads this and says so on screen. */
 let _rcPullBlocked=false;
+/* "NOTHING IS THERE" AND "I COULD NOT LOOK" ARE DIFFERENT ANSWERS, and only one of them is safe to
+   show a provider. Every listing failure here used to return an empty array: a 429 from Microsoft's
+   per-user throttle (3,000 requests / 5 minutes — a 30-facility pull is a burst big enough to hit it),
+   an expired token, a 503, or a 403 on a folder this provider is not permitted to see. All of them
+   arrived as "No round card records for you", which reads as the card never having sent them.
+   The Round Card already got this right — _vaultList tags anything that is not a 404 as
+   `vaultUnreadable` — and this side never did. The comment on the toast below has described the hole
+   since it was written; this is the flag that closes it.
+   IT IS ALSO THE PREREQUISITE FOR PER-FACILITY PERMISSIONS: scoping a folder makes Graph answer 404
+   for buildings a provider cannot see, and until the difference is visible, locking down permissions
+   would produce confident wrong answers rather than errors. */
+let _rcPullUnreadable=false;
 function _rcProvOk(rec){
   try{
     /* ORDER MATTERS AGAIN. This used to end in .sort().join(' '), which made the comparison a token
@@ -3784,8 +3796,11 @@ function _rcProvOk(rec){
 async function rcListAllRecent(){
   const ctx=await _draftContext(); if(!ctx) return [];
   const rootUrl='https://graph.microsoft.com/v1.0/drives/'+ctx.driveId+'/root:/RoundCards:/children?$top=200';
-  let rr; try{ rr=await _gfetch(rootUrl, ctx.token); }catch(e){ return []; }
-  if(!rr || !rr.ok) return [];                                  // 404 = no RoundCards folder yet -> nothing to pull
+  let rr; try{ rr=await _gfetch(rootUrl, ctx.token); }catch(e){ _rcPullUnreadable=true; return []; }
+  // 404 is the ONE status that really means nothing is there — the folder has never been created.
+  // Everything else (429, 401, 403, 5xx) means we could not look, and saying "no rounds" then is a lie.
+  if(!rr) { _rcPullUnreadable=true; return []; }
+  if(!rr.ok){ if(rr.status!==404) _rcPullUnreadable=true; return []; }
   // Buildings, not records — a provider covers two or three, so this cannot realistically page. Drained
   // anyway, because "it cannot happen here" is how the flat folder below got missed in the first place.
   const facs=(await _vaultDrain(await rr.json(), ctx.token)).items.filter(it=>it.folder).map(it=>it.name);
@@ -3801,7 +3816,9 @@ async function rcListAllRecent(){
      "you have already taken this version of it". Two different questions. */
   const everIds=_rcEverLoad();
   // PERF: every building's folder is read IN PARALLEL (was one-by-one — the other half of the crawl).
-  const perFac=await Promise.all(facs.map(fac=>rcList(fac).catch(()=>[])));
+  /* Per building, the same distinction. One building failing must not silently shrink the round — and
+     with thirty buildings, one 429 among them is the likely case, not the rare one. */
+  const perFac=await Promise.all(facs.map(fac=>rcList(fac).catch(()=>{ _rcPullUnreadable=true; return []; })));
   perFac.forEach(recs=>recs.forEach(r=>{ const d=String(r.date||'').slice(0,10); if(!d || d>=cutoff){ if((r&&r.id&&(seenIds[r.id]||everIds[r.id]!==undefined)) || _rcProvOk(r)) out.push(r); } }));
   return out;
 }
@@ -4175,16 +4192,18 @@ async function rcRepull(){
     toast('Looking for your rounds…');
     /* The listing already filters to THIS provider, and a record this workspace has pulled before still
        passes — which is exactly the set a reload should be able to choose from. */
-    _rcPullBlocked=false;
+    _rcPullBlocked=false; _rcPullUnreadable=false;
     const recs=await rcListAllRecent();
     const rounds=_rcRoundsAvailable(recs);
     if(!rounds.length){
       /* "No records" is a claim about the clinical record store. An expired token, a 503 on the folder
-         listing and "I cannot tell who you are" all reach here with an empty array, and only the last
-         has a message — which the early return used to make unreachable. */
+         listing and "I cannot tell who you are" all reach here with an empty array — and until
+         _rcPullUnreadable existed, only the last of those had a message. */
       toast(_rcPullBlocked
         ? 'Could not tell who you are, so nothing was loaded — put your name in the Provider box, or sign in'
-        : 'No round card records for you in the last 60 days');
+        : _rcPullUnreadable
+          ? 'Couldn’t reach ClinicalVault to check just now — nothing was loaded, and nothing is lost. Try again in a moment.'
+          : 'No round card records for you in the last 60 days');
       return;
     }
     let pick=rounds[0];
@@ -4276,7 +4295,7 @@ async function rcAutoPull(reason){
   // when this one finishes (the card fires rc-saved per upload; back-to-back saves raced this guard).
   if(_rcPulling){ _rcPullAgain=true; return RES({reason:'in-flight'}); }
   _rcPulling=true;
-  _rcPullBlocked=false;                 // fresh verdict per pull, or a stale one alarms forever
+  _rcPullBlocked=false; _rcPullUnreadable=false;   // fresh verdict per pull, or a stale one alarms forever
   try{
     const recs=await rcListAllRecent();
     WS.rcPulled=WS.rcPulled||{};                                // session-only dedup for legacy records that predate stable ids
@@ -4316,6 +4335,9 @@ async function rcAutoPull(reason){
       // Nothing came in. Say WHY when the reason is "I could not tell who you are" — silence here reads
       // as "no rounds today", which is a different and much more comforting thing.
       if(_rcPullBlocked) toast('Couldn’t tell who you are, so no Round Card patients were brought in. Sign in, or set the Provider box, then reopen.');
+      // Same reasoning, the other cause: we could not READ the store. Silence here reads as "no rounds
+      // today", which is the most comforting possible answer and the wrong one.
+      else if(_rcPullUnreadable) toast('Couldn’t reach ClinicalVault just now, so no Round Card patients were brought in. Nothing is lost — reopen in a moment to retry.');
       /* AND SAY WHAT WAS DECLINED. A pull that brings in nothing lands here, before the banner below
          that reports skipped records — so a day where everyone was discharged or not seen looked
          exactly like a quiet morning, while older rounds still owing notes sat unmentioned. Four
