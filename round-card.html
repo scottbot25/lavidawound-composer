@@ -265,7 +265,7 @@
    it is a hash of BOTH shipped files, so editing either one makes it provably stale and the sweep says
    so. The composer carries the identical value and passes its own into our URL (?b=), which is how the
    two can tell whether they shipped as a pair. See build-stamp.js. */
-const BUILD = '2026-08-03.a54a1f4';
+const BUILD = '2026-08-03.b9095e5';
 /* A top-level `const` is NOT a property of window — only `var` and function declarations are. So the
    composer, reading across the frame, gets `undefined` for our build no matter what we declared here,
    and would conclude on EVERY open that this card is too old to have one. Found by opening the overlay
@@ -497,6 +497,42 @@ const WOUND_LOCATION_GROUPS = [
     'Left foot',
     'Right plantar foot',
     'Left plantar foot',
+    /* TOE ASPECTS, added 2026-08-03. Scott: "add the toe aspects", after two real records read
+       "Left great toe medial side" and "L 2nd toe, side" and both had to be flattened to the whole
+       toe. The card had SIXTEEN toe entries and not one carried an aspect - no medial, lateral,
+       dorsal or plantar anywhere - which is the worst place to have that gap, because toes are
+       where diabetic wounds actually happen.
+       THE GREAT TOE GETS ALL FIVE; toes 2-5 get dorsal and tip only. That is a judgement and it is
+       flagged to Scott rather than hidden: a wound on the SIDE of a lesser toe is usually the
+       interdigital space, which the card already names, and giving four lesser toes five aspects
+       each would add forty entries to a picker used at a bedside. If he says the side of a lesser
+       toe is charted distinctly from the web space, the rest follow the same pattern. */
+    'Right great toe - medial',
+    'Right great toe - lateral',
+    'Right great toe - dorsal',
+    'Right great toe - plantar',
+    'Right great toe - tip',
+    'Left great toe - medial',
+    'Left great toe - lateral',
+    'Left great toe - dorsal',
+    'Left great toe - plantar',
+    'Left great toe - tip',
+    'Right 2nd toe - dorsal',
+    'Right 2nd toe - tip',
+    'Right 3rd toe - dorsal',
+    'Right 3rd toe - tip',
+    'Right 4th toe - dorsal',
+    'Right 4th toe - tip',
+    'Right 5th toe - dorsal',
+    'Right 5th toe - tip',
+    'Left 2nd toe - dorsal',
+    'Left 2nd toe - tip',
+    'Left 3rd toe - dorsal',
+    'Left 3rd toe - tip',
+    'Left 4th toe - dorsal',
+    'Left 4th toe - tip',
+    'Left 5th toe - dorsal',
+    'Left 5th toe - tip',
   ]],
   ['Amputation & surgical sites', [
     'Right surgical incision','Left surgical incision','Surgical incision - midline',
