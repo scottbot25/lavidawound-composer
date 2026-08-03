@@ -265,7 +265,7 @@
    it is a hash of BOTH shipped files, so editing either one makes it provably stale and the sweep says
    so. The composer carries the identical value and passes its own into our URL (?b=), which is how the
    two can tell whether they shipped as a pair. See build-stamp.js. */
-const BUILD = '2026-08-03.8397cf4';
+const BUILD = '2026-08-03.8e2b8ed';
 /* A top-level `const` is NOT a property of window — only `var` and function declarations are. So the
    composer, reading across the frame, gets `undefined` for our build no matter what we declared here,
    and would conclude on EVERY open that this card is too old to have one. Found by opening the overlay
@@ -3588,7 +3588,20 @@ function _cfNameKey(s){ return String(s||'').toLowerCase().replace(/[^a-z0-9]+/g
    Rails: preview is the only entry point and shows every file with its verdict; deleting takes a second
    explicit action plus a confirm; it lives behind ?maintenance=1 so it can never be tapped during rounds;
    deletes go to the SharePoint recycle bin. It never runs on a timer. */
-const PURGE_AFTER_DAYS=45;
+/* 90, NOT 45 — AND THE OLD NUMBER WAS A LOADED GUN.
+   This must never be shorter than the longest window anything READS back over, or the cleanup deletes
+   records the tools are still actively asking for. At 45 it was:
+     RR_LOOKBACK_DAYS = 60   the round picker's reach-back
+     RC_LIST_DAYS     = 60   the composer's pull window
+     RC_EVER_TTL_MS   = 90   how long the composer remembers a record at all
+   So a purge at 45 days would have deleted rounds the picker still offers and the composer still pulls,
+   between days 46 and 60 — and the symptom would have been "my round vanished", hunted as a bug rather
+   than recognised as policy. It has only ever been safe because nothing fires it: the button lives
+   behind ?maintenance=1 and runs on no timer.
+   90 clears the 60-day floor with real margin and matches RC_EVER_TTL_MS, so the system's two notions
+   of "recent" finally agree. Scott confirmed 90 on 2026-08-03; see the Data Retention & Destruction
+   Policy. If the picker's reach-back is ever shortened, this can come down with it — not before. */
+const PURGE_AFTER_DAYS=90;
 let _purgePlan=null;
 function _purgeDaysOld(dateStr){
   const d=Date.parse(String(dateStr||'')+'T00:00:00');
