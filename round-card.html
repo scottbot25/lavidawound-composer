@@ -265,7 +265,7 @@
    it is a hash of BOTH shipped files, so editing either one makes it provably stale and the sweep says
    so. The composer carries the identical value and passes its own into our URL (?b=), which is how the
    two can tell whether they shipped as a pair. See build-stamp.js. */
-const BUILD = '2026-08-03.7994f4c';
+const BUILD = '2026-08-03.b23db5f';
 /* A top-level `const` is NOT a property of window — only `var` and function declarations are. So the
    composer, reading across the frame, gets `undefined` for our build no matter what we declared here,
    and would conclude on EVERY open that this card is too old to have one. Found by opening the overlay
@@ -4084,11 +4084,18 @@ async function rcLoadRoundFor(dateStr, facRaw){
       _rcNoRoundNotice(date, facR); return 'empty';                 // folder never created = no round
     }
 
+    /* THE LISTING SUCCEEDING IS NOT THE SAME AS THE RECORDS BEING READABLE, and this is where the
+       difference used to disappear. The 'unreadable' verdict above covers a folder that would not
+       LIST; a record that would not DOWNLOAD — a 429 from the per-user throttle, a 403, a 5xx, an
+       expired downloadUrl — became null here and fell through to "No round on file" below. That is
+       literally a 429 reading as no rounds, one level down from the case that was already fixed, and
+       it is the more alarming of the two: the provider is told a round she charted is not there. */
     const cands=(files||[]);
+    let recUnread=0;
     const recs=await Promise.all(cands.map(f=>{
       const dl=f['@microsoft.graph.downloadUrl'];
-      if(dl) return fetch(dl).then(r=>r.ok?r.json():null).catch(()=>null);
-      return _vaultReadJson(token, driveId, f.path).catch(()=>null);
+      if(dl) return fetch(dl).then(r=>r.ok?r.json():Promise.reject(new Error('HTTP '+r.status))).catch(()=>{ recUnread++; return null; });
+      return _vaultReadJson(token, driveId, f.path).catch(()=>{ recUnread++; return null; });
     }));
 
     const mine=[];
@@ -4098,7 +4105,16 @@ async function rcLoadRoundFor(dateStr, facRaw){
          && String(rec.date||'').slice(0,10)===date
          && _cardProvOk(rec, okProv, false)) mine.push(rec);
     });
+    /* Nothing usable came back AND something would not read: that is "could not check", not "no round".
+       Checked before the empty notice, never inside it. */
+    if(!mine.length && recUnread){
+      toast('Couldn’t read '+recUnread+' saved record'+(recUnread===1?'':'s')+' for that day, so it is not possible to say whether a round is on file. Nothing is lost — set the date again to retry.');
+      return 'unreadable';
+    }
     if(!mine.length){ _rcNoRoundNotice(date, facR); return 'empty'; }
+    // A PARTIAL round is the quieter half of the same defect: the round loads, one patient is missing,
+    // and nothing says so. Said whether or not anything came back.
+    if(recUnread) setTimeout(()=>toast('Couldn’t read '+recUnread+' saved record'+(recUnread===1?'':'s')+' for that day, so this round may be missing patients. Nothing is lost — set the date again to retry.'), 900);
 
     /* Re-check AFTER the awaits. SharePoint took a moment; in that moment the provider may have
        started a patient, or moved on to another date entirely. Landing a stale round on top of

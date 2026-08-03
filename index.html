@@ -192,6 +192,8 @@
   .wh-ok{background:rgba(43,179,163,.09);border-color:#9ad5cd;color:#1d6a61}
   .wh-warn{background:#fff4e2;border-color:#f0c98a;color:#7a4d10}
   .wh-busy{background:var(--panel2);border-color:var(--line);color:var(--muted)}
+  .wh-retry{margin-left:6px;padding:3px 10px;font:inherit;font-size:12.5px;font-weight:650;cursor:pointer;
+            border:1px solid #c8912f;border-radius:7px;background:#fff;color:#7a4d10}
   .wound-clock{background:transparent;border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:3px 9px;cursor:pointer;font-size:11.5px}
   .wound-clock:hover{border-color:var(--accent)}
   .wound-rm{margin-left:auto;background:transparent;border:1px solid var(--line);color:#c0392b;border-radius:6px;padding:3px 9px;cursor:pointer;font-size:11.5px}
@@ -383,7 +385,7 @@
    the identical value and we pass ours into its URL, so the two can tell whether they shipped as a
    pair. See build-stamp.js for why, and why it cannot be a number someone remembers to raise.
    Declared here, on the first line of the first script, so every later block can see it. */
-const BUILD = '2026-08-03.7994f4c';
+const BUILD = '2026-08-03.b23db5f';
 /* SANDBOX MODE (?sandbox=1, LOCALHOST ONLY — the hosted site ignores it): points uploads at the
    ToolSandbox site so end-to-end tests (incl. the Round Card overlay, which inherits it) never touch
    the real vault. Belt = sitePath swap (done where VAULT_CFG is declared); suspenders = _gfetch
@@ -1354,7 +1356,36 @@ function _rcCardWid(wid){ return /^c\d+$/.test(String(wid)); }
    2026-07-31 ("a wound that has history, deleted, stays deleted") with no mechanism behind it.
    Keyed on the WID now, which is what identifies a wound across visits. Legacy numeric entries are
    still honoured, so a tombstone written before this change keeps working. */
-function _rcDeletedNums(p){ const d=p&&p.wcDel; return Array.isArray(d)?d:[]; }
+/* ⚠ AND IT HAS TO OUTLIVE THE PATIENT OBJECT, which is what it did not do. The tombstone lived on the
+   patient (`p.wcDel`), and `removePatient` is `delete WS.patients[pid]` — so removing the patient took
+   the record of her deleted wounds with it. Press "Reload patients from the card" and pick the round
+   that still holds her record and she comes back, and the wound comes back with her, carrying last
+   visit's measurements and an A&P order line for treatment that was stopped. Scott's own rule
+   ("a wound that has history, deleted, stays deleted") with the mechanism dying one delete earlier
+   than the thing it protects against.
+   DRIVEN, NOT READ: tombstoned -> true, then removePatient + reload -> false.
+   So it lives on the WORKSPACE, keyed by the patient identity that survives a re-pull — the card's
+   ptId, which is minted once and carried through carry-forward. Name+building is the fallback for a
+   hand-typed patient who has no id. WS is what the draft persists, so this survives a reload too.
+   ⚠ The fallback key MOVES if such a patient is renamed or reassigned; the id path (every card-pulled
+   patient) does not, which is the case that matters. */
+function _wcKey(p){
+  const id=String((p&&(p.rcPtId||p.srcRcId))||'').trim();
+  if(id) return 'id:'+id;
+  return 'nm:'+whNameKey((p&&p.name)||'')+'|'+whNameKey((p&&p.facility)||'');
+}
+function _wcStore(){ try{ if(!WS.wcDel || typeof WS.wcDel!=='object') WS.wcDel={}; return WS.wcDel; }catch(e){ return {}; } }
+function _wcRemember(p, k){
+  try{ const S=_wcStore(), key=_wcKey(p); const d=S[key]=Array.isArray(S[key])?S[key]:[];
+    if(!d.some(x=>String(x)===String(k))) d.push(String(k)); }catch(e){}
+}
+/* Reads BOTH: the workspace store and any legacy per-patient list. A tombstone written before this
+   change keeps working, which is the same promise the wid/number note above makes. */
+function _rcDeletedNums(p){
+  const own=(p&&Array.isArray(p.wcDel))?p.wcDel:[];
+  let ws=[]; try{ const s=_wcStore()[_wcKey(p)]; if(Array.isArray(s)) ws=s; }catch(e){}
+  return ws.length ? ws.concat(own) : own;
+}
 function _rcWasDeleted(p, wid, num){
   const d=_rcDeletedNums(p); if(!d.length) return false;
   const k=(wid==null?'':String(wid)); if(k && d.some(x=>String(x)===k)) return true;
@@ -1407,10 +1438,9 @@ function releaseWoundNum(wid, p){ p=p||activePt(); const R=wreg(p); const k=Stri
      measurements and its A&P order line, silently.
      Keyed by NUMBER because that is what the card sends and what identifies a wound across visits;
      a committed number is pinned, so compaction can never move it onto a different wound. */
-  if(e.committed){ try{
-    const d=p.wcDel=Array.isArray(p.wcDel)?p.wcDel:[];
-    if(!d.some(x=>String(x)===k)) d.push(k);        // the WID, not the number - see _rcWasDeleted
-  }catch(e2){} }
+  // On the WORKSPACE, not on the patient — removePatient deletes the patient object, and the tombstone
+  // has to outlive it or a reload brings the wound back. See _wcKey.
+  if(e.committed) _wcRemember(p, k);               // the WID, not the number - see _rcWasDeleted
   delete R.byId[k];
   /* THE DELETED WOUND'S ORDERS GO WITH IT — ON EVERY PATH. This used to sit below the pinned branch's
      early return, so removing a CARD-owned wound left its "Wound N (location): orders" line behind in
@@ -1516,37 +1546,108 @@ function whFacility(){ const p=activePt(); return String((p&&p.facility)||'').tr
 function whSlug(s){ return String(s||'').replace(/[\\/:*?"<>|#%]/g,'_').replace(/\s+/g,' ').trim() || 'unknown'; }
 // Word-order- and punctuation-insensitive key: "Smith, Robert" == "robert smith" == "SMITH  ROBERT".
 function whNameKey(s){ return String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim().split(' ').filter(Boolean).sort().join(' '); }
-function whSegs(){ return ['WoundHistory', whSlug(whFacility())]; }
+/* EVERY PATH HAS AN EXPLICIT FORM AND A CURRENT-PATIENT FORM, and the explicit one is the real
+   implementation. Everything here used to read the ACTIVE patient through whFacility() — which is
+   correct for reading and writing the note in front of you, and wrong for anything that has to touch
+   somebody else's file. The Reassign dropdown lists EVERY named patient in the workspace, so a move
+   built on whFacility()/getPatient() reads and writes under whoever happens to be open instead: it
+   moves the wrong resident's history, or files one patient's visits under another patient's name.
+   One implementation, two entry points — not two implementations that can disagree. */
+function whFacSeg(fac){ return whSlug(String(fac||'').trim() || 'Unassigned'); }   // matches whFacility()'s own fallback
+function whSegsAt(fac){ return ['WoundHistory', whFacSeg(fac)]; }
 function whFile(name){ return whSlug(name)+'.json'; }
-function whLocalKey(name){ return 'lavida_wh::'+whSlug(whFacility())+'::'+whNameKey(name); }
+/* ⚠ THE TWO MODES NAME A PATIENT BY DIFFERENT RULES AND THAT IS NOT AN OVERSIGHT. The cloud filename
+   is whSlug(name) — case and word order preserved. The local key is whNameKey(name) — lower-cased,
+   punctuation squashed and tokens SORTED. So "Smith, Robert" and "Robert Smith" are ONE sessionStorage
+   key and TWO separate cloud files. Neither can change (whNameKey also keys _whKey; whSlug names every
+   file that exists), so anything that reasons about collisions must do it per mode. A preview-mode test
+   proves nothing about production. */
+function whLocalKeyAt(fac, name){ return 'lavida_wh::'+whFacSeg(fac)+'::'+whNameKey(name); }
 
-function whBlank(name){ return { v:1, tool:'wound-composer', patient:name||'', facility:whFacility(), visits:[] }; }
+function whBlankAt(fac, name){ return { v:1, tool:'wound-composer', patient:name||'', facility:String(fac||'').trim(), visits:[] }; }
+function whBlank(name){ return whBlankAt(whFacility(), name); }
 
-async function whLoad(name){
+/* "IT IS NOT THERE" AND "I COULD NOT LOOK" ARE DIFFERENT ANSWERS, and this function used to give the
+   same one — null — to a 404, a 429, a 403, an expired token, a dropped connection and a damaged file.
+   Every caller read that null as "this patient has no history".
+
+   WHAT IT COST. whCommit does `(await whLoad(name)) || whBlank(name)` and whSave then PUTs the whole
+   object with no If-Match — so ONE throttled read, at the moment the provider pressed Copy, replaced
+   every prior visit with a file holding today's alone, and she was told "Copied". Microsoft's per-user
+   throttle is 3,000 requests / 5 minutes and a 30-facility pull is a burst big enough to hit it (the
+   same throttle the Round Card's own comments are written about), so this was a live path, not a
+   theoretical one. Meanwhile the banner printed "No prior visit found … (First tracked visit: history
+   starts today.)" — the tool making a confident, FALSE clinical claim, in the one case where the whole
+   point of that banner is that silent-empty must never look like "these wounds are new".
+
+   SO: null means a DEFINITE 404 and nothing else. Every other outcome THROWS, tagged `vaultUnreadable`
+   — the same flag the Round Card's _vaultList has used since 2026-08-02, so both tools say "I could not
+   look" the same way and a caller written against one works against the other. */
+function _whUnreadable(msg, extra){
+  const e=new Error(msg); e.vaultUnreadable=true;
+  if(extra) Object.keys(extra).forEach(k=>{ e[k]=extra[k]; });
+  return e;
+}
+/* A FILE THAT EXISTS AND HOLDS `null` IS NOT AN ABSENT FILE, and the two were the same value here.
+   `JSON.parse('null')` is `null`, and so is a 404 — so a history file left holding `null`, `""`, `0` or
+   `false` (the shape a half-finished PUT leaves behind) came back as "nothing filed yet", whCommit took
+   the whBlank path, and the patient's history was replaced while she was told "Copied". Exactly the
+   defect the throw-on-unreadable work was written to close, arriving through the one door it left open.
+   So whLoadAt's contract is now sayable in one sentence: IT RETURNS A WELL-FORMED HISTORY, OR null FOR A
+   DEFINITE 404 (or a genuine sessionStorage miss), OR IT THROWS. There is no fourth outcome.
+   Driven, not read — a stored `null` came back `true` from whCommit with the file replaced. */
+function _whOrThrow(doc, msg){ if(!_whShaped(doc)) throw _whUnreadable(msg); return doc; }
+async function whLoad(name){ return whLoadAt(whFacility(), name); }
+async function whLoadAt(fac, name){
   if(!name || !name.trim()) return null;
   if(WH_LOCAL()){
-    try{ const r=sessionStorage.getItem(whLocalKey(name)); return r?JSON.parse(r):null; }catch(e){ return null; }
+    let raw;
+    try{ raw=sessionStorage.getItem(whLocalKeyAt(fac, name)); }
+    catch(e){ throw _whUnreadable('Couldn’t read this device’s saved wound history.'); }
+    if(raw==null) return null;                                   // a genuine miss — nothing filed yet
+    // A damaged file is UNREADABLE, not empty. Refusing costs a loud message every copy; the other way
+    // round silently overwrites whatever could still have been recovered from it by hand.
+    let doc;
+    try{ doc=JSON.parse(raw); }
+    catch(e){ throw _whUnreadable('This patient’s saved wound history is damaged and could not be read.'); }
+    return _whOrThrow(doc, 'This patient’s saved wound history is damaged and could not be read.');
   }
-  try{
-    const ctx=await _draftContext(); if(!ctx) return null;
-    const metaUrl='https://graph.microsoft.com/v1.0/drives/'+ctx.driveId+'/root:/'+_encPath(whSegs().join('/')+'/'+whFile(name));
-    const m=await _gfetch(metaUrl, ctx.token); if(!m.ok) return null;
-    const meta=await m.json();
-    // Read via @microsoft.graph.downloadUrl: /content 302s to sharepoint and the auth header survives.
-    const dl=meta['@microsoft.graph.downloadUrl']; if(!dl) return null;
-    const c=await fetch(dl); if(!c.ok) return null;
-    return await c.json();
-  }catch(e){ return null; }
+  // Signed out is its OWN state, not "no history" — the Round Card returns it as a distinct verdict too.
+  const ctx=await _draftContext();
+  if(!ctx) throw _whUnreadable('Not signed in, so this patient’s wound history could not be read.', {signedOut:true});
+  const metaUrl='https://graph.microsoft.com/v1.0/drives/'+ctx.driveId+'/root:/'+_encPath(whSegsAt(fac).join('/')+'/'+whFile(name));
+  // A DEADLINE, because neither read here had one: a stalled request hung with nothing on screen while
+  // the note quietly behaved as though the patient were new. Same wrapper the draft save uses.
+  let m;
+  try{ m=await _netTmo(_gfetch(metaUrl, ctx.token), 15000); }
+  catch(e){ throw _whUnreadable('Couldn’t reach ClinicalVault to read this patient’s wound history.'); }
+  if(m.status===404) return null;                                // THE ONE status that means "nothing filed yet"
+  if(!m.ok) throw _whUnreadable('Couldn’t read this patient’s wound history (HTTP '+m.status+').', {status:m.status});
+  let meta;
+  try{ meta=await m.json(); }
+  catch(e){ throw _whUnreadable('Couldn’t read this patient’s wound history — the vault’s reply was unusable.'); }
+  // Read via @microsoft.graph.downloadUrl: /content 302s to sharepoint and the auth header survives.
+  const dl=meta['@microsoft.graph.downloadUrl'];
+  if(!dl) throw _whUnreadable('Couldn’t read this patient’s wound history — the vault returned no download link.');
+  let c;
+  try{ c=await _netTmo(fetch(dl), 15000); }
+  catch(e){ throw _whUnreadable('Couldn’t download this patient’s wound history.'); }
+  if(!c.ok) throw _whUnreadable('Couldn’t download this patient’s wound history (HTTP '+c.status+').', {status:c.status});
+  let doc;
+  try{ doc=await c.json(); }
+  catch(e){ throw _whUnreadable('This patient’s stored wound history is damaged and could not be read.'); }
+  return _whOrThrow(doc, 'This patient’s stored wound history is damaged and could not be read.');
 }
-async function whSave(name, hist){
+async function whSave(name, hist){ return whSaveAt(whFacility(), name, hist); }
+async function whSaveAt(fac, name, hist){
   if(!name || !name.trim()) return false;
   if(WH_LOCAL()){
-    try{ sessionStorage.setItem(whLocalKey(name), JSON.stringify(hist)); return true; }catch(e){ return false; }
+    try{ sessionStorage.setItem(whLocalKeyAt(fac, name), JSON.stringify(hist)); return true; }catch(e){ return false; }
   }
   try{
     const ctx=await _draftContext(); if(!ctx) return false;
-    await _vaultEnsureFolders(ctx.token, ctx.driveId, whSegs());
-    const url='https://graph.microsoft.com/v1.0/drives/'+ctx.driveId+'/root:/'+_encPath(whSegs().join('/')+'/'+whFile(name))+':/content';
+    await _vaultEnsureFolders(ctx.token, ctx.driveId, whSegsAt(fac));
+    const url='https://graph.microsoft.com/v1.0/drives/'+ctx.driveId+'/root:/'+_encPath(whSegsAt(fac).join('/')+'/'+whFile(name))+':/content';
     const r=await _gfetch(url, ctx.token, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(hist)});
     return r.ok;
   }catch(e){ return false; }
@@ -1581,26 +1682,120 @@ async function whCommit(){
     if(!WH_ENABLED()) return false;
     const name=getPatient(); if(!name || !name.trim()) return false;
     if(!woundRegistry || !woundRegistry.length) return false;
-    const h=(await whLoad(name)) || whBlank(name);
-    h.patient=name; h.facility=whFacility();
-    const hdr=currentHeader(); const date=(hdr.date||todayISO());
+    /* A move is relocating a history file right now. This is a read-modify-write with the path
+       recomputed at each end, so carrying on could write today's visit into the building the move is
+       emptying — and that file would then be the only copy nobody looks at. */
+    if(_whMoving) return 'busy';
+    _whCommitting=true;
+    /* THE WOUND LIST ON SCREEN IS ONLY THE WHOLE PICTURE IF THE HISTORY WAS READ. A follow-up whose
+       prior visit could not be read opens with ONE blank wound — whSeedIds returns null and the caller
+       falls through to addWound() — and filing that as the newest visit is WORSE than filing nothing:
+       whPriorVisit takes the LAST visit only, so from next week on every other wound this patient has
+       is gone from carry-forward, permanently and silently. One 429 would amputate a wound list.
+       Refusing costs a single history entry. PCC still has the note, and PCC is the legal truth.
+       NOT limited to follow-ups, deliberately: rcPrefill refreshes the prior for EVERY card-pulled
+       patient and then picks the note type from it, so an unreadable history is exactly what makes a
+       returning resident open as an Initial — the case where the on-screen list is least trustworthy
+       is the one that no longer looks like a follow-up. The rule is simply: we do not write to a
+       history we could not read. */
+    if(_whPrior && _whPrior.key===_whKey() && _whPrior.unreadable) return 'unreadable';
+    /* ============ EVERYTHING THAT DESCRIBES THIS VISIT IS TAKEN NOW, BEFORE THE NETWORK READ =======
+       Only `name` used to be captured. The facility, the wound registry, the snapshot, the patient id,
+       the note type and even the SAVE PATH were all re-resolved AFTER the await — and every one of them
+       reads the ACTIVE patient, which anything can change while a network read is in flight.
+       `rcMergeIntoPatient` calls `switchPatient(pid)` on its FIRST line, and it runs from the card's
+       `rc-saved` postMessage and from the deferred overlay pull — so a card auto-save landing during a
+       Copy is an ordinary Tuesday, not a knife-edge race.
+       DRIVEN, NOT READ. Two patients, the switch staged inside the await:
+         wrote to  lavida_wh::Wheatridge::alpha ann
+         patient   Alpha, Ann        <- her name
+         facility  Wheatridge        <- HIS building
+         rcId      pt-B              <- HIS patient id
+         wounds    {b1: …}           <- HIS wounds
+         returned  true              <- and she was told "Copied"
+       A phantom third file, holding one resident's wounds under another resident's name, in a third
+       building. Neither real history was touched, so nothing anywhere would ever look wrong.
+       ⚠ THE MARKING MOVES UP TOO, and it has to: `e.committed`/`committedHere` and the committedMax
+       high-water mark MUTATE `wreg()`, which is the ACTIVE patient's registry — in the run above they
+       landed on the other patient. The cost of moving them is that a commit later refused still leaves
+       these numbers marked committed; that is the conservative direction (a number stays reserved, it
+       is never handed out twice) and is what the high-water comment already asks for. */
+    const fac=whFacility();
+    const hdr=currentHeader(); const date=(hdr.date||todayISO()); const provider=hdr.provider||'';
+    const mode=MODE, me=_whPtId();
     // These wounds are now COMMITTED — lock their numbers in permanently (a later delete won't reclaim them,
     // and next visit's carry-forward matches on them). Must run before the wreg snapshot so it's recorded.
     woundRegistry.forEach(w=>{ const e=wreg().byId[String(w.id)]; if(e){ e.committed=true; e.committedHere=true; } });   // finalized THIS visit -> number locked against reuse now
     { const R=wreg(); Object.keys(R.byId).forEach(k=>{ const e=R.byId[k]; if(e&&e.committed) R.committedMax=Math.max(R.committedMax||0, e.num||0); }); }   // high-water mark: a committed number stays reserved even if its entry is later deleted
+    const wounds=whSnapshotWounds();
+    const wregSnap=JSON.parse(JSON.stringify(wreg().byId||{}));
+    let h;
+    try{
+      /* A BLANK MAY ONLY EVER FOLLOW A DEFINITE 404 — and `|| whBlank(name)` did not say that. It said
+         "or anything FALSY". whLoadAt returns null for a 404 and for nothing else, so any other falsy
+         value means the file WAS there and parsed to something that is not a history: a literal `null`,
+         an empty string, a 0 — the shape a half-finished PUT leaves behind. Treating that as "no
+         history yet" overwrote it and returned true, so the provider was told "Copied" while the
+         patient's history was replaced. That is the exact defect this guard exists for, arriving
+         through a second door: the THROW path was closed and the FALSY path was not.
+         Found by an adversarial scenario sweep and DRIVEN, not read — a stored `null` came back `true`
+         with the file replaced. whMovePlan already drew this distinction (_whShaped -> 'src-damaged');
+         whCommit did not, which is what one rule implemented in two places always costs. */
+      // whLoadAt(fac, …), NEVER whLoad(name) — whLoad re-reads whFacility(), so the read itself would
+      // go to whichever building the provider had moved to while this was awaiting.
+      const had = await whLoadAt(fac, name);
+      if(had === null) h = whBlankAt(fac, name);     // the ONE case a blank is allowed
+      else if(!_whShaped(had)) return 'unreadable';  // present, but not a history — never overwrite it
+      else h = had;
+    }
+    catch(e){
+      /* WE DID NOT READ THE FILE, SO WE DO NOT KNOW WHAT IS IN IT. whSave PUTs the whole object with no
+         If-Match, so falling through to whBlank() here replaces every prior visit with today's alone.
+         A blank may only ever follow a DEFINITE 404 — which is the one case whLoad still returns null for. */
+      if(e && e.vaultUnreadable) return 'unreadable';
+      throw e;
+    }
+    // EVERY VALUE BELOW WAS TAKEN BEFORE THE READ. Nothing here may reach for the active patient again.
+    h.patient=name; h.facility=fac;
     /* STAMP WHO THIS VISIT BELONGS TO. The file is named after the patient, and two residents can
        share a name — so the name alone cannot say whose visit this is. The card's per-patient id
        can, and whPriorVisit reads it back to keep the two apart. */
-    const rec={ date, provider:hdr.provider||'', mode:MODE, savedAt:Date.now(), wounds:whSnapshotWounds(),
-                rcId:_whPtId()||undefined,
-                wreg:JSON.parse(JSON.stringify(wreg().byId||{})) };
-    const i=h.visits.findIndex(v=>v.date===date);
+    const rec={ date, provider, mode, savedAt:Date.now(), wounds,
+                rcId:me||undefined, wreg:wregSnap };
+    /* THE WRITER AND THE READER MUST AGREE ABOUT WHO A VISIT BELONGS TO. This matched on the DATE
+       alone while _whSplitVisits — the reader — is id-aware: so where two residents share a name and a
+       building and are both seen on the same day, the second Copy silently REPLACED the first
+       resident's visit record for that date. Nothing said so; both providers saw an ordinary "Copied".
+       Same key as the move's merge, one rule with one implementation. An unstamped record still keys on
+       date alone, which is exactly the old behaviour for anyone who has no id. */
+    const rk=_whVisitKey(rec);
+    const i=h.visits.findIndex(v=>_whVisitKey(v)===rk);
     if(i>=0) h.visits[i]=rec; else h.visits.push(rec);           // same-day recopy overwrites
-    h.visits.sort((a,b)=> a.date<b.date?-1:a.date>b.date?1:0);
-    const ok=await whSave(name,h);
+    h.visits.sort(_whByDate);
+    // whSaveAt(fac, …), NEVER whSave(name, …) — whSave re-reads whFacility(), which is how this whole
+    // function could read one building and write to another.
+    const ok=await whSaveAt(fac, name, h);
     if(ok) _whPriorCache=null;
     return ok;
   }catch(e){ return false; }
+  finally{ _whCommitting=false; }
+}
+/* WHAT THE COPY BUTTON SAYS ABOUT HISTORY. ONE reporter, because the two copy paths carried identical
+   inline copies of this line and a third outcome had to reach both — and "edit one, forget the other"
+   is how every seam defect in this codebase started. `true` is the quiet case; everything else speaks. */
+function whReportCommit(r){
+  if(r===true || WH_LOCAL()) return;
+  if(r==='unreadable'){
+    toast('Copied to PCC — but this patient’s wound history could NOT be read, so nothing was written to it. '
+        + 'Nothing is lost. Press “Try again” on the history banner, then copy once more.');
+    return;
+  }
+  if(r==='busy'){
+    toast('Copied to PCC — but their wound history is being moved to another building right now, so '
+        + 'nothing was written to it. Nothing is lost. Copy again in a moment.');
+    return;
+  }
+  toast('Copied — but last visit’s history did not save');
 }
 /* The prior visit = the most recent COMMITTED visit before today. Not a date window. */
 let _whPriorCache=null;
@@ -1637,6 +1832,187 @@ function _whSplitVisits(visits, me){
   });
   return { mine, legacy, theirs };
 }
+/* THROWS when the history could not be READ, and that is deliberate: this function's null means "there
+   is no prior visit", which is a clinical statement. It must never also mean "the vault said 429".
+   whRefreshPrior is the only caller and it catches. */
+/* ===== MOVING A PATIENT'S WOUND HISTORY ==========================================================
+   The Reassign modal has always promised "it re-files just that patient (their note + wound-history)".
+   The wound-history half was never implemented: doReassign set p.facility and nothing moved the file,
+   so a patient re-filed under the right building looked up their history under a folder that does not
+   hold it — no prior measurements, no prior surface area, no trend, and a banner confidently saying
+   "First tracked visit: history starts today."
+
+   ⚠ WHAT THIS DOES *NOT* FIX, said out loud so nobody reads more into it. A real inter-facility
+   transfer never comes through this button. The resident is simply rounded at the new building: the
+   card files the record there, rcPrefill CREATES the patient at that building, and there is no facility
+   CHANGE to intercept. The card's carry-forward and Add-one-patient are hard-scoped to
+   RoundCards/<current facility>/, so she is invisible at the new building, gets hand-typed, and is
+   minted a FRESH ptId — at which point _whSplitVisits sorts her correctly-moved visits into `theirs`.
+   So this is "the in-session wrong-building correction now re-files the history too", NOT "history
+   follows the patient". The transfer case is its own decision (a cross-building lookup GATED on a
+   matching ptId is not the unguarded name search that was rejected in July) and its own ticket.
+
+   THE UNIT OF THE MOVE IS THE SET OF VISITS BELONGING TO THE MOVER, NEVER THE FILE. Two residents can
+   share a name at one building, which is the whole reason _whSplitVisits exists; relocating the file
+   would take the one who never transferred with it and leave her a brand-new patient at her own
+   building, for ever, while the provider is told the move succeeded.
+
+   THERE IS NO DELETE, deliberately. The composer has no WoundHistory delete primitive, and writing one
+   buys a timed-out-but-landed destructive call with no idempotent retry. whPriorVisit already treats a
+   file with no visits as absent, so an empty shell reads identically to a deleted file — in BOTH
+   storage modes, because a local-removeItem/cloud-shell split is a divergence nothing could test. */
+/* Two visits are the same visit when they are the same patient on the same day — (rcId, date), never
+   date alone. Date alone silently drops one of two same-named residents who were both seen that day. */
+function _whVisitKey(v){ return String((v&&v.rcId)||'')+'|'+String((v&&v.date)||'').slice(0,10); }
+function _whByDate(a,b){ const x=String((a&&a.date)||''), y=String((b&&b.date)||''); return x<y?-1:x>y?1:0; }
+/* Fold `add` into `into`'s visits. Later savedAt wins a genuine collision — the same "last copy wins"
+   rule whCommit already uses — and the result is RE-SORTED by date, because whPriorVisit takes the last
+   element of its slice and whCommit is the only thing in the file that sorts today. */
+function _whMergeVisits(into, add){
+  const out=(into && Array.isArray(into.visits)) ? into.visits.slice() : [];
+  const at={}; out.forEach((v,i)=>{ at[_whVisitKey(v)]=i; });
+  (add||[]).forEach(v=>{
+    const k=_whVisitKey(v), i=at[k];
+    if(i===undefined){ at[k]=out.length; out.push(v); return; }
+    if(Number((v&&v.savedAt)||0) >= Number((out[i]&&out[i].savedAt)||0)) out[i]=v;
+  });
+  return out.sort(_whByDate);
+}
+function _whShaped(h){ return !!(h && typeof h==='object' && Array.isArray(h.visits)); }
+/* THE ENTIRE DECISION, AS A PURE FUNCTION OF TWO FILES AND AN ID. No DOM, no network, no globals, no
+   activePt/whFacility/getPatient/_whPtId — so every branch below is a unit test rather than a scenario
+   nobody can stage. `src`/`dst` are a parsed document or null meaning a DEFINITE 404; "unreadable"
+   cannot reach here, because whLoadAt throws and the caller aborts first.
+   Returns { action:'none'|'write'|'copy'|'refuse', code, moving, dstVisits, srcVisits }. */
+function whMovePlan(src, dst, me){
+  if(src!==null && !_whShaped(src)) return {action:'refuse', code:'src-damaged'};
+  if(dst!==null && !_whShaped(dst)) return {action:'refuse', code:'dst-damaged'};
+  const sv=src ? src.visits : [];
+  // Nothing at the old building. Write NOTHING at the new one: this is the path a second provider hits
+  // after the first move already emptied the source, and "found nothing, so wrote a blank" is how a
+  // destination gets wiped by a move that thought it succeeded.
+  if(!sv.length) return {action:'none', code:'no-source'};
+  me=String(me||'').trim();
+  const S=_whSplitVisits(sv, me);
+  if(!me){
+    /* NO ID, SO NO WAY TO SELECT HER VISITS: _whSplitVisits puts EVERY visit into `legacy` when the
+       reader has no id of its own, so `mine` is empty by construction. Move nothing, or take everything
+       including a namesake's. With anything already at the destination we refuse outright. */
+    if(dst) return {action:'refuse', code:'no-id'};
+    /* Source is entirely unstamped and the destination is definitely absent. COPY rather than move:
+       the source is left exactly as it is, so if it turns out to have been shared with an unstamped
+       namesake at the old building, that resident loses nothing. Copying can hand the mover a history
+       that is not purely hers — but that is the history she is ALREADY being shown at the old building,
+       so it makes nothing worse, while taking the file can. One flag, one line, if Scott wants the
+       other trade. */
+    return {action:'copy', code:'unstamped-copy', moving:sv.slice(),
+            dstVisits:_whMergeVisits(null, sv), srcVisits:sv.slice()};
+  }
+  // Unstamped visits sitting beside a namesake's stamped ones could belong to either resident. Taking
+  // them steals history; leaving them abandons the mover's own pre-stamp trend. Both are a guess
+  // presented as a fact, so neither is made.
+  if(S.theirs.length && S.legacy.length) return {action:'refuse', code:'src-mixed'};
+  if(S.theirs.length && !S.mine.length)  return {action:'refuse', code:'src-not-ours'};
+  // With no second person evidenced in the file, unstamped visits are attributable to the mover and
+  // travel with her. With a namesake present, only what is provably hers moves.
+  const moving = S.theirs.length ? S.mine.slice() : sv.slice();
+  const staying= S.theirs.length ? S.theirs.slice() : [];
+  if(!moving.length) return {action:'none', code:'no-source'};
+  const movingUnstamped = moving.some(v=>!String((v&&v.rcId)||'').trim());
+  if(dst){
+    const D=_whSplitVisits(dst.visits, me);
+    /* SOMEBODY ELSE ALREADY HAS A HISTORY UNDER THIS NAME AT THE NEW BUILDING. Merging would put two
+       residents in one file, and the ptId guard only protects readers that HAVE an id — a hand-typed
+       patient there would be handed whichever visit is newest, from either patient. Refuse and say so;
+       never decide this one silently. */
+    if(D.theirs.length) return {action:'refuse', code:'dst-other'};
+    // Untagged history under this name at the destination: possibly hers from a previous stay, possibly
+    // a stranger's, and nothing can tell. Refusing is nearly free — her stamped visits win either way.
+    if(D.legacy.length) return {action:'refuse', code:'dst-untagged'};
+    /* Once unstamped visits from two sources sit in one visits[] array there is no id left to separate
+       them again. Irreversible, so it gets the hardest gate: unstamped visits may only be written into
+       a destination that is definitively absent. */
+    if(movingUnstamped && dst.visits.length) return {action:'refuse', code:'legacy-into-occupied'};
+  }
+  return {action:'write', code:dst?'merge-mine':'create', moving,
+          dstVisits:_whMergeVisits(dst, moving), srcVisits:staying.slice().sort(_whByDate)};
+}
+/* In flight, both directions. whCommit is a read-modify-write across two awaits with the path
+   recomputed independently at each end, so a commit running through a move can resolve against the OLD
+   path and resurrect the file at the building the move just emptied. Each refuses under the other; the
+   refusal is loud, because a silent one reads as success. NOT _whLoading — that is a different flag
+   with a different job (it only makes whRefreshPrior return stale state). */
+let _whMoving=false, _whCommitting=false;
+/* THE I/O AROUND THE DECISION. Everything explicit — nothing here may read the active patient, because
+   the Reassign dropdown routinely names somebody else.
+   THE ORDER IS THE SAFETY: read source, read destination, decide, write destination, VERIFY it landed,
+   and only then rewrite the source. Every step is individually idempotent and no step is destructive,
+   which is why this is preferred over a Graph parentReference move — a move that times out but lands
+   leaves the source a 404, which this design would then read as "no history" and report as success. */
+async function whMoveHistory(fromFac, fromName, toFac, toName, ptId){
+  /* SAME TARGET, NO VAULT WORK AT ALL. 'Crestmoor/North' and 'Crestmoor_North' both slug to
+     Crestmoor_North, and a read-merge-write-then-prune against itself deletes the mover's history at
+     the building she is still in. Compare the SLUGGED segments, never the raw strings. */
+  if(whFacSeg(fromFac)===whFacSeg(toFac) && whSlug(fromName)===whSlug(toName)
+     && whNameKey(fromName)===whNameKey(toName)) return {ok:true, code:'same-place'};
+  if(_whCommitting) return {ok:false, code:'commit-in-flight'};
+  if(_whMoving)     return {ok:false, code:'move-in-flight'};
+  _whMoving=true;
+  try{
+    let src, dst;
+    try{ src=await whLoadAt(fromFac, fromName); }
+    catch(e){ return {ok:false, code:(e&&e.signedOut)?'signed-out':'src-unreadable', err:e}; }
+    try{ dst=await whLoadAt(toFac, toName); }
+    catch(e){ return {ok:false, code:(e&&e.signedOut)?'signed-out':'dst-unreadable', err:e}; }
+    const plan=whMovePlan(src, dst, ptId);
+    if(plan.action==='refuse') return {ok:false, code:plan.code};
+    if(plan.action==='none')   return {ok:true,  code:plan.code};
+    /* The file explains its own relocation, because nothing else will: no code path in either tool ever
+       lists WoundHistory/, so a human looking for a stranded copy has only what is written here. */
+    const dstDoc=Object.assign({}, dst || whBlankAt(toFac, toName), {
+      patient:toName, facility:String(toFac||'').trim(), visits:plan.dstVisits });
+    dstDoc.moves=(Array.isArray(dst&&dst.moves)?dst.moves:[]).concat([
+      {from:String(fromFac||''), fromName:String(fromName||''), to:String(toFac||''), at:Date.now(), ptId:String(ptId||'')}]);
+    if(!(await whSaveAt(toFac, toName, dstDoc))) return {ok:false, code:'write-failed'};
+    /* SILENCE IS NOT SUCCESS. Pruning on "no error was reported" prunes on no evidence, and if the
+       write had in fact not landed the history is then gone from both buildings. Read it back and
+       check the visits are actually there. */
+    let back;
+    try{ back=await whLoadAt(toFac, toName); }
+    catch(e){ return {ok:false, code:'unverified', err:e}; }
+    const landed=_whShaped(back) ? new Set(back.visits.map(_whVisitKey)) : null;
+    if(!landed || !plan.dstVisits.every(v=>landed.has(_whVisitKey(v)))) return {ok:false, code:'unverified'};
+    if(plan.action==='copy') return {ok:true, code:'copied'};
+    const srcDoc=Object.assign({}, src, {visits:plan.srcVisits, movedTo:String(toFac||''), movedAt:Date.now()});
+    if(!(await whSaveAt(fromFac, fromName, srcDoc))) return {ok:true, code:'moved-source-stranded', strandedAt:String(fromFac||'')};
+    return {ok:true, code:'moved'};
+  } finally { _whMoving=false; }
+}
+/* What the provider reads. Kept beside the codes so a new outcome cannot be added without a sentence,
+   and so the wording is testable without a DOM. Never a success word on a failure, and never "no
+   history" for something we could not read. */
+function whMoveSay(r, name, fromFac, toFac){
+  const who=name||'This patient', C=(r&&r.code)||'';
+  if(C==='moved'||C==='same-place') return who+' moved to '+toFac+' — their wound history moved with them.';
+  if(C==='copied')                  return who+' moved to '+toFac+'. Their wound history was COPIED rather than moved, because this note isn’t linked to a Round Card record and there’s no way to prove which visits are theirs. The copy at '+fromFac+' was left alone — tell Scott so it gets cleaned up.';
+  if(C==='no-source')               return who+' moved to '+toFac+'. They had no wound history filed at '+fromFac+', so there was nothing to move.';
+  if(C==='moved-source-stranded')   return who+' moved to '+toFac+' and their wound history came with them. The old copy at '+fromFac+' couldn’t be cleared — tell Scott so it gets cleaned up.';
+  if(C==='signed-out')              return 'You’re not signed in to ClinicalVault. Moving '+who+' also has to move their wound history, so nothing was changed — they’re still in '+fromFac+'. Sign in and try again.';
+  if(C==='src-unreadable')          return 'Couldn’t read '+who+'’s wound history at '+fromFac+', so nothing was changed — they’re still in '+fromFac+'. This is not the same as “no history”. Try again in a moment.';
+  if(C==='dst-unreadable')          return 'Couldn’t check whether anyone already has a wound history under this name at '+toFac+', so nothing was changed. Try again in a moment.';
+  if(C==='write-failed')            return 'Couldn’t write '+who+'’s wound history to '+toFac+', so nothing was changed — they’re still in '+fromFac+'.';
+  if(C==='unverified')              return 'Couldn’t confirm '+who+'’s wound history landed at '+toFac+', so the copy at '+fromFac+' was left alone. Nothing is lost. Try again in a moment.';
+  if(C==='dst-other')               return 'There is already a wound history for a DIFFERENT resident named '+who+' at '+toFac+'. Two patients will not be merged into one file, so nothing was changed — tell Scott.';
+  if(C==='dst-untagged')            return 'There is untagged wound history under this name at '+toFac+' and there’s no way to tell whose it is, so nothing was changed. Tell Scott.';
+  if(C==='legacy-into-occupied')    return who+'’s history includes visits with no patient tag, and '+toFac+' already has a file under this name. Merging those could never be undone, so nothing was changed. Tell Scott.';
+  if(C==='src-mixed')               return 'The wound history at '+fromFac+' holds visits for more than one resident under this name, and some can’t be attributed, so nothing was changed. Tell Scott.';
+  if(C==='src-not-ours')            return 'The wound history at '+fromFac+' belongs to a different resident with the same name, so nothing was changed.';
+  if(C==='no-id')                   return 'This note isn’t linked to a Round Card record, so there’s no way to prove which visits are '+who+'’s — and '+toFac+' already has a file under this name. Nothing was changed.';
+  if(C==='src-damaged'||C==='dst-damaged') return 'A stored wound-history file for this name is damaged and couldn’t be read, so nothing was changed. Tell Scott.';
+  if(C==='commit-in-flight')        return 'A note is being copied to PCC right now. Nothing was changed — try the move again in a moment.';
+  if(C==='move-in-flight')          return 'That move is already running.';
+  return 'Couldn’t move '+who+'’s wound history, so nothing was changed — they’re still in '+fromFac+'.';
+}
 async function whPriorVisit(name, exceptDate){
   const h=await whLoad(name); if(!h || !h.visits || !h.visits.length) return null;
   const d=exceptDate||todayISO();
@@ -1661,15 +2037,27 @@ async function whPriorVisit(name, exceptDate){
 
 /* ---- prior state for the ACTIVE patient ---- */
 let _whPrior=null;        // {key, name, visit}  — visit===null means "looked, found nothing"
-let _whLoading=false;
+/* A PROMISE, NOT A BOOLEAN, and the difference is a dropped refresh. As a flag this said "a load is
+   running" and whRefreshPrior returned the CURRENT _whPrior and queued nothing — so a refresh asked for
+   while any load was in flight simply never happened. After a move that is exactly the case: the
+   facility changes, the key changes, and the refresh that should re-read under the new building is
+   dropped, leaving _whPrior stamped with the pre-move key and the banner stuck on "Looking for…"
+   because nothing ever re-enters. Now the second caller AWAITS the first and then re-checks. */
+let _whLoading=null;      // the in-flight load's promise, or null
 /* The id is part of the cache key for the same reason it is part of the lookup: two residents with
    one name would otherwise share _whPrior in a single workspace and read each other's wounds. */
 function _whKey(){ return whNameKey(getPatient())+'|'+whNameKey(whFacility())+'|'+_whPtId(); }
 function whPriorReady(){ return !!(_whPrior && _whPrior.key===_whKey()); }
 async function whRefreshPrior(){
-  const key=_whKey();
-  if(whPriorReady() || _whLoading) return _whPrior;
-  _whLoading=true;
+  if(whPriorReady()) return _whPrior;
+  // Wait for whatever is already running, then ask again — the answer it settles on may be the one we
+  // wanted, and if it is not, we start a fresh load instead of silently returning stale state.
+  if(_whLoading){ try{ await _whLoading; }catch(e){} return whPriorReady() ? _whPrior : whRefreshPrior(); }
+  const p=_whRefreshPriorNow(_whKey());
+  _whLoading=p;
+  try{ return await p; } finally{ if(_whLoading===p) _whLoading=null; }
+}
+async function _whRefreshPriorNow(key){
   try{
     const name=getPatient();
     const visit=(name&&name.trim()) ? await whPriorVisit(name) : null;
@@ -1686,10 +2074,27 @@ async function whRefreshPrior(){
       R.seq=Math.max(R.seq, mx);
       try{ persist(); }catch(e){}
     }
-  }catch(e){ _whPrior={key, name:getPatient(), visit:null}; }
-  finally{ _whLoading=false; }
+  }catch(e){
+    /* AN UNREADABLE HISTORY IS ITS OWN VERDICT — it used to be cached as "looked, found nothing", which
+       is the settled answer, so one 429 poisoned this patient for the rest of the session with no retry
+       anywhere.
+       IT IS STILL CACHED, and it has to be: whApplyPrior calls whRefreshPrior().then(()=>setMode('fu'))
+       and setMode calls whApplyPrior again, so whPriorReady() must go true or the note re-renders
+       forever. That is why the retry is an EXPLICIT control in the banner rather than an automatic one
+       — the same shape the Round Card settled on ("Set the date again to retry").
+       `visit` stays STRICTLY null and never becomes a stub object: _rcRekeyWound writes into
+       _whPrior.visit in place, so a placeholder there would be mutated as though it were real. */
+    /* ANY throw counts as unreadable, not just a tagged one. Reaching this catch means we did not get
+       an answer, and an UNTAGGED error is an unexpected fault — the last thing that should quietly
+       resolve to the reassuring "no prior visit on file". The tag only picks the wording. */
+    _whPrior={key, name:getPatient(), visit:null, unreadable:true, signedOut:!!(e && e.signedOut)};
+    if(!(e && e.vaultUnreadable)){ try{ if(typeof console!=='undefined'&&console.warn) console.warn('wound history:', e); }catch(e2){} }
+  }
   return _whPrior;
 }
+/* The way out of a cached unreadable verdict. Deliberately a real function rather than an inline
+   handler so the banner's button and any future caller run the same code. */
+function whRetryPrior(){ _whPrior=null; whApplyPrior(); }
 /* IS THIS WOUND RESOLVED? One predicate, used everywhere, because the naive test is wrong.
    Two sites used to ask this with an inline `/healed|resolved/i`, which reads "NOT HEALED" as healed -
    the substring is right there. The card's Status list gained 'Not healed' on 2026-07-29 (the note has
@@ -1719,7 +2124,11 @@ function _isResolvedStatus(s){
    strength of it reintroduces the gap. Ordering is by permanent number, not by Object.keys insertion
    order, or the note reads in whatever sequence the history file happened to be written. */
 function whSeedIds(){
-  const v=_whPrior && _whPrior.visit; if(!v || !v.wounds) return null;
+  /* GATED ON THE KEY. whPriorReady() is the invariant, and these readers used to take _whPrior.visit on
+     trust — so any re-render between a facility change and the completed refresh painted the PREVIOUS
+     building's measurements into a note now filed at the new one. Cheap to check, and the move makes
+     that window real. */
+  const v=whPriorReady() && _whPrior && _whPrior.visit; if(!v || !v.wounds) return null;
   /* BIRTH ORDER FIRST, the number only as the legacy fallback. A visit committed before `born` existed
      stores no birth stamp, and a lower number has always meant "created earlier" — so the fallback
      gives exactly today's order for exactly those wounds, and the two agree by construction for
@@ -1732,7 +2141,7 @@ function whSeedIds(){
   const ids=Object.keys(v.wounds).sort((a,b)=>key(a)-key(b));
   return ids.length?ids:null;
 }
-function whPriorFor(wid){ const v=_whPrior&&_whPrior.visit; return (v&&v.wounds&&v.wounds[String(wid)])||null; }
+function whPriorFor(wid){ const v=whPriorReady()&&_whPrior&&_whPrior.visit; return (v&&v.wounds&&v.wounds[String(wid)])||null; }
 
 /* Paint the reference block above each wound's fields. Display only — never resolved, never copied. */
 function whPaintPrior(){
@@ -1783,19 +2192,39 @@ function whPaintBanner(){
   if(MODE!=='fu'){ b.style.display='none'; return; }
   if(!name || !name.trim()){ b.className='wh-banner wh-warn'; b.innerHTML='⚠ <b>Enter the patient name</b> to pull last visit\'s wound measurements.'; b.style.display=''; return; }
   if(!whPriorReady()){ b.className='wh-banner wh-busy'; b.innerHTML='☁ Looking for <b>'+esc(name)+'</b>\'s last visit…'; b.style.display=''; return; }
+  /* BEFORE the "no prior visit" branch, and that ORDER is the whole fix. Both states have visit===null,
+     so the branch below used to answer for both — and it says "First tracked visit: history starts
+     today", which on a 429 is the tool stating as fact the one thing it must never guess at. This says
+     what is true (we could not look), refuses to imply the wounds are new, and offers the retry. */
+  if(_whPrior.unreadable){ b.className='wh-banner wh-warn';
+    b.innerHTML='⚠ <b>Couldn’t read '+esc(name)+'’s wound history just now'+(_whPrior.signedOut?' — you are not signed in':'')+'.</b> '
+      +'This is <b>not</b> the same as “no history”: do not treat these wounds as new. Nothing has been lost, and nothing will be '
+      +'written to their history until it can be read. '
+      +'<button type="button" class="wh-retry" onclick="whRetryPrior()">Try again</button>';
+    b.style.display=''; return; }
   if(!_whPrior.visit){ b.className='wh-banner wh-warn';
     b.innerHTML='⚠ <b>No prior visit found for '+esc(name)+' at '+esc(whFacility())+'.</b> Nothing to compare against — if this is a follow-up, key last visit\'s numbers in by hand from PCC. (First tracked visit: history starts today.)';
     b.style.display=''; return; }
   b.className='wh-banner wh-ok';
-  b.innerHTML='↩ Showing <b>'+esc(_whPrior.name)+'</b>\'s last visit (<b>'+esc(_whPrior.visit.date)+'</b>) above each wound. Reference only — it does not print into the note.';
+  /* A move that could not clear the old building leaves a second copy behind. Nothing in either tool
+     ever lists WoundHistory/, so if this does not say it, nobody will ever find it. */
+  const stranded=(function(){ try{ const p=activePt(); return p && String(p.whStrandedAt||'').trim(); }catch(e){ return ''; } })();
+  b.innerHTML='↩ Showing <b>'+esc(_whPrior.name)+'</b>\'s last visit (<b>'+esc(_whPrior.visit.date)+'</b>) above each wound. Reference only — it does not print into the note.'
+    +(stranded?'<div style="margin-top:5px">⚠ An old copy of this history is still filed under <b>'+esc(stranded)+'</b> — tell Scott so it gets cleaned up.</div>':'');
   b.style.display='';
 }
 // Follow-up mode needs history BEFORE the section renders (to seed the right wids). Load, then re-render.
-function whApplyPrior(){
+/* TWO ENTRY POINTS, ONE BODY. Five callers want fire-and-forget; doReassign must AWAIT the repaint, or
+   the banner asserts "First tracked visit: history starts today" for a move that in fact worked, and
+   the provider acts on it. Kept as a wrapper rather than a copy — a second implementation of this is a
+   second thing to forget. */
+function whApplyPrior(){ whApplyPriorAsync(); }
+async function whApplyPriorAsync(){
   if(MODE!=='fu'){ whPaintBanner(); return; }
   if(whPriorReady()){ whPaintPrior(); return; }
   whPaintBanner();
-  whRefreshPrior().then(()=>{ if(MODE==='fu'){ setMode('fu'); } });
+  await whRefreshPrior();
+  if(MODE==='fu'){ setMode('fu'); }
 }
 
 /* ---- patient workspace operations ---- */
@@ -2733,7 +3162,8 @@ function openHandoff(){
      '<select id="ra_pt" style="'+SEL+'">'+ pts.map(p=>'<option value="'+esc(p.pid)+'"'+(p.pid===sel.pid?' selected':'')+'>'+esc(p.name)+'  —  '+esc(p.facility||'no building yet')+'</option>').join('') +'</select>'+
      '<label style="'+LBL+'">Move to</label>'+
      '<select id="ra_fac" style="'+SEL+'"><option value="">— choose building —</option>'+ facs.map(f=>'<option value="'+esc(f)+'"'+(f===sel.facility?' selected':'')+'>'+esc(f)+'</option>').join('') +'<option value="__add__">＋ Add a facility…</option></select>'+
-     '<div class="row" style="margin-top:16px"><button class="primary" style="flex:1" onclick="doReassign()">Move patient</button></div>'+
+     '<div class="row" style="margin-top:16px"><button class="primary" id="ra_go" style="flex:1" onclick="doReassign()">Move patient</button></div>'+
+     '<div id="ra_msg" class="ho-note" style="display:none;margin-top:12px;background:#fff4e2;border:1px solid #f0c98a;color:#7a4d10;padding:9px 12px;border-radius:8px"></div>'+
    '</div>';
   // Picking a different patient reflects THEIR current building in the "Move to" dropdown.
   document.getElementById('ra_pt').onchange=function(){
@@ -2743,18 +3173,44 @@ function openHandoff(){
   };
   document.getElementById('handoffModal').style.display='flex';
 }
-function doReassign(){
+function _raSay(msg){ const el=document.getElementById('ra_msg'); if(!el) return; el.textContent=msg||''; el.style.display=msg?'':'none'; }
+/* THE FACILITY IS NOT WRITTEN UNTIL THE MOVE HAS CONFIRMED, and that is the whole rollback rule: if the
+   stamp is never set early there is no half-state to unwind. It used to be the FIRST line, which also
+   meant whFacility() flipped to the new building the instant it ran — so an async move would have read
+   the source and pruned the source under two different buildings.
+   The id is read off the SELECTED patient, never _whPtId(): the dropdown lists every named patient in
+   the workspace and is frequently NOT the one open in the form, while whFacility/getPatient/_whPtId all
+   read activePt(). That mismatch is the single easiest way to move the wrong resident's file. */
+async function doReassign(){
   const pid=document.getElementById('ra_pt').value, p=WS.patients[pid]; if(!p){ closeHandoff(); return; }
   const fe=document.getElementById('ra_fac'); let nf=(fe.value||'').trim();
   if(nf==='__add__'){ const added=facilityAddPrompt(); if(!added){ fe.value=String(p.facility||''); return; } nf=added; }
   if(!nf){ toast('Pick a building to move them to'); return; }
-  if(nf===String(p.facility||'').trim()){ toast((p.name||'They')+' are already in '+nf); closeHandoff(); return; }
+  const oldFac=String(p.facility||'').trim();
+  if(nf===oldFac){ toast((p.name||'They')+' are already in '+nf); closeHandoff(); return; }
+  const nm=String(p.name||'').trim();
+  const me=String(p.rcPtId||p.srcRcId||'').trim();          // the SELECTED patient's id, not the active one's
+  const btn=document.getElementById('ra_go');
+  if(btn && btn.disabled) return;                            // a second tap is a no-op, not a queued second move
+  if(btn){ btn.disabled=true; btn.textContent='Moving…'; }
+  _raSay('');
+  let r;
+  try{ r=await whMoveHistory(oldFac||'Unassigned', nm, nf, nm, me); }
+  catch(e){ r={ok:false, code:(e&&e.signedOut)?'signed-out':(e&&e.vaultUnreadable)?'src-unreadable':'error'}; }
+  finally{ if(btn){ btn.disabled=false; btn.textContent='Move patient'; } }
+  const say=whMoveSay(r, p.name, oldFac||'no building', nf);
+  /* THE MODAL STAYS OPEN AND THE PATIENT DOES NOT MOVE. Changing the building anyway would re-create
+     exactly the orphan this is here to fix, under a modal that just promised the opposite. */
+  if(!r.ok){ _raSay(say); return; }
   p.facility=nf;
+  if(r.strandedAt) p.whStrandedAt=r.strandedAt;              // persisted, so the banner can keep saying so
+  else if(p.whStrandedAt) delete p.whStrandedAt;
   // If we moved the patient currently open in the form, refresh their carry-forward + sticky default.
-  if(pid===activePid){ WS.round=WS.round||{}; WS.round.facility=nf; if(MODE==='fu'){ _whPrior=null; if(typeof whApplyPrior==='function') whApplyPrior(); } }
+  if(pid===activePid){ WS.round=WS.round||{}; WS.round.facility=nf;
+    if(MODE==='fu'){ _whPrior=null; if(typeof whApplyPriorAsync==='function') await whApplyPriorAsync(); } }
   saveWS(); markWorkspaceEdited(); renderPatientBar();
   if(typeof draftSaveNow==='function') draftSaveNow();   // a reassign is structural — persist it immediately
-  toast((p.name||'Patient')+' moved to '+nf);
+  toast(say);
   closeHandoff();
 }
 
@@ -3014,8 +3470,14 @@ async function rcList(facility){
       : _gfetch('https://graph.microsoft.com/v1.0/drives/'+ctx.driveId+'/root:/'
           +_encPath(it.path)+':/content', ctx.token)   // it.path, never rebuilt — the layout may be either
           .then(c=>c.ok?c.json():Promise.reject(new Error('HTTP '+c.status)));
+    /* COUNTED, and counted SEPARATELY from a folder that would not list. One throttled RECORD removes
+       one patient from the round with nothing anywhere saying so, which reads to a provider as "the
+       card never sent them" rather than "we could not read them" — the same lie as an unreadable
+       listing, one level down. The card's own precedent (_rrFailed beside _rrUnreadableFacs) says these
+       get their own counter, because a provider deciding whether to trust a pull wants to know which.
+       The failure still stays a cache MISS, so the next pull genuinely retries. */
     return read.then(rec=>{ _rcCachePut(key, rec); return rec; })
-               .catch(()=>null);
+               .catch(()=>{ _rcRecUnread++; return null; });
   }));
   const out=got.filter(rec=>rec && rec.schema==='roundcard.v1');
   out.sort((a,b)=>String(b.savedAt||'').localeCompare(String(a.savedAt||'')));   // newest first
@@ -3388,11 +3850,18 @@ async function rcPrefill(rec){
   // Reset BOTH store sides + the wound registry so this patient carries ONE clean note (no hidden second
   // store). Then load the prior visit (this also rehydrates the wreg numbers for a follow-up).
   { const _p=activePt(); if(_p){ _p.store.new={}; _p.store.fu={}; _p.wreg={seq:1, widSeq:null, byId:{}}; _p.rcPending=null; } }
-  let nt='new', pv=null;
+  let nt='new', pv=null, unread=false;
   if(nm.trim()){
     _whPrior=null;
     try{ await whRefreshPrior(); }catch(e){}
-    pv = (_whPrior && _whPrior.key===_whKey()) ? _whPrior.visit : null;   // most recent committed visit
+    const mine = (_whPrior && _whPrior.key===_whKey()) ? _whPrior : null;
+    pv = mine ? mine.visit : null;                                        // most recent committed visit
+    /* THE THIRD ANSWER. "No history" and "could not read the history" both arrive here as pv===null,
+       and the line below turns that into the note TYPE — so an unreadable history used to open a
+       returning resident as an INITIAL visit: fresh wound registry, nothing carried forward, no prior
+       block, and a note that is structurally the wrong note. It still opens as Initial (we cannot
+       invent a history we did not read), but it no longer does so silently — see the toast below. */
+    unread = !!(mine && mine.unreadable);
     if(pv && pv.wounds && Object.keys(pv.wounds).length) nt='fu';
   }
   /* Card VISIT-TYPE override (Scott 2026-07-21): history can't know about visits charted OUTSIDE this
@@ -3406,8 +3875,15 @@ async function rcPrefill(rec){
     if(confirm((nm||'This patient')+' already has a visit on file, but the Round Card marked this as an INITIAL visit.\n\nOK = open as Initial anyway.\nCancel = open as the Follow-up the history suggests.')) nt='new';
   } else if(vt==='fu' && nt==='new'){
     nt='fu';
-    toast((nm||'Patient')+': opened as Follow-up per the Round Card — no prior visit on file, so nothing carries forward yet. Copying this note to PCC starts the history.');
+    // "No prior visit on file" is a CLAIM. Only make it when we actually looked and found none.
+    toast(unread
+      ? (nm||'Patient')+': opened as Follow-up per the Round Card — but their history could not be read, so nothing carried forward. Press “Try again” on the banner before you chart.'
+      : (nm||'Patient')+': opened as Follow-up per the Round Card — no prior visit on file, so nothing carries forward yet. Copying this note to PCC starts the history.');
   } else if(vt){ nt=vt; }   // choice agrees with history — take it
+  /* The auto path has no other voice: with no card override, an unreadable history silently produced an
+     Initial that looks exactly like a correct one. The banner says it too, but the note type is decided
+     here and this is the moment it is decided. */
+  if(unread && !vt) toast((nm||'This patient')+': couldn’t read their wound history, so this opened as an Initial visit and nothing carried forward. This is not “no history” — press “Try again” on the banner.');
   { const _p=activePt(); if(_p) _p.noteType=nt; }
   MODE=nt;
   const S=STORE[nt];
@@ -3749,6 +4225,19 @@ let _rcPullBlocked=false;
    for buildings a provider cannot see, and until the difference is visible, locking down permissions
    would produce confident wrong answers rather than errors. */
 let _rcPullUnreadable=false;
+/* A RECORD that would not download, as opposed to a FOLDER that would not list. Its own counter for the
+   reason the card gives for keeping _rrFailed apart from _rrUnreadableFacs: the two have different
+   causes, and a provider deciding whether to trust this pull wants to know which.
+   ⚠ IT MUST BE REPORTED OUTSIDE THE "nothing came back" BRANCHES. _rcPullUnreadable is only ever read
+   inside `if(!rounds.length)` and `if(!fresh.length)`, and a dropped record is by construction the
+   PARTIAL case — eleven of twelve patients arrive. A flag reported only where nothing arrived would be
+   a gate wired to nothing, which is this codebase's recurring failure. */
+let _rcRecUnread=0;
+function _rcSayRecUnread(){
+  if(!_rcRecUnread) return;
+  toast('Couldn’t read '+_rcRecUnread+' Round Card record'+(_rcRecUnread===1?'':'s')
+      + ' just now, so this pull may be missing patients. Nothing is lost — try again in a moment.');
+}
 function _rcProvOk(rec){
   try{
     /* ORDER MATTERS AGAIN. This used to end in .sort().join(' '), which made the comparison a token
@@ -3881,7 +4370,21 @@ function rcMergeIntoPatient(pid, rec){
       if(!cur){ p0.name=rnm; p0.rcName=rnm; setPatient(rnm); }
       else if(cur===rnm){ p0.rcName=rnm; }
       else if((p0.rcName||'')===cur){
-        if(_noteAllCardOwned(p0)){ p0.name=rnm; p0.rcName=rnm; setPatient(rnm); toast('Renamed to '+rnm+' per the Round Card'); }
+        if(_noteAllCardOwned(p0)){ p0.name=rnm; p0.rcName=rnm; setPatient(rnm);
+          /* THE NAME IS HALF THE HISTORY PATH — whFile(name) is whSlug(name)+'.json' — so a card rename
+             orphans the wound history exactly as a building move does, and unlike the Reassign button
+             this fires automatically with no modal. It already happened live ("Charliet3" -> "Charlie").
+             Same helper, (facility,name) pairs rather than facility alone; fire-and-report, because the
+             rename itself has already landed and a refusal here must not undo it. */
+          whMoveHistory(String(p0.facility||'').trim()||'Unassigned', cur,
+                        String(p0.facility||'').trim()||'Unassigned', rnm,
+                        String(p0.rcPtId||p0.srcRcId||'').trim())
+            .then(mv=>{ if(mv && mv.ok && (mv.code==='moved'||mv.code==='copied')) _whPrior=null;
+                        toast(mv && mv.ok
+                          ? 'Renamed to '+rnm+' per the Round Card'
+                          : 'Renamed to '+rnm+' per the Round Card — but their wound history is still filed under “'+cur+'”. '+whMoveSay(mv, rnm, 'the old name', 'the new one')); })
+            .catch(()=>toast('Renamed to '+rnm+' per the Round Card — but their wound history could not be re-filed under the new name. Tell Scott.'));
+        }
         else toast('The Round Card renamed this patient to “'+rnm+'” — update the name in the note if that’s right.');
       } }
     const rfac=String(rec.facility||'').trim();
@@ -4192,9 +4695,12 @@ async function rcRepull(){
     toast('Looking for your rounds…');
     /* The listing already filters to THIS provider, and a record this workspace has pulled before still
        passes — which is exactly the set a reload should be able to choose from. */
-    _rcPullBlocked=false; _rcPullUnreadable=false;
+    _rcPullBlocked=false; _rcPullUnreadable=false; _rcRecUnread=0;
     const recs=await rcListAllRecent();
     const rounds=_rcRoundsAvailable(recs);
+    // BEFORE the empty check, because a dropped record is the PARTIAL case — the one this counter
+    // exists for. Inside the branch below it could never fire.
+    _rcSayRecUnread();
     if(!rounds.length){
       /* "No records" is a claim about the clinical record store. An expired token, a 503 on the folder
          listing and "I cannot tell who you are" all reach here with an empty array — and until
@@ -4295,9 +4801,12 @@ async function rcAutoPull(reason){
   // when this one finishes (the card fires rc-saved per upload; back-to-back saves raced this guard).
   if(_rcPulling){ _rcPullAgain=true; return RES({reason:'in-flight'}); }
   _rcPulling=true;
-  _rcPullBlocked=false; _rcPullUnreadable=false;   // fresh verdict per pull, or a stale one alarms forever
+  _rcPullBlocked=false; _rcPullUnreadable=false; _rcRecUnread=0;   // fresh verdict per pull, or a stale one alarms forever
   try{
     const recs=await rcListAllRecent();
+    // BEFORE any early return, because a record that would not download is the PARTIAL case: most of the
+    // round arrives and one patient is quietly missing. Inside `if(!fresh.length)` this could never fire.
+    _rcSayRecUnread();
     WS.rcPulled=WS.rcPulled||{};                                // session-only dedup for legacy records that predate stable ids
     const seen=_rcSeenLoad();
     /* Version-aware dedup (Scott 2026-07-21: "the follow-up card is still not autofilling"). The card
@@ -5449,7 +5958,7 @@ function resolveAll(){
       // overwrites (last copy wins), so "fix it and copy again" is the correction path. A note that is
       // never copied never enters history. Fire-and-forget: a history write must never block the copy.
       if(typeof whCommit==='function' && woundRegistry && woundRegistry.length && s.name===woundSectionName){
-        whCommit().then(ok=>{ if(!ok && !WH_LOCAL()) toast('Copied — but last visit\'s history did not save'); });
+        whCommit().then(whReportCommit);
       }
     };
     cap.appendChild(btn); cap.appendChild(mark);
@@ -5673,7 +6182,7 @@ async function copyAll(){
   // COMMIT POINT, same as copying the wound section by itself: a whole-note copy includes the wound
   // measurements, so this snapshot becomes next visit's "last visit". Fire-and-forget — never blocks.
   if(typeof whCommit==='function' && woundRegistry && woundRegistry.length && secs.some(s=>s.name===woundSectionName)){
-    whCommit().then(ok=>{ if(!ok && !WH_LOCAL()) toast('Copied — but last visit\'s history did not save'); });
+    whCommit().then(whReportCommit);
   }
   try{
     if(navigator.clipboard && window.ClipboardItem){
