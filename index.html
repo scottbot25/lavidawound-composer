@@ -157,6 +157,17 @@
   .wound-card{border:1px solid var(--line);border-radius:10px;margin:12px 0 6px;overflow:hidden;background:rgba(43,179,163,.04)}
   .wound-head{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--panel2);border-bottom:1px solid var(--line)}
   .wound-title{font-size:12px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#2f8f83}
+  /* A RESOLVED WOUND FOLDS TO ITS BANNER (Scott 2026-08-03, same ask as the Round Card).
+     PRESENTATION ONLY, and here that is load-bearing in a way it is not on the card: in this file
+     the DOM *is* the note. The fields are hidden, never removed, so w.resolve() still reads every
+     one of them and the composed note, the copy and the wound-history commit are byte-identical
+     folded or open. Fold the DOM, never the data. */
+  .w-pill{margin-left:auto;padding:2px 9px;border-radius:999px;background:#e8f5ef;border:1px solid #9fd4c2;
+    color:#0b6b60;font-size:10.5px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;white-space:nowrap}
+  .wound-fold{border:1px solid var(--line);border-radius:7px;background:#fff;color:var(--ink);
+    font:inherit;font-size:12px;font-weight:650;padding:3px 11px;cursor:pointer}
+  .wound-fold:hover{border-color:var(--accent)}
+  .wound-card.w-shut{background:var(--panel2)}
   /* Per-wound Procedures gate — a clear "procedure performed?" Yes/No question (not a skippable checkbox).
      Until answered it sits in an amber bar so a performed procedure can't be silently omitted. */
   .proc-q{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:9px 12px;background:var(--panel2);border-bottom:1px solid var(--line)}
@@ -385,7 +396,7 @@
    the identical value and we pass ours into its URL, so the two can tell whether they shipped as a
    pair. See build-stamp.js for why, and why it cannot be a number someone remembers to raise.
    Declared here, on the first line of the first script, so every later block can see it. */
-const BUILD = '2026-08-03.b9095e5';
+const BUILD = '2026-08-03.65a3570';
 /* SANDBOX MODE (?sandbox=1, LOCALHOST ONLY — the hosted site ignores it): points uploads at the
    ToolSandbox site so end-to-end tests (incl. the Round Card overlay, which inherits it) never touch
    the real vault. Belt = sitePath swap (done where VAULT_CFG is declared); suspenders = _gfetch
@@ -2740,7 +2751,21 @@ function renderPatient(p){
   const row=(l,v)=>'<tr><td class="l">'+esc(l)+'</td><td>'+esc(hoVal(v))+'</td></tr>';
   const block=(title,pairs)=>{ const rows=pairs.filter(x=>!hoBlank(x[1])).map(x=>row(x[0],x[1])).join(''); return rows?'<div class="w"><h3>'+esc(title)+'</h3><table>'+rows+'</table></div>':''; };
   let b='<div class="meta"><b>Patient:</b> '+esc(hoVal(p.patient))+' &nbsp; <b>Facility:</b> '+esc(hoVal(p.facility))+' &nbsp; <b>Date:</b> '+esc(hoVal(p.dateVal))+' &nbsp; <b>Provider:</b> '+esc(hoVal(p.provider))+' &nbsp; <b>Dx:</b> '+esc(hoVal(p.dx))+' &nbsp; <b>Wounds:</b> '+p.wounds.length+'</div>';
-  p.wounds.forEach(w=>{ const s=w.s||{}; let et=s.etiology||''; if(s.stage&&!hoBlank(s.stage)) et+=(et?' — ':'')+'Stage '+s.stage; if(s.wagner&&!hoBlank(s.wagner)) et+=(et?' — ':'')+'Wagner '+s.wagner;
+  p.wounds.forEach(w=>{ const s=w.s||{};
+    /* A RESOLVED WOUND COLLAPSES TO ONE LINE (Scott 2026-08-03: "also in the word document produced
+       for the handoff please!"). A Word document cannot expand, so "collapsed" here means the banner
+       and nothing else: the site, the fact that it is closed, and where the detail lives.
+       IT IS STILL LISTED. Dropping it would tell the facility a wound had vanished, and the wound
+       COUNT in the meta line above — which is p.wounds.length and counts resolved wounds — would
+       then disagree with the blocks below it. A nurse counting three headings under "Wounds: 4" has
+       to go looking for the missing one.
+       Same predicate as the note and the composer's own fold, so the three cannot disagree. */
+    if(_isResolvedStatus(s.status)){
+      b+='<div class="w"><h3>Wound '+w.n+((s.location&&!hoBlank(s.location))?' — '+esc(s.location):'')+' — Resolved</h3>'
+        +'<div class="wnote">Recorded as healed at this visit. The full exam is in the provider’s note.</div></div>';
+      return;
+    }
+    let et=s.etiology||''; if(s.stage&&!hoBlank(s.stage)) et+=(et?' — ':'')+'Stage '+s.stage; if(s.wagner&&!hoBlank(s.wagner)) et+=(et?' — ':'')+'Wagner '+s.wagner;
     // Only show rows that actually have a value — an empty wound was printing 10 "—" rows of loose data.
     const wrows=[['Etiology',et],['Dimensions (L×W×D)',s.dims],['Surface area',hoBlank(s.sa)?'':s.sa+' cm²'],
       ['Prior surface area',hoBlank(s.priorSA)?'':s.priorSA+' cm²'],['Tissue (gran/slough/eschar/epith)',s.bed],
@@ -5148,6 +5173,40 @@ let procHooks = [];          // live repaint fns for procedure blocks (inherited
    all. That is a billing miss, and it fired on the ordinary delete-and-re-add. Null until the
    Procedures section builds; null = no procedures = the attestation prints (the safe direction). */
 let procAnyDone = null;
+/* ---------- THE RESOLVED-WOUND FOLD (Scott 2026-08-03) ----------
+   "maybe we minimize it just the wound banner and can expand upon clicking it?" — the same ask that
+   built isWoundFolded on the Round Card, and the rule is deliberately the same one, because a wound
+   that is folded on the card and open in the note would just be two tools disagreeing.
+
+   PRESENTATION ONLY, and in THIS file that carries the real risk: here the DOM *is* the note. The
+   wound's inputs are hidden, never removed, so block.resolve() still reads every one of them. A fold
+   that removed a wound instead would take the whole history commit with it — whCommit is gated on
+   `woundRegistry && woundRegistry.length` — which is exactly the empty-visit failure this repo has
+   already chased once. Nothing below touches woundRegistry.
+
+   Session-only, keyed by wid so a fold follows the wound rather than its position, and never
+   persisted: a fold is a view, not a finding.
+     _cwFoldPref   she has explicitly opened or closed this one; her choice wins
+     _cwTouched    she has typed into this wound this session, so it must not fold under her fingers */
+let woundFoldSync = null;    // repaints the folds; run on every resolveAll, like procHooks above
+const _cwFoldPref = new Map();
+const _cwTouched  = new Set();
+function isCwFolded(wid, resolved){
+  if(!resolved) return false;                                      // only a resolved wound ever folds
+  if(_cwFoldPref.has(wid)) return _cwFoldPref.get(wid)===true;     // she said so
+  return !_cwTouched.has(wid);                                     // default folded, unless she is in it
+}
+/* Is THIS wound card recording a resolved wound right now? Read from the wound's OWN resolved text —
+   the same string the note prints and the handoff harvests — so the note, the fold and the facility
+   sheet cannot disagree about which wounds are closed. _isResolvedStatus is the shared predicate, and
+   its note explains why the obvious /healed/ test is wrong ("not healed", "nearly healed").
+   Anchored to the start of a line: Status is one line of the wound template, and an unanchored match
+   would pick up any other line that happens to end in "status:". */
+function _cwResolved(w){
+  try{ const m=/(?:^|\n)Status:\s*([^.\n]+)/.exec(String(w&&w.resolve&&w.resolve()||''));
+       return m ? _isResolvedStatus(m[1]) : false; }
+  catch(e){ return false; }
+}
 let peNormalFields = [];     // the 5 systemic PE lines (General/CV/Resp/Abd/Neuro) — the "Normal exam" macro button fills/clears these; NOT auto-prefilled (Scott 2026-07-20)
 function isFillOpt(o){ o=String(o).trim(); return /\*\*\*/.test(o) || /^other\b/i.test(o); }  // "***", "other: ***", or "other"
 // Exam fields documented per-leg (Right/Left) — extremities + vascular. See renderBilateral.
@@ -5943,7 +6002,28 @@ function buildSection(name,idx,text){
     function paintWoundHeads(){
       wounds.forEach(w=> w.title.textContent=_wHead(w.id));
       woundsWrap.querySelectorAll('.wound-rm').forEach(b=> b.style.display = wounds.length>1?'inline-block':'none');
+      paintWoundFolds();
     }
+    /* THE FOLD, PAINTED. Runs on every resolveAll (see woundFoldSync), so a wound marked healed in the
+       Status box grows its banner the moment she picks it — and a wound corrected back off healed
+       loses the banner just as fast, because an unresolved wound is never folded.
+       ONLY style.display is touched. Nothing here reads or writes STATE, and nothing here can change
+       what resolve() returns — the fields are still in the DOM, still holding their values. That is
+       the difference between hiding a wound and losing one. */
+    function paintWoundFolds(){
+      wounds.forEach(w=>{
+        const res=_cwResolved(w);
+        const shut=isCwFolded(w.id,res);
+        w.pill.style.display = res ? '' : 'none';
+        w.fold.style.display = res ? '' : 'none';
+        w.fold.textContent   = shut ? 'Show' : 'Hide';
+        w.fold.title = shut ? 'Show this wound’s findings — they are in the note either way'
+                            : 'Collapse this wound to its banner';
+        w.body.style.display = shut ? 'none' : '';
+        w.card.classList.toggle('w-shut', shut);
+      });
+    }
+    woundFoldSync = paintWoundFolds;   // resolveAll runs this, so the banner tracks the Status box live
     function saveWounds(){ STATE['__wc_'+idx]=wounds.map(w=>w.id); persist(); }
     function addWound(wid){
       const id=(wid!=null)?wid:mintWid();
@@ -5951,10 +6031,23 @@ function buildSection(name,idx,text){
       const card=document.createElement('div'); card.className='wound-card';
       const head=document.createElement('div'); head.className='wound-head';
       const title=document.createElement('span'); title.className='wound-title'; title.textContent='Wound: '+W_UNNAMED_HEAD;
+      /* The banner a resolved wound folds to: the title (already there), the word Resolved, and the
+         way back in. Both start hidden and are painted by paintWoundFolds — a wound is not resolved
+         until its Status says so, and most never will be. */
+      const pill=document.createElement('span'); pill.className='w-pill'; pill.textContent='Resolved'; pill.style.display='none';
+      const fold=document.createElement('button'); fold.type='button'; fold.className='wound-fold'; fold.textContent='Show'; fold.style.display='none';
       const rm=document.createElement('button'); rm.className='wound-rm'; rm.textContent='Remove';
-      head.appendChild(title); head.appendChild(rm);
+      head.appendChild(title); head.appendChild(pill); head.appendChild(fold); head.appendChild(rm);
       const inner=document.createElement('div'); inner.className='wound-body';
       card.appendChild(head); card.appendChild(inner);
+      /* SHE IS WORKING ON THIS WOUND. Captured on the card's whole body, so any field counts — and
+         `capture` on purpose, so it still fires for controls that stop the event on their way up.
+         Without this, picking "healed" in the Status box folds the block she is filling in, and the
+         Orders and Procedures answers below it disappear mid-visit. */
+      const touch=()=>{ _cwTouched.add(id); };
+      inner.addEventListener('input', touch, true);
+      inner.addEventListener('change', touch, true);
+      fold.onclick=()=>{ _cwFoldPref.set(id, !isCwFolded(id,_cwResolved(w))); paintWoundFolds(); };
       // PRIOR BLOCK (carry-forward). Injected into the card's DOM and deliberately NOT passed through
       // renderLines / never pushed into a resolver sink — so last visit's numbers are structurally
       // incapable of reaching resolve(), resolveRaw(), the clipboard, or the handoff. Scott: prior data
@@ -5966,7 +6059,9 @@ function buildSection(name,idx,text){
       // dims() = this wound's LIVE exam L/W/D. The per-wound Procedures follower reads it to inherit the
       // pre-debridement measurement, so the dimension always lands on the RIGHT wound (tied to this
       // wound object's own inputs — never a positional guess).
-      const w={id, resolve:block.resolve, title, keyPrefix:idx+':w'+id, priorEl:prior, underFrom:block.underFrom, underTo:block.underTo, tunFrom:block.tunFrom, tunTo:block.tunTo,
+      // card/body/pill/fold are the fold's handles. They are DOM references only — nothing that
+      // resolve() or the history commit reads, so hiding the body cannot reach either.
+      const w={id, resolve:block.resolve, title, card, body:inner, pill, fold, keyPrefix:idx+':w'+id, priorEl:prior, underFrom:block.underFrom, underTo:block.underTo, tunFrom:block.tunFrom, tunTo:block.tunTo,
         dims:()=>({ L:(block.Lfield&&block.Lfield.value)||'', W:(block.Wfield&&block.Wfield.value)||'', D:(block.Dfield&&block.Dfield.value)||'' })};
       rm.onclick=()=>{ if(wounds.length<=1) return; const i=wounds.indexOf(w); if(i>=0){ wounds.splice(i,1); const ren=releaseWoundNum(w.id); card.remove(); saveWounds();
         // A renumber changed other wounds' numbers AND may have rewritten the A&P text in STATE — a full
@@ -6071,6 +6166,11 @@ function resolveAll(){
   // Refresh per-wound Procedures live displays (inherited PRE-debridement dims + debrided SA) so they
   // track the exam. Runs before the output is built so resolveRaw() reflects the current numbers.
   if(procHooks && procHooks.length) procHooks.forEach(f=>{ try{ f(); }catch(e){} });
+  /* Repaint the resolved-wound folds. Here rather than on the Status control itself, because the
+     status can also arrive from the Round Card pull and from the follow-up carry-forward, and a
+     banner that only appeared when a human touched the dropdown would be missing on exactly the
+     visits it is for. Guarded: a fold is cosmetic and must never be able to stop the note resolving. */
+  if(woundFoldSync){ try{ woundFoldSync(); }catch(e){} }
   sectionResolvers.forEach((s,i)=>{
     if(sectionRemoved(s.name)) return;   // whole section X'd out — no output box on the right
 
@@ -6089,7 +6189,18 @@ function resolveAll(){
       // overwrites (last copy wins), so "fix it and copy again" is the correction path. A note that is
       // never copied never enters history. Fire-and-forget: a history write must never block the copy.
       if(typeof whCommit==='function' && woundRegistry && woundRegistry.length && s.name===woundSectionName){
-        whCommit().then(whReportCommit);
+        /* .catch, because a REJECTION reported nothing at all. whReportCommit handles the VALUES
+           whCommit returns - true, 'unreadable', 'busy' - but a throw skips it entirely: the copy
+           succeeds, the provider sees "Copied", the note gets signed, and no history is written.
+           Silent. That path got MORE reachable when whLoad started throwing on a 429 instead of
+           returning null, so the safest change in the file made the loudest failure quieter.
+           Scott, 2026-08-03, on a patient with a signed note and no history visit: "i dont know
+           why theres no visit for this patient there is a signed note on 7-29." */
+        whCommit().then(whReportCommit).catch(function(e){
+          try{ console.error('wound history commit failed', e); }catch(_){}
+          toast('Copied to PCC \u2014 but the wound history did NOT save. Nothing is lost: copy again in a '
+              + 'moment, and tell Scott if it keeps happening.');
+        });
       }
     };
     cap.appendChild(btn); cap.appendChild(mark);
@@ -6313,7 +6424,13 @@ async function copyAll(){
   // COMMIT POINT, same as copying the wound section by itself: a whole-note copy includes the wound
   // measurements, so this snapshot becomes next visit's "last visit". Fire-and-forget — never blocks.
   if(typeof whCommit==='function' && woundRegistry && woundRegistry.length && secs.some(s=>s.name===woundSectionName)){
-    whCommit().then(whReportCommit);
+    /* Same .catch as the per-section commit above, and for the same reason: a rejected commit told
+       nobody anything, on the path a provider uses for every note. */
+    whCommit().then(whReportCommit).catch(function(e){
+      try{ console.error('wound history commit failed', e); }catch(_){}
+      toast('Copied to PCC \u2014 but the wound history did NOT save. Nothing is lost: copy again in a '
+          + 'moment, and tell Scott if it keeps happening.');
+    });
   }
   try{
     if(navigator.clipboard && window.ClipboardItem){
