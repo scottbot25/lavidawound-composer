@@ -265,7 +265,7 @@
    it is a hash of BOTH shipped files, so editing either one makes it provably stale and the sweep says
    so. The composer carries the identical value and passes its own into our URL (?b=), which is how the
    two can tell whether they shipped as a pair. See build-stamp.js. */
-const BUILD = '2026-08-03.b9fa95a';
+const BUILD = '2026-08-03.8397cf4';
 /* A top-level `const` is NOT a property of window — only `var` and function declarations are. So the
    composer, reading across the frame, gets `undefined` for our build no matter what we declared here,
    and would conclude on EVERY open that this card is too old to have one. Found by opening the overlay
@@ -3284,8 +3284,16 @@ async function rcRestoreFromVault(){
     const facs=(await _vaultList(token,driveId,'RoundCards')).filter(it=>it.folder).map(it=>it.name);
     // A 36-hour window, widened to whole days so it cannot fall off the end of a month folder.
     const since=_rcDaysBackISO(3);
+    /* A BUILDING WE COULD NOT READ IS NOT A BUILDING WITH NO RECORDS. This swallowed every failure
+       into an empty list, so a 429 — the ordinary case at thirty buildings, where one throttled folder
+       among them is likely rather than rare — silently restored a SHORT round. The provider gets their
+       card back missing patients with nothing anywhere saying so, which is the worst outcome this path
+       has. _vaultList already tags anything that is not a 404 as vaultUnreadable; this stops throwing
+       that away. Same distinction the composer side learned today. */
+    let _restoreUnreadable=0;
     const listings=await Promise.all(facs.map(fac=>
-      _rcListRecords(token,driveId,fac,since).then(files=>({fac,files})).catch(()=>({fac,files:[]}))));
+      _rcListRecords(token,driveId,fac,since).then(files=>({fac,files}))
+        .catch(e=>{ if(e && e.vaultUnreadable) _restoreUnreadable++; return {fac,files:[]}; })));
     const fresh=[];
     listings.forEach(({fac,files})=>files.forEach(f=>{
       const t=Date.parse(f.lastModifiedDateTime||''); if(isNaN(t) || t<cut) return;   // only fresh — the folder accumulates
@@ -3304,6 +3312,13 @@ async function rcRestoreFromVault(){
          && !_rcGone(rec.id)                                        // ...and not one I just deleted
          && !_wasCleared(rec.date, rec.facility)) mine.push({rec:rec, folder:(fresh[i]||{}).fac||cleanSeg(rec.facility)||'Unfiled'});
     });
+    /* SAY IT WHETHER OR NOT ANYTHING CAME BACK. Both outcomes are wrong in the same way: nothing
+       restored when a building was unreadable is not "no round today", and a partial restore is a card
+       missing patients. Either way the provider has to know the screen is not the whole picture. */
+    if(_restoreUnreadable){
+      setTimeout(()=>toast('Couldn’t reach '+_restoreUnreadable+' building'+(_restoreUnreadable===1?'':'s')
+        +' in ClinicalVault just now, so this card may be missing patients. Nothing is lost — reload to try again.'), 600);
+    }
     if(!mine.length) return;
     mine.sort((a,b)=>String(a.rec.savedAt||'').localeCompare(String(b.rec.savedAt||'')));
     /* ---------- ONE BUILDING. THIS FILTER IS THE WHOLE POINT OF THE BLOCK BELOW ----------
@@ -3393,11 +3408,42 @@ function closeRecentRounds(){ document.getElementById('recentRounds').classList.
    problem here: the provider cannot tell "you rounded 2 patients" from "we could only read 2 of
    your 3 records", and those call for opposite actions. Reset per open, not accumulated. */
 let _rrFailed=0;
+// Buildings whose LISTING could not be read, as opposed to _rrFailed which counts records that would
+// not download. Different causes, and a provider deciding whether to trust this list wants to know
+// which — "one building is unreachable" and "three records would not open" are not the same news.
+let _rrUnreadableFacs=0;
+/* FAIR ACROSS BUILDINGS, not newest-wins.
+   The read cap used to be applied to ONE NETWORK-WIDE SORT: every building's records were ordered by
+   last-modified together and the newest 300 were read. The provider test cannot rescue that, because a
+   record's provider lives INSIDE the file body and the listing does not carry it — so the filter
+   necessarily runs after the download, on whatever survived the cap.
+   At thirty buildings that is roughly three days of history network-wide, while the picker promises
+   seven and "the last ten rounds however old". A provider whose last round was a week ago sits
+   hundreds of records deep and is simply not offered it — the tool telling them their own round does
+   not exist. It fails at about fifteen buildings; the practice is heading for thirty-plus.
+   Taking a TURN FROM EACH BUILDING fixes it with the same number of reads: a quiet building is never
+   crowded out by a busy one, and how many buildings exist stops mattering. Pure, so it is testable. */
+function _rrFairSlice(fresh, cap){
+  const by={}, order=[];
+  (fresh||[]).forEach(x=>{ const k=String(x&&x.fac||''); if(!by[k]){ by[k]=[]; order.push(k); } by[k].push(x); });
+  order.forEach(k=>by[k].sort((a,b)=>
+    String((b.f&&b.f.lastModifiedDateTime)||'').localeCompare(String((a.f&&a.f.lastModifiedDateTime)||''))));
+  const out=[];
+  for(let i=0; out.length<cap; i++){
+    let added=false;
+    for(let j=0;j<order.length;j++){
+      const row=by[order[j]][i];
+      if(row){ out.push(row); added=true; if(out.length>=cap) break; }
+    }
+    if(!added) break;                                  // every building exhausted
+  }
+  return out;
+}
 async function openRecentRounds(){
   const modal=document.getElementById('recentRounds'), list=document.getElementById('rrList');
   modal.classList.add('on');
   list.innerHTML='<div class="muted">Checking ClinicalVault…</div>';
-  _rrFailed=0;
+  _rrFailed=0; _rrUnreadableFacs=0;
   try{
     const token=await _vaultToken();
     const {driveId}=await _vaultCtx(token);
@@ -3405,8 +3451,12 @@ async function openRecentRounds(){
     const facs=(await _vaultList(token,driveId,'RoundCards')).filter(it=>it.folder).map(it=>it.name);
     // Only the months this picker's own look-back can touch, +1 day so a boundary cannot clip one off.
     const since=_rcDaysBackISO(RR_LOOKBACK_DAYS+1);
+    /* Same distinction as restore-on-open: a building we could not READ is not a building with no
+       rounds. Counted separately from _rrFailed, which is a record that would not download — the two
+       have different causes and a provider deciding whether to trust this list wants to know which. */
     const listings=await Promise.all(facs.map(fac=>
-      _rcListRecords(token,driveId,fac,since).then(files=>({fac,files})).catch(()=>({fac,files:[]}))));
+      _rcListRecords(token,driveId,fac,since).then(files=>({fac,files}))
+        .catch(e=>{ if(e && e.vaultUnreadable) _rrUnreadableFacs++; return {fac,files:[]}; })));
     const fresh=[];
     listings.forEach(({fac,files})=>files.forEach(f=>{
       const t=Date.parse(f.lastModifiedDateTime||''); if(isNaN(t)||t<cut) return;
@@ -3416,10 +3466,9 @@ async function openRecentRounds(){
        rounds; reading a whole 60-day folder to render ten rows is work nobody sees. A round is a
        handful of records, so a generous multiple of the row count is still far less than the
        folder, and it bounds the cost as the folder grows (it is never purged). */
-    fresh.sort((a,b)=>String(b.f.lastModifiedDateTime||'').localeCompare(String(a.f.lastModifiedDateTime||'')));
     const readCap=Math.max(60, RR_MAX_ROUNDS*30);
-    const skipped=Math.max(0, fresh.length-readCap);
-    const toRead=fresh.slice(0, readCap);
+    const toRead=_rrFairSlice(fresh, readCap);
+    const skipped=Math.max(0, fresh.length-toRead.length);
     const recs=await Promise.all(toRead.map(({fac,f})=>{
       const key=(f.id||f.name)+'|'+(f.lastModifiedDateTime||'');
       const hit=_rrCacheGet(key);
@@ -3458,9 +3507,14 @@ async function openRecentRounds(){
       .sort((a,b)=>b.date.localeCompare(a.date) || String(a.facility).localeCompare(String(b.facility)))
       .slice(0, RR_MAX_ROUNDS);                    // the last N rounds, newest first — however old they are
     if(!_rrGroups.length){
-      list.innerHTML='<div class="muted">'+(skippedOther
-        ? 'No saved rounds for '+esc(_pv.who)+' — the ones on file belong to another provider.'
-        : 'No saved rounds found.')+'</div>';
+      /* "No saved rounds found" is a claim about the record store, and a building we could not read
+         does not support it. An unreachable building must never read as an empty week. */
+      list.innerHTML='<div class="muted">'+(_rrUnreadableFacs
+        ? 'Couldn’t reach '+_rrUnreadableFacs+' building'+(_rrUnreadableFacs===1?'':'s')
+          +' in ClinicalVault just now, so this list may be incomplete. Nothing is lost — close this and try again in a moment.'
+        : skippedOther
+          ? 'No saved rounds for '+esc(_pv.who)+' — the ones on file belong to another provider.'
+          : 'No saved rounds found.')+'</div>';
       return;
     }
     list.innerHTML=_rrGroups.map((g,i)=>
@@ -3478,6 +3532,11 @@ async function openRecentRounds(){
          reopening genuinely retries. */
       +(_rrFailed>0 ? '<div class="muted" style="margin-top:8px;font-size:12.5px">⚠ '+_rrFailed+' record'
           +(_rrFailed===1?'' : 's')+' could not be read just now, so a round below may show fewer patients than it has. '
+          +'Nothing is lost — close this and open it again to retry.</div>' : '')
+      /* And the same for a whole BUILDING that would not list — that hides entire rounds rather than
+         patients within one, so it must be said even when the list looks perfectly healthy. */
+      +(_rrUnreadableFacs>0 ? '<div class="muted" style="margin-top:8px;font-size:12.5px">⚠ '+_rrUnreadableFacs+' building'
+          +(_rrUnreadableFacs===1?'' : 's')+' could not be reached, so a round may be missing from this list entirely. '
           +'Nothing is lost — close this and open it again to retry.</div>' : '')
       /* SAY WHEN RECORDS WERE FILTERED OUT, not only when EVERYTHING was. skippedOther has always
          been counted, and until now it was rendered ONLY in the no-rounds-at-all branch above - so a
