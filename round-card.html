@@ -265,7 +265,7 @@
    it is a hash of BOTH shipped files, so editing either one makes it provably stale and the sweep says
    so. The composer carries the identical value and passes its own into our URL (?b=), which is how the
    two can tell whether they shipped as a pair. See build-stamp.js. */
-const BUILD = '2026-08-03.8e2b8ed';
+const BUILD = '2026-08-03.7994f4c';
 /* A top-level `const` is NOT a property of window — only `var` and function declarations are. So the
    composer, reading across the frame, gets `undefined` for our build no matter what we declared here,
    and would conclude on EVERY open that this card is too old to have one. Found by opening the overlay
@@ -1137,16 +1137,19 @@ function delPt(i,btn){
         if(!token){ why='you’re not signed in'; }
         else{
           const {driveId}=await _vaultCtx(token);
-          /* BOTH LAYOUTS. The record is written under the round's month now, but a record saved before
-             that change — or under a round with no date — is still in the flat folder. Deleting the
-             wrong one of the two would report success while the record lived on and restore-on-open
-             brought the patient straight back, which is exactly the failure the comment above
-             describes. Try the month path, fall back to the flat one, and only then call it refused. */
-          const monthPath=_rcRecFolder(fac, S.round.date)+'/'+doomedId+'.json';
-          const flatPath='RoundCards/'+fac+'/'+doomedId+'.json';
-          ok=await _vaultDelete(token,driveId,monthPath);
-          if(!ok && monthPath!==flatPath) ok=await _vaultDelete(token,driveId,flatPath);
-          if(!ok) why='ClinicalVault refused it';
+          /* RESOLVE THE PATH, DO NOT GUESS IT. A record can now be in the flat folder or a month
+             folder, under a legacy <id>.json name or a <provider>__<id>.json one — four combinations,
+             and guessing wrong reports success while the record lives on and restore-on-open brings
+             the patient straight back. That is exactly the failure the comment above describes.
+             One month-scoped listing answers it exactly, and _rcListRecords already parses the id out
+             of the name for us. */
+          const here=await _rcListRecords(token,driveId,fac,S.round.date,S.round.date);
+          const hit=here.filter(f=>f.recId===String(doomedId))[0];
+          if(!hit){ why='the record was not found in ClinicalVault'; }
+          else {
+            ok=await _vaultDelete(token,driveId,hit.path);
+            if(!ok) why='ClinicalVault refused it';
+          }
         }
       }catch(e){ why=(e&&e.message)||'the delete failed'; }
       _rcDeleting.delete(doomedId);
@@ -2262,6 +2265,39 @@ function _rcMonthsSince(sinceISO, today){
   }
   return out;
 }
+/* ============ PUT THE ANSWER IN THE NAME =======================================================
+   "Whose round is this?" lived INSIDE the JSON, so answering it meant downloading every record and
+   throwing most away — thousands of files to find a dozen at thirty buildings. That one fact caused
+   every request-count failure measured on 2026-08-02, and it is why moving to a real database looked
+   attractive. It does not need one: the listing already returns names, so the NAME can carry the answer.
+
+       RoundCards/<facility>/<YYYY-MM>/<provider>__<id>.json
+
+   FORWARD-ONLY. A record written before this is <id>.json with no separator, reads as "provider
+   unknown", and is still downloaded exactly as it always was. Nothing is renamed and nothing moves.
+
+   THE SLUG COMES FROM THE SORTED NAME KEY, and that is what makes this safe rather than dangerous.
+   The filing provider can change mid-round (_fileProv falls back to the Provider box), and a record
+   re-saved under a different NAME would leave a second file behind — two files, one id, one patient
+   counted twice. Slugging through _nameKey means "Abby Mehler", "Mehler, Abby" and "abby mehler" all
+   produce the SAME slug, so the ordinary ways a name drifts cannot split a record. Readers still
+   de-duplicate by id and keep the newest, because "cannot" is not "will not". */
+function _rcProvSlug(name){
+  const k=_nameKey(name);                     // lowercase, punctuation stripped, tokens SORTED
+  return k ? k.replace(/ /g,'-') : 'unattributed';
+}
+function _rcRecName(id, prov){ return _rcProvSlug(prov)+'__'+String(id)+'.json'; }
+/* Parsed from the LAST separator, so a slug can never eat the id even if one slipped through. */
+function _rcIdFromName(name){
+  const base=String(name||'').replace(/\.json$/i,'');
+  const i=base.lastIndexOf('__');
+  return i<0 ? base : base.slice(i+2);
+}
+function _rcProvSlugFromName(name){
+  const base=String(name||'').replace(/\.json$/i,'');
+  const i=base.lastIndexOf('__');
+  return i<0 ? '' : base.slice(0,i);          // '' = legacy name, provider unknown, must be read
+}
 /* A window in whole days, back from today. Callers pass a DAY count rather than an hour count on
    purpose: a 36-hour window rounded down can start on the far side of a month boundary, and the month
    folder it needs would then never be listed. Widening costs one extra listing and cannot lose a record. */
@@ -2292,9 +2328,23 @@ async function _rcListRecords(token, driveId, fac, sinceISO, untilISO){
   [{rel:base, fs:top}].concat(more).forEach(({rel,fs})=>fs.forEach(f=>{
     if(f.folder) return;                                        // the month folders themselves
     if(!/\.json$/i.test(f.name||'')) return;
-    out.push(Object.assign({}, f, {path:rel+'/'+f.name}));
+    /* recId and provSlug come off the NAME, so a caller can decide whether it wants this record
+       BEFORE spending a request on it. provSlug '' means a legacy name that cannot say — those are
+       still read, exactly as every record was before. */
+    out.push(Object.assign({}, f, {path:rel+'/'+f.name,
+      recId:_rcIdFromName(f.name), provSlug:_rcProvSlugFromName(f.name)}));
   }));
-  return out;
+  /* ONE FILE PER RECORD, NEWEST WINS. The filing provider can change mid-round, so the same id could
+     in principle be written under two names — and two files for one record is one patient counted
+     twice, on a sheet and in the QC count. The slug is name-key based so this should not happen; this
+     is the belt. Legacy and new names for the same id collapse here too, which is what makes the
+     forward-only migration invisible. */
+  const byId={};
+  out.forEach(f=>{
+    const k=f.recId; const prev=byId[k];
+    if(!prev || String(f.lastModifiedDateTime||'') > String(prev.lastModifiedDateTime||'')) byId[k]=f;
+  });
+  return Object.keys(byId).map(k=>byId[k]);
 }
 async function _vaultReadJson(token,driveId,rel){
   const m=await _gfetch('https://graph.microsoft.com/v1.0/drives/'+driveId+'/root:/'+_encPath(rel),token);
@@ -2883,7 +2933,9 @@ async function rcAutoSaveCloud(){
         ptId:p.ptId||p.id||'',   // the id that survives carry-forward - see normalizePts
         wounds:JSON.parse(JSON.stringify(p.wounds||[])) };
       const jb=new Blob([JSON.stringify(rec)],{type:'application/json'});
-      await _netTmo(_vaultUpload(token,driveId,recSegs,id+'.json',jb,'application/json'), 30000);
+      /* provNow, read ONCE above for the whole batch — the same reason the comment there gives. A
+         provider read live inside the loop would put one round's records under two different names. */
+      await _netTmo(_vaultUpload(token,driveId,recSegs,_rcRecName(id, provNow),jb,'application/json'), 30000);
       _rcCloudSig[id]=sigNow; _rcFiled.add(id); n++;   // this one really is in the vault now
     }
     saveFiled();          // persist which ids really reached the vault - see _rcFiled
@@ -2972,7 +3024,7 @@ async function saveVault(){
         ptId:p.ptId||p.id||'',   // the id that survives carry-forward - see normalizePts
         wounds:JSON.parse(JSON.stringify(p.wounds||[])) };
       const jb=new Blob([JSON.stringify(rec)],{type:'application/json'});
-      await _vaultUpload(token,driveId,recSegs,id+'.json',jb,'application/json');
+      await _vaultUpload(token,driveId,recSegs,_rcRecName(id, provName),jb,'application/json');
       try{ _rcCloudSig[id]=sigNow; _rcFiled.add(id); }catch(e){}   // keep auto-save in step so it won't re-upload these
     }
     saveFiled();          // persist which ids really reached the vault - see _rcFiled
@@ -3415,8 +3467,10 @@ let _rrUnreadableFacs=0;
 /* FAIR ACROSS BUILDINGS, not newest-wins.
    The read cap used to be applied to ONE NETWORK-WIDE SORT: every building's records were ordered by
    last-modified together and the newest 300 were read. The provider test cannot rescue that, because a
-   record's provider lives INSIDE the file body and the listing does not carry it — so the filter
-   necessarily runs after the download, on whatever survived the cap.
+   record's provider used to live ONLY inside the file body, so the filter necessarily ran after the
+   download, on whatever survived the cap. (Records written from 2026-08-03 carry the provider in the
+   NAME, so most are now skipped before the cap is ever reached — see _rcProvSlugFromName. This stays
+   because legacy records still cannot say whose they are, and must be read to find out.)
    At thirty buildings that is roughly three days of history network-wide, while the picker promises
    seven and "the last ten rounds however old". A provider whose last round was a week ago sits
    hundreds of records deep and is simply not offered it — the tool telling them their own round does
@@ -3444,6 +3498,7 @@ async function openRecentRounds(){
   modal.classList.add('on');
   list.innerHTML='<div class="muted">Checking ClinicalVault…</div>';
   _rrFailed=0; _rrUnreadableFacs=0;
+  let skippedByName=0;                 // other providers' records, recognised from the filename alone
   try{
     const token=await _vaultToken();
     const {driveId}=await _vaultCtx(token);
@@ -3457,9 +3512,19 @@ async function openRecentRounds(){
     const listings=await Promise.all(facs.map(fac=>
       _rcListRecords(token,driveId,fac,since).then(files=>({fac,files}))
         .catch(e=>{ if(e && e.vaultUnreadable) _rrUnreadableFacs++; return {fac,files:[]}; })));
+    /* SKIP OTHER PROVIDERS' RECORDS BEFORE SPENDING A REQUEST ON THEM. This is the whole point of
+       putting the provider in the filename: the answer to "is this mine?" now arrives with the
+       listing, so a record belonging to someone else costs nothing instead of a download.
+       A LEGACY name cannot say, and is still read — the filter below decides it after the fact,
+       exactly as every record was decided before. Erring toward reading is the only safe direction:
+       skipping a record we cannot identify would hide a provider's own round. */
+    const _pvEarly=_cardProvSet();
     const fresh=[];
     listings.forEach(({fac,files})=>files.forEach(f=>{
       const t=Date.parse(f.lastModifiedDateTime||''); if(isNaN(t)||t<cut) return;
+      if(f.provSlug && _pvEarly.set && _pvEarly.set.size
+         && !_pvEarly.set.has(f.provSlug.replace(/-/g,' '))
+         && f.provSlug!=='unattributed') { skippedByName++; return; }
       fresh.push({fac,f});
     }));
     /* Newest first, and only as far as we could possibly need. The picker shows RR_MAX_ROUNDS
@@ -3492,7 +3557,10 @@ async function openRecentRounds(){
     // the provider reads each row before choosing one.
     const _pv=_cardProvSet();
     if(!_pv.set.size){ list.innerHTML='<div class="muted">Set the Provider first so it knows whose rounds to show.</div>'; return; }
-    let skippedOther=0;
+    /* Seeded with the ones recognised from the FILENAME. They were never downloaded, so they cannot
+       be counted below — but to the provider "on file under a different provider" is the same fact
+       however we worked it out, and under-counting it would make the message quietly wrong. */
+    let skippedOther=skippedByName;
     const groups={};
     recs.forEach(rec=>{
       if(!rec || rec.schema!=='roundcard.v1') return;
