@@ -80,6 +80,15 @@
   .wound-head{display:flex; justify-content:space-between; align-items:center;
     border-bottom:1px solid var(--line); padding-bottom:8px; margin-bottom:4px}
   .wound-head b{font-size:15px}
+  /* A RESOLVED WOUND FOLDS TO ITS BANNER (Scott 2026-08-03: "maybe we minimize it just the wound
+     banner and can expand upon clicking it?"). PRESENTATION ONLY — the wound stays in the record,
+     keeps its id, carries forward, and prints on the nurse's sheet exactly as before. Only the form
+     body below the banner is hidden, and only on screen: the print rule below puts it back, so a
+     printed card can never be quietly shorter than the round it came from. */
+  .w-pill{display:inline-block; margin-left:8px; padding:2px 9px; border-radius:999px;
+    background:#e8f5ef; border:1px solid #9fd4c2; color:#0b6b60; font-size:11px; font-weight:700;
+    letter-spacing:.3px; text-transform:uppercase; white-space:nowrap}
+  .w-fold-shut{display:none}
   footer{position:fixed; bottom:0; left:0; right:0; z-index:20; background:rgba(255,255,255,.97);
     border-top:1px solid var(--line); padding:10px 14px;
     padding-bottom:calc(10px + env(safe-area-inset-bottom));
@@ -112,6 +121,10 @@
   .vault-err{background:#fbeae8; border:1px solid #e0a49d; color:#8f2f26; border-radius:10px; padding:9px 12px; font-size:13px; margin-top:8px}
   @media print{
     header,footer,.tabs,.no-print{display:none !important}
+    /* A folded wound unfolds for print. The fold is a way to get past a wound nobody has to act on,
+       not a way to leave it off a document — a printed card that silently dropped a resolved wound's
+       findings would be a shorter record than the round it came from. */
+    .w-fold-shut{display:block !important}
     body{background:#fff; padding:0}
   }
 </style>
@@ -265,7 +278,7 @@
    it is a hash of BOTH shipped files, so editing either one makes it provably stale and the sweep says
    so. The composer carries the identical value and passes its own into our URL (?b=), which is how the
    two can tell whether they shipped as a pair. See build-stamp.js. */
-const BUILD = '2026-08-03.b9095e5';
+const BUILD = '2026-08-03.65a3570';
 /* A top-level `const` is NOT a property of window — only `var` and function declarations are. So the
    composer, reading across the frame, gets `undefined` for our build no matter what we declared here,
    and would conclude on EVERY open that this card is too old to have one. Found by opening the overlay
@@ -1341,6 +1354,40 @@ function delWound(i){
 const _healedEdited = new Set();
 function _healedKey(i){ const p=activePt(); const w=p&&p.wounds&&p.wounds[i];
   return (p&&p.id?p.id:'?')+':'+((w&&w.wid)||('idx'+i)); }
+/* ---------- THE RESOLVED-WOUND FOLD (Scott 2026-08-03) ----------
+   "maybe we minimize it just the wound banner and can expand upon clicking it?"
+
+   PRESENTATION ONLY, and that is the entire risk in this feature. A folded wound is still in
+   p.wounds, still carries forward through cfRebuildWounds, still goes to the composer on the pull,
+   and still prints in full on the nurse's sheet (sheetHTML never asks any of this). Nothing below
+   reads or writes a wound field. Fold the DOM, never the data.
+
+   Both sets are session-only and deliberately NOT part of the record — a fold is a view, not a
+   finding, and it must not travel to the vault or to next week's card. Same reasoning, same keying
+   (patient id + wid) as _healedEdited above.
+     _rcFoldPref   she has explicitly opened or closed this one; her choice always wins
+     _rcTouched    she has written to this wound this session
+
+   WHY "TOUCHED" EXISTS. The default is folded, but only for a wound she has not worked on. Marking
+   a wound Healed at the bedside must not fold it away under her fingers: the Orders box sits at the
+   bottom of the block that would have just vanished, and she is usually mid-entry when she picks it. */
+const _rcFoldPref = new Map();
+const _rcTouched  = new Set();
+/* Pure on purpose (CLAUDE.md: logic buried in a closure never gets tested, and that is where the
+   defects live). Given the wound and its key, is it drawn as a banner right now?
+   A healed wound she has CHANGED never folds — the warning on it is the reason it is on screen. */
+function isWoundFolded(w, key){
+  if(!isHealedWound(w)) return false;                          // only a resolved wound ever folds
+  if(_healedEdited.has(key)) return false;                     // don't hide a warning she needs
+  if(_rcFoldPref.has(key)) return _rcFoldPref.get(key)===true; // she said so
+  return !_rcTouched.has(key);                                 // default: folded, unless she is working on it
+}
+function toggleWoundFold(i){
+  const p=activePt(); const w=p&&p.wounds&&p.wounds[i]; if(!w) return;
+  const key=_healedKey(i);
+  _rcFoldPref.set(key, !isWoundFolded(w,key));
+  render();
+}
 function setW(i,f,val){
   const p=activePt(); if(!p) return;
   /* WARN ON THE ACT OF CHANGING IT, not on the wound existing (Scott 2026-07-30). A healed wound now
@@ -1350,6 +1397,11 @@ function setW(i,f,val){
   const wasHealed=isHealedWound(p.wounds[i]);
   const firstTouch = wasHealed && f!=='status' && !_healedEdited.has(_healedKey(i));
   if(firstTouch){ _healedEdited.add(_healedKey(i)); toast(wLabel(p.wounds[i],p.wounds)+' is recorded as healed — see the note on it'); }
+  /* She is working on this wound, so it must not fold away underneath her (see isWoundFolded).
+     Recorded for EVERY field, the status itself included: picking "Healed" from the Status box is
+     exactly the moment an automatic fold would be most surprising and most costly, because the
+     Orders box she is heading for is at the bottom of the block that would vanish. */
+  _rcTouched.add(_healedKey(i));
   p.wounds[i][f]=val; save();
   // Status moved off Healed: the warning no longer applies, so drop it rather than leave it nagging.
   if(f==='status' && !isHealedWound(p.wounds[i])) _healedEdited.delete(_healedKey(i));
@@ -1708,11 +1760,21 @@ function woundHTML(w,i,list){
       + 'If this site has opened again, that is a <b>new wound</b> — remove this edit and use '
       + '“+ Add another wound”, and pick the same place again. The note keeps them apart.</div>'
     : '';
+  /* THE FOLD. Everything after the head is wrapped in one div that is hidden when this wound is
+     resolved and she has not opened it. The wound is still rendered — every input, every value —
+     so nothing here can change what setW writes, what carries forward, or what the sheet prints.
+     The toggle is a real button rather than a clickable header: the header also carries Remove,
+     and a stray tap that deletes a wound instead of expanding it is not a trade worth making. */
+  const folded = isWoundFolded(w, _healedKey(i));
   return '<div class="card">'
     + '<div class="wound-head"><b>'+esc(wHead(w,list))+'</b>'
-    + (isHealedWound(w)?'<span class="muted" style="font-size:11px;margin-left:8px">healed</span>':'')
+    + (isHealedWound(w)?'<span class="w-pill">Resolved</span>':'')
     + (pr?'<span class="muted" style="font-size:11px;margin-left:8px">carried from last visit</span>':'')
+    + (isHealedWound(w)
+        ? '<button class="tiny no-print" onclick="toggleWoundFold('+i+')">'+(folded?'Show':'Hide')+'</button>'
+        : '')
     + '<button class="tiny no-print" onclick="delWound('+i+')">Remove</button></div>'
+    + '<div class="w-fold'+(folded?' w-fold-shut':'')+'">'
     + healedWarn
 
     /* THE LOCATION IS NOW A CLOSED PICK, NOT TYPED TEXT (Scott 2026-07-31, numbering retired).
@@ -1800,6 +1862,7 @@ function woundHTML(w,i,list){
         ? '<div class="muted no-print" style="font-size:11.5px;margin:4px 0 0">Last visit: '+esc(pr.orders)
           +' <button class="tiny" style="margin-left:6px" onclick="useSameOrders('+i+')">Same</button></div>'
         : '')
+    + '</div>'      // .w-fold — the body that the banner folds away
     + '</div>';
 }
 function render(){
@@ -1901,6 +1964,9 @@ function sheetHTML(list, roundOverride){
    +"td.k{color:#948f83;font-size:8.5pt;padding:2px 14px 2px 0;white-space:nowrap;vertical-align:top;text-transform:uppercase;letter-spacing:.4px}"
    +"td.val{font-size:10.5pt;padding:2px 0;vertical-align:top;color:#2a2925}"
    +".b-imp{color:#1a7f46;font-weight:700}.b-stb{color:#565656;font-weight:700}.b-wor{color:#c0492b;font-weight:700}"
+   // A resolved wound's marker on the sheet. A plain bold coloured span, because that is one of the
+   // few things Word's legacy importer renders faithfully (see the charset note below).
+   +".w-res{color:#1a7f46;font-weight:700;font-size:9.5pt;letter-spacing:.4px}"
    +".orders-cell{background:#eaf6f3;border-left:4px solid #0f8a7c;padding:8px 13px}"
    +".orders-lab{font-size:8pt;text-transform:uppercase;letter-spacing:.6px;color:#0c5f56;font-weight:700}"
    +".orders-txt{font-size:11pt;font-weight:600;color:#1b1b1b;white-space:pre-wrap}"
@@ -1939,6 +2005,33 @@ function sheetHTML(list, roundOverride){
     p.wounds.forEach((w,i)=>{
       const odor=disp(w,'odor'), status=disp(w,'status');
       const stCls = status ? (String(status).toLowerCase().indexOf('improv')>=0?'b-imp':(String(status).toLowerCase().indexOf('wors')>=0?'b-wor':'b-stb')) : '';
+      /* A RESOLVED WOUND COLLAPSES TO ITS BANNER HERE TOO (Scott 2026-08-03: "also in the word
+         document produced for the handoff please!"). THIS is the document that reaches the facility —
+         printed, downloaded as .doc, and filed to Daily Handoffs/ — so this is where the collapse
+         actually matters. A document cannot expand, so collapsed means the banner and nothing else.
+
+         ⚠ THE ORDERS STILL PRINT, and that is the whole design of this branch. This sheet exists so a
+         nurse knows what to DO; a resolved wound can still carry an instruction ("leave open to air",
+         "no dressing, monitor for breakdown"), and dropping it would delete an order the facility
+         acts on in the name of tidiness. What goes away is the FINDINGS table — size, drainage, wound
+         bed, periwound — which is exam detail nobody acts on once the wound is closed.
+
+         IT IS STILL LISTED. The patient banner above prints "N wounds" straight off p.wounds.length,
+         so removing the block would leave a nurse counting three headings under "4 wounds" and going
+         to look for one that is not missing. */
+      if(isHealedWound(w)){
+        const ord=String(w.orders||'').trim();
+        b += '<div class="w'+(i===0?' w-first':'')+'">'
+           + '<div class="w-title"><span class="loc">'+esc(wHead(w,p.wounds))+'</span>'
+           +   ' &nbsp;·&nbsp; <span class="w-res">RESOLVED</span></div>'
+           + (ord
+               ? '<table width="100%" cellpadding="0" cellspacing="0" style="margin-top:8px"><tr><td class="orders-cell">'
+                 + '<span class="orders-lab">Orders for the nurse</span><br><span class="orders-txt">'+esc(ord)+'</span>'
+                 + '</td></tr></table>'
+               : '')
+           + '</div>';
+        return;
+      }
       b += '<div class="w'+(i===0?' w-first':'')+'"><div class="w-title"><span class="loc">'+esc(wHead(w,p.wounds))+'</span></div>'
          + '<table>'
          + '<tr><td class="k">Type</td><td class="val">'+esc(v(disp(w,'type')))
