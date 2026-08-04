@@ -278,7 +278,7 @@
    it is a hash of BOTH shipped files, so editing either one makes it provably stale and the sweep says
    so. The composer carries the identical value and passes its own into our URL (?b=), which is how the
    two can tell whether they shipped as a pair. See build-stamp.js. */
-const BUILD = '2026-08-04.af3ba78';
+const BUILD = '2026-08-04.85daa7d';
 /* A top-level `const` is NOT a property of window — only `var` and function declarations are. So the
    composer, reading across the frame, gets `undefined` for our build no matter what we declared here,
    and would conclude on EVERY open that this card is too old to have one. Found by opening the overlay
@@ -930,7 +930,20 @@ function _wBase(w){ return String((w&&w.loc)||'').trim() || W_NO_NAME; }
    The unnamed case shortens rather than nesting — "Wound: (site not entered)", never
    "Wound: a wound with no location yet". */
 const W_UNNAMED_HEAD='(site not entered)';
-function wHead(w, list){ const n=wLabel(w, list); return 'Wound: '+(n===W_NO_NAME ? W_UNNAMED_HEAD : n); }
+/* ⚠ SWAP THE SENTINEL WHEREVER IT STARTS THE LABEL, NOT ONLY WHEN IT IS THE WHOLE LABEL. This was an
+   equality test, and wLabel appends " (2)" to wounds sharing a name — two wounds with no location yet
+   ARE siblings by that rule, so from the second one the equality missed and the sentence above became
+   the wound's NAME. The facility's .doc came out headed "Wound: a wound with no location yet (2)": the
+   app's own internal prompt, verbatim, on a document a nurse acts on — and on her phone at :1880 the
+   moment she taps "+ Add another wound" before picking a site. One unnamed wound printed correctly,
+   which is exactly why every suite stayed green.
+   The suffix is KEPT, not dropped: two wounds with no site still need two different headings, which is
+   the whole reason rule 7's "(2)" exists. So "Wound: (site not entered) (2)".
+   Deliberately a prefix test on the label rather than a fresh _wBase(w) call — it needs no new
+   collaborator (nothing for a suite harness to have to learn about), and it can only ever catch MORE
+   than the old equality did, never less. No real site starts with that sentence. */
+function wHead(w, list){ const n=String(wLabel(w, list));
+  return 'Wound: '+(n.indexOf(W_NO_NAME)===0 ? W_UNNAMED_HEAD+n.slice(W_NO_NAME.length) : n); }
 function wLabel(w, list){
   const base=_wBase(w);
   if(!Array.isArray(list)) return base;
@@ -1296,12 +1309,42 @@ function onFacPick(sel){
   applyFacChange(nf);
 }
 function applyFacChange(nf){
-  nf=(nf||'').trim(); const lock=(S.round.facLock||'').trim();
+  nf=(nf||'').trim(); let lock=(S.round.facLock||'').trim();
   _sheetInvalidate();                                  // different facility = a different round's sheet
+  /* READ THE LOCK OFF THE HEADER BEFORE THE GUARD DECIDES ANYTHING. addPt binds facLock to whatever
+     is in the Facility box when the FIRST patient is added — and on a fresh card that box is blank
+     (blank() leaves it ''), while "Add the first patient" is not gated on a facility. So a provider
+     who taps Add before she picks the building carries facLock '' for the WHOLE session, `!lock`
+     below skips the confirm every single time, and the one guard that stops one building's residents
+     being handed to another building is simply off.
+     Driven 2026-08-04: chart a University Heights resident, realise it is the wrong building, pick
+     Crestmoor — no confirm, no clear. The University Heights resident stays on the card under a
+     Crestmoor header, a second handoff sheet goes to Daily Handoffs/Crestmoor listing a University
+     Heights resident, and the next edit writes the same record id into RoundCards/Crestmoor while
+     the University Heights copy stays put: one patient, one day, two buildings, double-counted in
+     the QC feed. Four consecutive switches, zero confirms.
+     Patients on the card with a building in the header BELONG to that building whether or not
+     anything got round to writing it down. Read it off the header and let the guard do its job.
+     Shaped as a HEAL here rather than a change to addPt, because "which building do these patients
+     belong to?" should be answered where the decision is made, not where the row was created —
+     otherwise every present and future path has to remember to write the lock, which is the class of
+     miss that produced this (restore-on-open was the first one, addPt the second). */
+  if(!lock && S.pts.length && (S.round.fac||'').trim()) lock = S.round.facLock = (S.round.fac||'').trim();
   // Empty card: picking the building completes the round's identity (facility + date), so if that
   // round is already on file it belongs on screen. Same path as flipping the date back.
   // Same release as the date path: an empty card carries no round, so it carries no owner either.
-  if(!S.pts.length || !lock || nf===lock){ if(!S.pts.length){ S.round.facLock=nf; S.round.loadedProv=''; S.round.loadedMixed=false; _setUnstarted(false); paintProvSel(); } S.round.fac=nf; save(); paintFacSel(); rcLoadRoundInto(S.round.date, nf); return; }
+  if(!S.pts.length || !lock || nf===lock){
+    if(!S.pts.length){ S.round.facLock=nf; S.round.loadedProv=''; S.round.loadedMixed=false; _setUnstarted(false); paintProvSel(); }
+    /* Rows on the card and STILL no lock: the header was blank too, so this pick is the first
+       building this round has ever had and it adopts them — there is nothing to move them away from.
+       That is exactly the moment the lock has to be written, or the next pick is the silent re-label
+       above (the blank-row order: Add the first patient, pick the building, then type the name).
+       Owner and the unstarted gate are deliberately NOT released here: those belong to an EMPTY
+       card, and this card has work on it — releasing them would hand a colleague's round to whoever
+       is holding the tablet. */
+    else if(!lock) S.round.facLock=nf;
+    S.round.fac=nf; save(); paintFacSel(); rcLoadRoundInto(S.round.date, nf); return;
+  }
   const n=S.pts.length;
   const ok=confirm('This card still has '+n+' patient'+(n===1?'':'s')+' from '+lock+'.\n\n'
     + 'A sheet can only carry one facility\'s residents. Send '+lock+'\'s sheet first if you '
@@ -2266,7 +2309,15 @@ function paintSendPick(){
    the thing that makes purging dangerous, so the card now says so out loud.
    _sheetOnFile: null = not checked yet, true/false = answer for the round currently on screen. */
 let _sheetOnFile=null, _sheetCheckKey='';
-function _sheetKey(){ return (cleanSeg(S.round.fac)||'Unfiled')+'|'+(String(S.round.date||'').slice(0,10)||'undated'); }
+/* Takes the facility and the date EXPLICITLY when a caller already has them pinned; defaults to the
+   live round, which is what every reader wants. sheetAutoSave and saveVault capture both before their
+   first await and then have to say "the sheet I just uploaded is on file for THAT round" — and reading
+   the live boxes at that point stamped the answer against whatever building the provider had already
+   moved on to. See the tails of both savers. Fails closed: a date that is not YYYY-MM-DD normalises to
+   'undated' at capture but to its own raw prefix live, so the keys simply will not match and the stamp
+   is skipped — one extra vault listing rather than a wrong answer. */
+function _sheetKey(f,d){ f=(f===undefined?S.round.fac:f); d=(d===undefined?S.round.date:d);
+  return (cleanSeg(f)||'Unfiled')+'|'+(String(d||'').slice(0,10)||'undated'); }
 function _sheetInvalidate(){ _sheetOnFile=null; _sheetCheckKey=''; _sheetLastSig=''; }   // new round ⇒ re-check AND re-file
 async function _checkSheetOnFile(){
   const key=_sheetKey();
@@ -3144,7 +3195,20 @@ async function sheetAutoSave(){
     const blob=new Blob(['﻿'+sheetHTML(pts,{fac:facRaw, date:date, prov:provName})],{type:'application/msword'});
     await _netTmo(_vaultUpload(token,driveId,segs,'Wound Orders — '+fac+' — '+date+' — '+prov+'.doc',blob,'application/msword'), 30000);
     _sheetLastSig=sig;
-    _sheetOnFile=true; _sheetCheckKey=_sheetKey();      // the round now HAS a sheet
+    /* STAMP THE ROUND WE ACTUALLY FILED FOR, NOT THE ONE ON SCREEN NOW. Everything this upload
+       depends on was captured synchronously above for exactly this reason — and then the ANSWER was
+       recorded against a live _sheetKey() four awaits later. The flush applyFacChange fires on the
+       way out of a building is the everyday case, not an edge case: it uploads University Heights'
+       sheet and then stamps "a sheet is on file" under Crestmoor, undoing the _sheetInvalidate()
+       applyFacChange had just run one line earlier. The provider walks into Crestmoor, adds her first
+       patient, taps Review & send inside the 20-second debounce — and "No handoff sheet filed for
+       this round yet" stays blank, because a cached true is answering for a building she has left.
+       _checkSheetOnFile never even lists Daily Handoffs/Crestmoor. It hurts most on facility Wi-Fi,
+       where the sheet upload keeps timing out all round and the warning that would have told her
+       never appears. If the round has moved on, this answer is not about it — say nothing rather than
+       something wrong. Same shape as carryForward's post-await facility re-check. (2026-08-04) */
+    const filedKey=_sheetKey(facRaw, date);
+    if(filedKey===_sheetKey()){ _sheetOnFile=true; _sheetCheckKey=filedKey; }   // the round now HAS a sheet
     _paintSheetWarn();
   }catch(e){ /* leave _sheetLastSig unset so the next edit retries */ }
   finally{ _sheetAutoBusy=false; }
@@ -3348,7 +3412,12 @@ async function saveVault(){
     const blob=new Blob(['﻿'+sheetHTML()],{type:'application/msword'});
     const item=await _vaultUpload(token,driveId,sheetSegs,
       'Wound Orders — '+fac+' — '+date+' — '+prov+'.doc',blob,'application/msword');
-    _sheetOnFile=true; _sheetCheckKey=_sheetKey();     // the sheet now exists for this round
+    /* Same rule as sheetAutoSave's tail, and reachable the same way: nothing disables the Facility
+       box while this save runs (only #vaultBtn is), so a switch mid-save would record "a sheet is on
+       file" against the building she has just moved to, where none is. Stamp the round we uploaded
+       FOR — see _sheetKey. (2026-08-04) */
+    const filedKey=_sheetKey(fac, date);
+    if(filedKey===_sheetKey()){ _sheetOnFile=true; _sheetCheckKey=filedKey; }   // the sheet now exists for this round
     _paintSheetWarn();
     st('Saving patient records…');
     // Same month split as the auto-save above, from the round's own date.

@@ -396,7 +396,7 @@
    the identical value and we pass ours into its URL, so the two can tell whether they shipped as a
    pair. See build-stamp.js for why, and why it cannot be a number someone remembers to raise.
    Declared here, on the first line of the first script, so every later block can see it. */
-const BUILD = '2026-08-04.af3ba78';
+const BUILD = '2026-08-04.85daa7d';
 /* SANDBOX MODE (?sandbox=1, LOCALHOST ONLY — the hosted site ignores it): points uploads at the
    ToolSandbox site so end-to-end tests (incl. the Round Card overlay, which inherits it) never touch
    the real vault. Belt = sitePath swap (done where VAULT_CFG is declared); suspenders = _gfetch
@@ -1078,7 +1078,24 @@ function _wLabel(wid, st){
    carry a doubled colon.
    The unnamed case shortens rather than nesting: "Wound: (site not entered)". */
 const W_UNNAMED_HEAD='(site not entered)';
-function _wHead(wid){ const n=_wLabel(wid); return 'Wound: '+(n===W_NO_NAME ? W_UNNAMED_HEAD : n); }
+/* ⚠ SWAP THE SENTINEL WHEREVER IT STARTS THE LABEL, NOT ONLY WHEN IT IS THE WHOLE LABEL. This was an
+   equality test, and _wLabel appends " (2)" to wounds sharing a name — two wounds with no location yet
+   ARE siblings by that rule, so from the second one the equality missed and W_NO_NAME went through
+   untouched. Because this file's sentinel already begins with the word "Wound", the note pasted into
+   PCC came out headed "Wound: Wound (site not entered) (2)" — the word twice, and the placeholder
+   itself sitting in a chart. Open a new note, click "+ Wound", pick no site on either: the second
+   card's on-screen title (:6045) and the separator _wTitleLine writes into the copied note both say it.
+   The single-wound case printed correctly, which is why wound-switch-test.js:424 and 2379 other
+   assertions stayed green.
+   The suffix is KEPT, not dropped: two wounds with no site still need two different block headings, or
+   the chart has two identical ones and nobody can tell which measurements belong to which — the exact
+   thing rule 7's "(2)" was added to stop.
+   Deliberately a prefix test on the label rather than a fresh _wLabelBase(wid) call — it introduces no
+   new collaborator for a suite harness to have to learn about, it costs nothing on the hot
+   cleanForCopy path, and it can only ever catch MORE than the old equality did, never less. No site in
+   the vocabulary starts with "Wound (site not entered)". */
+function _wHead(wid){ const n=String(_wLabel(wid));
+  return 'Wound: '+(n.indexOf(W_NO_NAME)===0 ? W_UNNAMED_HEAD+n.slice(W_NO_NAME.length) : n); }
 /* The per-wound separator line in the copied note. ONE definition, used by the renderer that writes it
    and by cleanForCopy that must not eat it — because those two disagreeing is precisely the defect
    this replaced: cleanForCopy kept the separator only because it matched /^Wound\s+\d+:$/, and a bare
@@ -6228,7 +6245,16 @@ function resolveAll(){
     if(copiedState[s.name]!=null && copiedState[s.name]!==txt) delete copiedState[s.name];
     const mark=document.createElement('span'); mark.className='copied-mark'; mark.textContent='✓ Copied';
     if(copiedState[s.name]===txt){ box.classList.add('copied'); } else { mark.style.display='none'; }
-    btn.onclick=()=>{ copyRich(txt,'Copied "'+s.name+'"'); copiedState[s.name]=txt; box.classList.add('copied'); mark.style.display='';
+    /* THE GREEN ✓ WAITS FOR THE CLIPBOARD NOW. It used to be set synchronously on the click, before
+       copyRich had even reached navigator.clipboard.write — so a refused copy (tab not focused, which
+       Chrome rejects with NotAllowedError) still painted the box green, still toasted "Copied", and
+       left the PREVIOUS patient's note sitting on the clipboard for her to paste into this patient's
+       chart. The badge is a claim ABOUT THE CLIPBOARD, so it must not be made until the clipboard has
+       answered. On failure the box stays un-ticked — the same signal it gives for a section she has
+       not copied yet. The history commit below deliberately still fires on the click: whether these
+       numbers are real is a different question from whether the clipboard took them. (2026-08-04) */
+    btn.onclick=()=>{ copyRich(txt,'Copied "'+s.name+'"').then(function(landed){ if(!landed) return;
+        copiedState[s.name]=txt; box.classList.add('copied'); mark.style.display=''; });
       // COMMIT POINT. Copying the wound section is the signal that these numbers are real and are
       // going into the chart — so that snapshot becomes next visit's "last visit". Same-day recopy
       // overwrites (last copy wins), so "fix it and copy again" is the correction path. A note that is
@@ -6300,11 +6326,24 @@ function fmtLine(line){
     const lead=(line.match(/^\s*/)||[''])[0];
     return escH(lead)+'<u>'+escH(trimmed)+'</u>';
   }
+  /* THE LABEL CLASS NOW ALLOWS A HYPHEN AND A COMMA. It was [A-Za-z0-9/()→ ] only, so any label
+     carrying either character simply did not match and the row reached PCC with NO markup at all,
+     sitting bare between neighbours that were bolded. Four real lines lost their bold this way:
+     "Medication non-compliance:" and "History of blood clots, clotting disorders, or bleeding
+     disorders:" in the HPI, and the two debridement rows "PRE-Debridement Measurements (cm):" and
+     "POST-Debridement Measurements (cm):" — which sit in the middle of an otherwise fully bolded
+     procedure block, so the provider's own measurements read as though somebody had typed them in
+     afterwards. The words were always correct; only the bold was missing.
+     Both patterns share the class and both had the same hole, so both are widened — the bilateral
+     rule would hit it the moment a bilateral label carried a comma. The hyphen is LAST in the class
+     so it is a literal, not a range. The match stays LAZY and still ends at the first ": ", so
+     widening the class cannot let a label run away into the sentence behind it: "PRE-Debridement
+     Measurements (cm): L: 2 × W: 1" still bolds only up to "(cm):". (2026-08-04) */
   // bilateral "Label — Left: x, Right: y." -> bold the leading label
-  let m=line.match(/^(\s*)([A-Za-z][A-Za-z0-9/()→ ]*?)\s—\s([\s\S]*)$/);
+  let m=line.match(/^(\s*)([A-Za-z][A-Za-z0-9/()→ ,-]*?)\s—\s([\s\S]*)$/);
   if(m) return escH(m[1])+'<b>'+escH(m[2])+'</b> — '+escH(m[3]);
   // "Label: value" -> bold the "Label:" part (label may carry a "→" conditional, e.g. "If pressure injury → Stage:")
-  m=line.match(/^(\s*)([A-Za-z][A-Za-z0-9/()→ ]*?):(\s[\s\S]*|$)/);
+  m=line.match(/^(\s*)([A-Za-z][A-Za-z0-9/()→ ,-]*?):(\s[\s\S]*|$)/);
   if(m) return escH(m[1])+'<b>'+escH(m[2])+':</b>'+escH(m[3]);
   return escH(line);
 }
@@ -6513,10 +6552,14 @@ async function copyRich(plainText, msg){
         'text/html': new Blob([html], {type:'text/html;charset=utf-8'}),
         'text/plain': new Blob([clean], {type:'text/plain;charset=utf-8'})
       })]);
-      toast(msg); return;
+      toast(msg); return true;
     }
   }catch(e){}
-  copyText(clean, msg);   // fallback: plain text (still cleaned)
+  /* SAY WHETHER IT LANDED. The empty catch above stays — a rejected clipboard.write is ordinary
+     (Chrome throws NotAllowedError whenever the tab is not focused) and dropping to the plain-text
+     fallback is the right next move. What was not ordinary was swallowing the ANSWER as well, so the
+     caller lit the green "✓ Copied" badge on a copy that never happened. (2026-08-04) */
+  return copyText(clean, msg);   // fallback: plain text (still cleaned)
 }
 async function copyAll(){
   // ONE-BOX PCC PASTE (PCC change, 2026-07-22: notes now accept a single total text box). This used to
@@ -6550,16 +6593,43 @@ async function copyAll(){
         'text/html': new Blob([html], {type:'text/html;charset=utf-8'}),
         'text/plain': new Blob([plain], {type:'text/plain;charset=utf-8'})
       })]);
-      toast('Whole note copied — paste into the PCC note box'); return;
+      toast('Whole note copied — paste into the PCC note box'); return true;
     }
   }catch(e){}
-  copyText(plain,'Whole note copied');   // fallback: plain text (formatting needs the rich clipboard)
+  /* Same as copyRich, and this is the button EVERY note goes through: "Whole note copied" used to be
+     toasted whether or not a single character reached the clipboard, so a refused copy looked exactly
+     like a good one and what got pasted into this patient's chart was the PREVIOUS patient's note.
+     Report the fallback's real answer. (2026-08-04) */
+  return copyText(plain,'Whole note copied');   // fallback: plain text (formatting needs the rich clipboard)
 }
+/* copyRaw REPORTS now. It used to run execCommand('copy'), throw the answer on the floor and return
+   undefined — so copyText could not tell a copy from a no-op and always toasted success. Chrome
+   returns FALSE when it refuses the command (which it does whenever the click's user activation has
+   already lapsed — i.e. on every fallback that runs after an await) and THROWS in a sandboxed frame.
+   Both mean the same thing at the bedside: nothing moved, and the clipboard still holds the LAST
+   patient's note.
+   `!==false` rather than `===true` on purpose: execCommand is specified to return a boolean, but
+   older and embedded engines have returned undefined on success, and treating that as failure would
+   turn a working copy into a frightening red toast. A throw is unambiguous, so that stays false.
+   ta.remove() moved out of the try so the stray textarea is cleaned up on the throw path too. */
 function copyRaw(t){
   const ta=document.createElement('textarea'); ta.value=t; document.body.appendChild(ta); ta.select();
-  try{ document.execCommand('copy'); }catch(e){} ta.remove();
+  let landed=false;
+  try{ landed=document.execCommand('copy')!==false; }catch(e){ landed=false; }
+  ta.remove();
+  return landed;
 }
-function copyText(t,msg){ copyRaw(t); toast(msg); }
+/* A COPY THAT DID NOT HAPPEN MUST NOT BE REPORTED AS ONE. The provider read "Whole note copied", went
+   to PCC and pasted — and what came out was the previous patient's note, because the clipboard had
+   never been written. Same silent-failure family as the wound-history commit that got its .catch on
+   2026-08-03; this one is worse, because the wrong text lands in a chart. The failure wording is
+   written for what she does NEXT, not for what the code did: it names the real danger, tells her not
+   to paste, and gives the one-step fix. (2026-08-04) */
+function copyText(t,msg){
+  const landed=copyRaw(t);
+  toast(landed ? msg : 'COPY FAILED — nothing reached the clipboard, so it still holds whatever you copied last. Do NOT paste. Click on this page, then press Copy again.');
+  return landed;
+}
 function toast(m){const el=document.getElementById('toast');el.textContent=m;el.classList.add('show');setTimeout(()=>el.classList.remove('show'),1400);}
 
 /* ============ MODE ============ */
