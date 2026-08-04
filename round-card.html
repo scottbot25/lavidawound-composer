@@ -278,7 +278,7 @@
    it is a hash of BOTH shipped files, so editing either one makes it provably stale and the sweep says
    so. The composer carries the identical value and passes its own into our URL (?b=), which is how the
    two can tell whether they shipped as a pair. See build-stamp.js. */
-const BUILD = '2026-08-03.65a3570';
+const BUILD = '2026-08-04.25ce276';
 /* A top-level `const` is NOT a property of window — only `var` and function declarations are. So the
    composer, reading across the frame, gets `undefined` for our build no matter what we declared here,
    and would conclude on EVERY open that this card is too old to have one. Found by opening the overlay
@@ -401,6 +401,24 @@ const WOUND_LOCATION_GROUPS = [
   ]],
   ['Back, sacrum & pelvis', [
     'Spine','Sacrum','Sacrococcygeal','Coccyx','Gluteal cleft','Perianal / anus','Genitalia',
+    /* ONE WOUND ACROSS BOTH BUTTOCKS (Abby via Scott, 2026-08-03: "Was her whole buttocks that").
+       A real wound was charted as "buttock, R, and L buttock" and the tool read it as two wounds that
+       needed splitting. It was one, and there was nothing on this list it could be called.
+
+       DELIBERATELY NOT A BARE "Buttocks". Every sided site on this list exists because providers
+       forget to say which side (Scott, 2026-07-31: "they are going to forget to put a side"), and an
+       unqualified plural sitting one letter away from "buttock" is an easy accidental tap that loses
+       laterality silently. Spelling out "(both sides)" makes picking it a STATEMENT that the wound
+       crosses the midline, which is the only case it is for. Same reasoning as the neighbouring
+       "Spanning back, buttock and hip".
+
+       NOTE FOR ANYONE EDITING A COMMENT INSIDE THIS ARRAY: use double quotes. qc_count_nightly.ps1
+       reads this vocabulary by pulling every SINGLE-quoted string out of the block, so a place name
+       quoted with apostrophes in a comment becomes a vocabulary entry over there. It now strips
+       comments first, and its selftest proves it - but there is no reason to lean on that. */
+    'Buttocks (both sides)',
+    /* NOTE: the whole-region HEEL parents live in the Foot group with the other heel entries, not
+       here. See "Right heel" / "Left heel" there. */
     'Spanning back, buttock and hip','Right upper back','Left upper back','Upper back - midline',
     'Right mid back','Left mid back','Mid back - midline','Right lower back','Left lower back',
     'Lower back - midline','Right scapula','Left scapula','Right flank - back',
@@ -490,6 +508,16 @@ const WOUND_LOCATION_GROUPS = [
   ]],
   ['Foot', [
     'Right heel (posterior)','Left heel (posterior)','Right plantar heel','Left plantar heel',
+    /* THE HEEL GETS ITS WHOLE-REGION PARENT, like every other region did on 2026-08-03. Scott,
+       2026-08-04, looking at "Left heel" sitting in the undecided list: "how is left heel complicated
+       like what". It was complicated only because this list offered the two PARTS of a heel and no way
+       to name the heel - the identical gap that put abdomen, scalp and the backs on the list, and the
+       identical fix. A wound charted "Left heel" could not be mapped at all, so it stayed a question
+       forever while the provider had already said where it was.
+       ⚠ Posterior and plantar heel are still separate entries and still preferred - a pressure wound on
+       the back of the heel and one on the sole are different wounds. This is the fallback for when the
+       record only ever said "heel", not an invitation to stop being specific. */
+    'Right heel','Left heel',
     'Right midfoot - plantar','Left midfoot - plantar','Right midfoot - dorsal','Left midfoot - dorsal',
     'Right forefoot - plantar (metatarsal head)','Left forefoot - plantar (metatarsal head)',
     'Right forefoot - dorsal','Left forefoot - dorsal','Right dorsum of foot','Left dorsum of foot',
@@ -579,6 +607,41 @@ function _locCanon(s){
   return '';
 }
 function _locListed(s){ return !!_locCanon(s); }
+/* ---------- SIDE ON THE "Other…" ESCAPE (Scott, 2026-08-04) ----------
+   "when i say other i mean its an other option with free text which should be included in laterality
+   bc sometimes you just get a very complicated wound."
+
+   THE HOLE THIS CLOSES. Side is baked into every entry on the closed list precisely because providers
+   forget it — she picks "Right heel (posterior)", never "heel" and then "right". The Other escape was
+   the one route around that guarantee: a plain text box whose placeholder ASKED her to say the side.
+   Asking is not a control. The real data shows it losing: "surgical site (close to ostomy, but not
+   adjacent)", "suture removal of graft buttock" - complicated wounds, correctly sent to Other, with no
+   side recorded, which is then unfixable downstream because nothing knows which limb it was.
+
+   ⚠ `loc` STAYS ONE PLAIN STRING. Everything reads it straight through - the note heading, the nurse's
+   sheet, the composer's pull, the QC rename. So the side is not a new field; it is composed into the
+   same string, and these two are the only place that composition lives.
+   The text box shows the REST, never the composed value, or she would be editing a prefix the buttons
+   own and both would fight over it. */
+const LOC_SIDES = ['Right','Left','Midline'];
+function _locSplitSide(s){
+  const t=String(s==null?'':s).trim();
+  // Longest first: "Rt" must not be eaten by "R". Word-bounded so "Right" never matches "Rightward".
+  const forms=[['Right',/^(right|rt|r)\b[\s,\-]*/i],['Left',/^(left|lt|l)\b[\s,\-]*/i],
+               ['Midline',/^(midline|middle|central)\b[\s,\-]*/i]];
+  for(let i=0;i<forms.length;i++){
+    const m=t.match(forms[i][1]);
+    if(m) return { side:forms[i][0], rest:t.slice(m[0].length).trim() };
+  }
+  return { side:'', rest:t };
+}
+function _locJoinSide(side,rest){
+  const r=String(rest==null?'':rest).trim();
+  const s=String(side==null?'':side).trim();
+  if(!s) return r;
+  if(!r) return s;                       // a side alone is still better than nothing to show her
+  return s+' '+r;
+}
 /* Does `t` BEGIN a word of `l`, rather than sit inside one? This is what separates the heel she meant
    from the cheek she did not: "hee" is genuinely a substring of both "heel" and "c-hee-k". */
 function _locWordStart(l,t){
@@ -1568,6 +1631,23 @@ function locPick(i,val){
   setW(i,'loc',String(val==null?'':val));
   render();
 }
+/* The two writers for free-text mode. BOTH go through _locJoinSide, so the side the buttons own and
+   the words the box owns can never disagree about what `loc` says.
+   locSideSet re-renders (a segmented control has to repaint to show which one is on); locFreeText does
+   NOT, because re-rendering mid-word drops the keyboard on a phone — the same rule the size inputs
+   already follow. */
+function locSideSet(i,side){
+  const p=activePt(); if(!p||!p.wounds[i]) return;
+  const cur=_locSplitSide(String(p.wounds[i].loc||''));
+  // Tapping the side that is already on clears it, so a wound wrongly sided can be un-sided.
+  setW(i,'loc',_locJoinSide(cur.side===side?'':side, cur.rest));
+  render();
+}
+function locFreeText(i,val){
+  const p=activePt(); if(!p||!p.wounds[i]) return;
+  const cur=_locSplitSide(String(p.wounds[i].loc||''));
+  setW(i,'loc',_locJoinSide(cur.side,val));
+}
 function locOtherMode(i){
   const p=activePt(); if(!p||!p.wounds[i]) return;
   /* The current value is KEPT and handed to the free box as a starting point. Clearing it would make
@@ -1592,10 +1672,25 @@ function locField(i,w){
   const cur=String((w&&w.loc)||'').trim();
   const free=_locFreeMode.has(_locKey(i)) || (!!cur && !_locListed(cur));
   if(free){
-    return '<input class="other-box" value="'+esc(cur)+'" placeholder="say the side and the place" '
-      + 'oninput="setW('+i+',\'loc\',this.value)">'
+    /* THE SIDE IS A PICK HERE TOO (Scott 2026-08-04). It used to be a sentence in the placeholder
+       asking her to type it, and the real data shows that losing: complicated wounds went to Other
+       with no side at all, which nothing downstream can repair because nothing knows which limb.
+       The box holds only the WORDS; the buttons own the side; _locJoinSide is the one place they
+       meet. Unsided is still reachable — tapping the on button clears it — because a midline-ish
+       oddity should not be forced onto a limb. */
+    const sp=_locSplitSide(cur);
+    return '<div class="row no-print" style="gap:6px;margin-bottom:6px">'
+      + LOC_SIDES.map(function(s){
+          const on=(sp.side===s);
+          return '<button class="tiny" style="'+(on?'background:#0f8a7c;color:#fff;border-color:#0f8a7c':'')
+            + '" onclick="locSideSet('+i+',\''+s+'\')">'+esc(s)+'</button>';
+        }).join('')
+      + '</div>'
+      + '<input class="other-box" value="'+esc(sp.rest)+'" placeholder="describe the place — the side is the buttons above" '
+      + 'oninput="locFreeText('+i+',this.value)">'
       + '<div class="muted" style="font-size:11.5px;margin-top:4px">Off the list — this is what the note '
-      + 'and the nurse’s sheet will call this wound, so say the side. '
+      + 'and the nurse’s sheet will call this wound'
+      + (sp.side ? ': <b>'+esc(_locJoinSide(sp.side,sp.rest))+'</b>. ' : ', and <b>no side is set</b>. ')
       + '<button class="tiny" style="margin-left:4px" onclick="locBackToList('+i+')">Pick from the list</button></div>';
   }
   return '<div class="loc-wrap">'
@@ -1768,7 +1863,14 @@ function woundHTML(w,i,list){
   const folded = isWoundFolded(w, _healedKey(i));
   return '<div class="card">'
     + '<div class="wound-head"><b>'+esc(wHead(w,list))+'</b>'
-    + (isHealedWound(w)?'<span class="w-pill">Resolved</span>':'')
+    /* THE WORD IS "HEALED", EVERYWHERE A HUMAN READS IT (Scott 2026-08-03: "resolved = healed. we
+       should be consistent and call it healed everywhere"). Healed is what the Status list offers and
+       what she actually picks, so a banner reading "Resolved" was the tool inventing a second word for
+       one state — the exact ambiguity that "healed = resolved, one word one state" existed to remove.
+       The CODE still says resolved in places: _isResolvedStatus answers "is this status one of the
+       closed ones" and accepts EITHER word as input, because a provider can type either into a free
+       box. Input tolerance, one output word. Pinned by the vocabulary guard in the suites. */
+    + (isHealedWound(w)?'<span class="w-pill">Healed</span>':'')
     + (pr?'<span class="muted" style="font-size:11px;margin-left:8px">carried from last visit</span>':'')
     + (isHealedWound(w)
         ? '<button class="tiny no-print" onclick="toggleWoundFold('+i+')">'+(folded?'Show':'Hide')+'</button>'
@@ -1964,9 +2066,9 @@ function sheetHTML(list, roundOverride){
    +"td.k{color:#948f83;font-size:8.5pt;padding:2px 14px 2px 0;white-space:nowrap;vertical-align:top;text-transform:uppercase;letter-spacing:.4px}"
    +"td.val{font-size:10.5pt;padding:2px 0;vertical-align:top;color:#2a2925}"
    +".b-imp{color:#1a7f46;font-weight:700}.b-stb{color:#565656;font-weight:700}.b-wor{color:#c0492b;font-weight:700}"
-   // A resolved wound's marker on the sheet. A plain bold coloured span, because that is one of the
+   // A healed wound's marker on the sheet. A plain bold coloured span, because that is one of the
    // few things Word's legacy importer renders faithfully (see the charset note below).
-   +".w-res{color:#1a7f46;font-weight:700;font-size:9.5pt;letter-spacing:.4px}"
+   +".w-healed{color:#1a7f46;font-weight:700;font-size:9.5pt;letter-spacing:.4px}"
    +".orders-cell{background:#eaf6f3;border-left:4px solid #0f8a7c;padding:8px 13px}"
    +".orders-lab{font-size:8pt;text-transform:uppercase;letter-spacing:.6px;color:#0c5f56;font-weight:700}"
    +".orders-txt{font-size:11pt;font-weight:600;color:#1b1b1b;white-space:pre-wrap}"
@@ -2023,7 +2125,7 @@ function sheetHTML(list, roundOverride){
         const ord=String(w.orders||'').trim();
         b += '<div class="w'+(i===0?' w-first':'')+'">'
            + '<div class="w-title"><span class="loc">'+esc(wHead(w,p.wounds))+'</span>'
-           +   ' &nbsp;·&nbsp; <span class="w-res">RESOLVED</span></div>'
+           +   ' &nbsp;·&nbsp; <span class="w-healed">HEALED</span></div>'
            + (ord
                ? '<table width="100%" cellpadding="0" cellspacing="0" style="margin-top:8px"><tr><td class="orders-cell">'
                  + '<span class="orders-lab">Orders for the nurse</span><br><span class="orders-txt">'+esc(ord)+'</span>'
