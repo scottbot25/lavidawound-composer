@@ -278,7 +278,7 @@
    it is a hash of BOTH shipped files, so editing either one makes it provably stale and the sweep says
    so. The composer carries the identical value and passes its own into our URL (?b=), which is how the
    two can tell whether they shipped as a pair. See build-stamp.js. */
-const BUILD = '2026-08-04.af95124';
+const BUILD = '2026-08-04.af3ba78';
 /* A top-level `const` is NOT a property of window — only `var` and function declarations are. So the
    composer, reading across the frame, gets `undefined` for our build no matter what we declared here,
    and would conclude on EVERY open that this card is too old to have one. Found by opening the overlay
@@ -4260,7 +4260,29 @@ async function carryForward(){
   const btn=document.getElementById('cfBtn'); const lab=btn?btn.textContent:'';
   if(btn){ btn.disabled=true; btn.textContent='Checking…'; }
   try{
+    /* ⚠ THIS DECLARATION LEFT WITH AN EXTRACTION AND THE USE STAYED BEHIND. On 2026-07-30 (223558b)
+       the candidate crawl became _cfFetchCandidates, and `const today=todayISO();` — line 14 of this
+       function — went into the new helper. `S.round.date=today` below did not, so every carry-forward
+       threw ReferenceError from that moment, and the catch reported it as a vault outage: "Couldn't
+       reach ClinicalVault (today is not defined)" — after the vault read had already SUCCEEDED.
+       "Start from last visit" is the primary way a round begins, and it was dead in production for
+       five days. Nothing caught it: no suite calls carryForward (round-card-reload-test.js says so
+       out loud — "too entangled to run in this harness"), and sweep's parse check passes happily
+       because a free variable is perfectly valid JavaScript. sweep.js check 3d now reads every
+       identifier, not just every call, so the next extraction of this shape goes red. */
+    const today=todayISO();
     const { chosen, skippedOtherProvider, dischargedDropped } = await _cfFetchCandidates(facRaw, okProv);
+    /* SHE MAY HAVE CHANGED BUILDING WHILE THAT WAS FETCHING, and this function then wrote
+       facLock=facRaw over the top of it — one building's residents seated on a card headed for
+       another, which is the worst thing this tool can do quietly. facRaw was read before the await
+       and nothing re-checked it after. Same shape as the composer defect that once filed one
+       patient's wounds under another's name: await, then read mutable global state as though no time
+       had passed. Refuse rather than guess — she can tap again, and the tap is free. */
+    if((S.round.fac||'').trim() !== facRaw){
+      toast('You changed building while that was loading, so nothing was brought forward. '
+          + 'Tap “Start from last visit” again for '+(((S.round.fac||'').trim())||'the new building')+'.');
+      return;
+    }
     if(!chosen.length){
       toast(skippedOtherProvider
         ? 'No recent visits for '+who+' at '+facRaw+' (the ones on file are another provider’s)'
