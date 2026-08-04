@@ -278,7 +278,7 @@
    it is a hash of BOTH shipped files, so editing either one makes it provably stale and the sweep says
    so. The composer carries the identical value and passes its own into our URL (?b=), which is how the
    two can tell whether they shipped as a pair. See build-stamp.js. */
-const BUILD = '2026-08-04.25ce276';
+const BUILD = '2026-08-04.af95124';
 /* A top-level `const` is NOT a property of window — only `var` and function declarations are. So the
    composer, reading across the frame, gets `undefined` for our build no matter what we declared here,
    and would conclude on EVERY open that this card is too old to have one. Found by opening the overlay
@@ -417,6 +417,21 @@ const WOUND_LOCATION_GROUPS = [
        quoted with apostrophes in a comment becomes a vocabulary entry over there. It now strips
        comments first, and its selftest proves it - but there is no reason to lean on that. */
     'Buttocks (both sides)',
+    /* A BUTTOCK WHOSE SIDE WAS NEVER RECORDED. Scott, 2026-08-04: "ok to fix this issue for now lets
+       just but a general buttock options."
+
+       This DELIBERATELY breaks the rule that every paired site carries its side, and it is the ONLY
+       site that does. The reason is the live data: wounds charted "pressure wound of buttock" with no
+       side anywhere in the text had nothing on this list they could be called, so they stayed free
+       text - and the note then printed the whole string, treatment and all, as the wound's name.
+
+       ⚠ IT IS A FALLBACK, NOT A SHORTCUT. Right buttock and Left buttock sit right above it and are
+       what a provider should pick. Laterality is a REQUIRED character on the L89 pressure-injury
+       codes, so a wound left here cannot be coded from its location alone. If this starts appearing on
+       NEW wounds rather than old ones, it is being used wrong.
+       Heel, elbow, hip, knee and the rest KEEP the rule - the suite still refuses a sideless one for
+       each of them, and this exception is named there rather than the check being weakened. */
+    'Buttock',
     /* NOTE: the whole-region HEEL parents live in the Foot group with the other heel entries, not
        here. See "Right heel" / "Left heel" there. */
     'Spanning back, buttock and hip','Right upper back','Left upper back','Upper back - midline',
