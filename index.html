@@ -396,7 +396,7 @@
    the identical value and we pass ours into its URL, so the two can tell whether they shipped as a
    pair. See build-stamp.js for why, and why it cannot be a number someone remembers to raise.
    Declared here, on the first line of the first script, so every later block can see it. */
-const BUILD = '2026-08-04.85daa7d';
+const BUILD = '2026-08-04.a6d35be';
 /* SANDBOX MODE (?sandbox=1, LOCALHOST ONLY — the hosted site ignores it): points uploads at the
    ToolSandbox site so end-to-end tests (incl. the Round Card overlay, which inherits it) never touch
    the real vault. Belt = sitePath swap (done where VAULT_CFG is declared); suspenders = _gfetch
@@ -3953,16 +3953,48 @@ function rcMatchWounds(cardWounds, priorList){
   // 1) exact location -> confident match
   props.forEach(p=>{ const b=p.alts.find(a=>!taken.has(String(a.wid)) && a.score>=0.999);
     if(b){ p.priorWid=b.wid; p.confident=true; taken.add(String(b.wid)); } });
-  // 2) unique containment (an abbreviation of exactly one remaining prior) -> confident match
+  /* 2) unique containment — still a match here, but it is now MARKED as the guess it is (2026-08-04).
+     Containment meant "one is an abbreviation of the other": "heel" ⊆ "right heel". That reading held
+     only while the closed list had no whole-region entries. The 2026-08-03/04 parents put PARENT AND
+     CHILD sites on the same list, and 148 pairs of distinct, deliberately different places are now
+     token-subsets of one another — "Right knee" ⊆ "Right BKA stump (below knee)", "Right ear" ⊆ "Right
+     behind the ear", "Right foot" ⊆ "Right partial foot amputation site", and the deliberately sideless
+     "Buttock" ⊆ BOTH "Left buttock" and "Right buttock". A token subset cannot tell an abbreviation
+     from a NARROWER SITE; the information is not in the tokens.
+     ⚠ THE FLAG IS SET HERE AND ACTED ON BY THE CALLER, and that split is the whole point. `confident`
+     means two different things to the two callers: to rcPrefill it is a ROUTING flag (false = go to the
+     reconcile screen), but to rcMergeIntoPatient it is the PAIRING GATE, and that path has no reconcile
+     screen anywhere in it. Clearing `confident` here — which is what the first draft of this fix did —
+     made the merge path fail to pair at all, so the card wound claimed an empty shell or minted a fresh
+     wid and the SAME WOUND WAS CHARTED TWICE, silently, on the everyday auto-pull path. Driven before
+     and after: shipped {confident:true, wid:1} vs demoted {confident:false, wid:'c3'}.
+     So the matcher's answer is unchanged for everyone, `taken` is claimed in exactly the same order,
+     and only the caller that HAS somewhere safe to send a guess acts on the mark. See
+     _rcDemoteContainmentGuesses. */
   props.forEach(p=>{ if(p.confident) return;
     const ov=p.alts.filter(a=>!taken.has(String(a.wid)) && a.score>0);
-    if(ov.length===1 && _rcContained(p._loc, ov[0].loc)){ p.priorWid=ov[0].wid; p.confident=true; taken.add(String(ov[0].wid)); } });
+    if(ov.length===1 && _rcContained(p._loc, ov[0].loc)){ p.priorWid=ov[0].wid; p.confident=true; p.viaContainment=true; taken.add(String(ov[0].wid)); } });
   // 3) no location overlap with any prior -> confident NEW wound
   props.forEach(p=>{ if(p.confident) return;
     if(!p.alts.some(a=>!taken.has(String(a.wid)) && a.score>0)){ p.priorWid=null; p.confident=true; } });
   // 4) partial / contested / laterality-different -> ambiguous: pre-guess the best available, NOT confident
   props.forEach(p=>{ if(p.confident) return;
     const b=p.alts.find(a=>!taken.has(String(a.wid)) && a.score>0); if(b){ p.priorWid=b.wid; taken.add(String(b.wid)); } });
+  return props;
+}
+/* A CONTAINMENT MATCH IS A PRE-GUESS WHEREVER THERE IS A SCREEN TO ASK ON. Called by rcPrefill and by
+   nothing else, deliberately — see the ⚠ in rcMatchWounds step 2 for why rcMergeIntoPatient must not
+   call it. The proposal keeps its priorWid, so the reconcile modal opens with the guess already
+   highlighted and it is one tap to accept; it loses only its claim to be certain.
+   What this stops at the bedside: a patient whose history has one left-buttock wound, and a card wound
+   the provider named with the sideless whole-region entry "Buttock". Containment said those were the
+   same wound, so this visit's location and measurements were written onto the left buttock's baseline
+   with no side ever having been stated and no dialog shown — the exact failure the side-baked-into-
+   every-entry rule exists to prevent. Now she is asked.
+   It mutates in place and also returns, so a caller can read it either way; it is a no-op on a list
+   with no containment guess in it, which is the everyday round. */
+function _rcDemoteContainmentGuesses(props){
+  (props||[]).forEach(function(p){ if(p && p.viaContainment) p.confident=false; });
   return props;
 }
 // Seed all prior wounds (carry-forward), then overlay each card wound onto its mapped wid (null = a new
@@ -4088,6 +4120,11 @@ async function rcPrefill(rec){
       rcApplyByCardNum(S, priorList, cardWounds, edu, recDate);
     } else {
     const props=rcMatchWounds(cardWounds, priorList);
+    /* THIS caller has a reconcile screen (rcPending → the modal, three lines below), so a containment
+       guess goes to it instead of being applied silently. rcMergeIntoPatient has no such screen and
+       deliberately does NOT do this — there, a demoted proposal would not pair at all and the wound
+       would be charted twice. (2026-08-04) */
+    _rcDemoteContainmentGuesses(props);
     if(props.some(p=>!p.confident)){
       // Ambiguous — don't guess. Seed the prior wounds so it's a correct follow-up, stash the card wounds
       // for a one-tap confirm (the reconcile banner + modal), and hold the orders until they're placed.

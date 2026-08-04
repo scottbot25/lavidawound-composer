@@ -278,7 +278,7 @@
    it is a hash of BOTH shipped files, so editing either one makes it provably stale and the sweep says
    so. The composer carries the identical value and passes its own into our URL (?b=), which is how the
    two can tell whether they shipped as a pair. See build-stamp.js. */
-const BUILD = '2026-08-04.85daa7d';
+const BUILD = '2026-08-04.a6d35be';
 /* A top-level `const` is NOT a property of window — only `var` and function declarations are. So the
    composer, reading across the frame, gets `undefined` for our build no matter what we declared here,
    and would conclude on EVERY open that this card is too old to have one. Found by opening the overlay
@@ -639,8 +639,40 @@ function _locListed(s){ return !!_locCanon(s); }
    The text box shows the REST, never the composed value, or she would be editing a prefix the buttons
    own and both would fight over it. */
 const LOC_SIDES = ['Right','Left','Midline'];
-function _locSplitSide(s){
-  const t=String(s==null?'':s).trim();
+/* ⚠ THE SIDE IS A STORED VALUE NOW (`w.locSide`), BECAUSE IT CANNOT BE READ BACK OUT OF HER WORDS.
+   2026-08-04. This function used to be run over the STORED free text on every repaint AND on every
+   keystroke, and its answer was fed straight back into `loc`. Over the closed list that is harmless —
+   all 287 entries split and re-join byte for byte. Over the Other… escape it was a guess, and the
+   guess was wrong for every description that merely BEGINS with a side word:
+     "central line exit site, chest"          -> box showed "line exit site, chest", Midline lit, and
+                                                 one more keystroke stored "Midline line exit site…"
+     "middle third of the shin, shear injury" -> "Midline third of the shin, shear injury"
+     "L-shaped incision, dehisced at the apex"-> "Left shaped incision, dehisced at the apex"
+     "right-angled tear at the stoma edge"    -> "Right angled tear at the stoma edge"
+     "Rt. lateral malleolus" + one tap        -> "Left . lateral malleolus" (the period is not eaten)
+   She never saw any of it. The box on screen still read exactly what she typed while the RECORD — the
+   chart-note heading and the nurse's handoff sheet — carried a laterality she never chose and a word
+   short. Tapping the side off did not help either: the repaint re-inferred it from the same words and
+   lit the button straight back up, one word poorer each time round.
+   There is no regex that fixes this, because the information is not in the string: "left" at the front
+   of a phrase is sometimes a side and sometimes just a word, and only the provider knows which. So the
+   side is stored as its own value and this only ever strips a prefix WE wrote.
+     two-arg form  — authoritative. Strips exactly the stored side and nothing else. What the app uses.
+     one-arg form  — the old inference, kept for the ONE place it is provably total: adopting the side
+                     out of a value that is already ON the closed list (locOtherMode). */
+function _locSplitSide(s, storedSide){
+  const raw=String(s==null?'':s);
+  if(arguments.length>=2){
+    const sd=String(storedSide==null?'':storedSide).trim();
+    const side=(LOC_SIDES.indexOf(sd)>=0)?sd:'';
+    /* Case-insensitive on the PREFIX only, sliced by length: a legacy record may hold "left heel
+       (posterior)" where the list says "Left heel (posterior)", and that is the same place. Nothing is
+       re-cased in the record by this — it only decides where her words start. */
+    if(side && raw.slice(0,side.length+1).toLowerCase()===(side+' ').toLowerCase())
+      return { side:side, rest:raw.slice(side.length+1) };
+    return { side:side, rest:raw };
+  }
+  const t=raw.trim();
   // Longest first: "Rt" must not be eaten by "R". Word-bounded so "Right" never matches "Rightward".
   const forms=[['Right',/^(right|rt|r)\b[\s,\-]*/i],['Left',/^(left|lt|l)\b[\s,\-]*/i],
                ['Midline',/^(midline|middle|central)\b[\s,\-]*/i]];
@@ -651,11 +683,19 @@ function _locSplitSide(s){
   return { side:'', rest:t };
 }
 function _locJoinSide(side,rest){
-  const r=String(rest==null?'':rest).trim();
+  /* THE WORDS ARE NO LONGER TRIMMED. A space she has typed but not yet followed with a letter is part
+     of what is in her box; trimming it here and then repainting the box from the record put "sacral"
+     back where "sacral " was, so the next word arrived joined on: "Right sacralflap", on the nurse's
+     sheet and in the chart heading. Any control that repaints did it — a side tap, a Status pick, any
+     of the eleven Procedures selects. Every reader of `loc` trims (_wBase, sheetHTML, the composer),
+     so the whitespace costs nothing downstream and saves the word. */
+  const raw=String(rest==null?'':rest);
+  const r=raw.trim();
   const s=String(side==null?'':side).trim();
-  if(!s) return r;
-  if(!r) return s;                       // a side alone is still better than nothing to show her
-  return s+' '+r;
+  if(!s) return raw;
+  if(!r) return s;                       // a side alone is still better than nothing to SHOW her —
+                                         // but the writers refuse to STORE it, see locSideSet
+  return s+' '+raw;
 }
 /* Does `t` BEGIN a word of `l`, rather than sit inside one? This is what separates the heel she meant
    from the cheek she did not: "hee" is genuinely a substring of both "heel" and "c-hee-k". */
@@ -865,22 +905,70 @@ const SIGKEY = KEY + '_cloudsig';
    - it only moves when an upload completes, a round is loaded, or a patient is removed. Stringifying
    it per character was a cost I added earlier today while fixing the reopen re-upload; writing it
    once the typing pauses is the same guarantee for a fraction of the work.
-   Worst case if the tab dies inside the window: one patient re-uploads next session with identical
-   content under the same id. Harmless, and far cheaper than paying for it on every key. */
-let _sigSaveT=null;
-function saveCloudSig(){
-  clearTimeout(_sigSaveT);
-  _sigSaveT=setTimeout(()=>{
-    try{ if(typeof _rcCloudSig!=='undefined') sessionStorage.setItem(SIGKEY, JSON.stringify(_rcCloudSig)); }catch(e){}
-  }, 1200);
+   ⚠ "WORST CASE: ONE PATIENT RE-UPLOADS" WAS WRONG, AND THE OLD SHAPE HAD NO CEILING AT ALL.
+   A TRAILING debounce restarts on every call, and save() is called on every tap. rcLoadRoundFor
+   seeds every signature and calls save(); she then taps through the patient tabs to read who is on
+   the list, and every tap is another save() that pushes this write out another 1.2s — measured
+   still unwritten after five seconds. Then the tab goes away: a pull-to-refresh, a phone waking,
+   the composer overlay reopening. S and _rcFiled come back FULL, because both are written through
+   synchronously; this map comes back EMPTY. Every patient then reads as edited, so _unsavedCount()
+   warns her that a round which is already in ClinicalVault will be lost if she clears, and the
+   first keystroke re-uploads the entire round with a fresh savedAt — which is precisely the "this
+   record was edited" signal the composer merges on, so untouched patients get fill-empty-merged
+   into open notes and toast "Updated <name> from their Round Card" for a round nobody touched.
+   That is the exact re-upload persisting this map was meant to end (see the comment above),
+   reopened by the debounce that was added to make it cheap.
+   So: a MAXIMUM WAIT — the first unwritten change owns the deadline and later calls cannot push it
+   back — plus a synchronous flush, called from rcFlushAutoSave, which already runs on pagehide and
+   on visibilitychange:hidden, the two events a reload and an OS tab-discard actually fire. The
+   per-keystroke stringify the debounce existed to avoid is still avoided; what is gone is the
+   unbounded stall and the silent loss at the end of it. */
+let _sigSaveT=null, _sigSaveDue=0;
+/* Write it NOW, synchronously. Separate from saveCloudSig so the unload path can reach it without
+   scheduling anything — at pagehide there is no later. */
+function _flushCloudSig(){
+  clearTimeout(_sigSaveT); _sigSaveT=null; _sigSaveDue=0;
+  try{ if(typeof _rcCloudSig!=='undefined') sessionStorage.setItem(SIGKEY, JSON.stringify(_rcCloudSig)); }catch(e){}
 }
-function save(){ try{ sessionStorage.setItem(KEY, JSON.stringify(S)); }catch(e){}
+function saveCloudSig(){
+  const now=Date.now();
+  if(!_sigSaveDue) _sigSaveDue=now+1200;      // the deadline belongs to the FIRST unwritten change...
+  if(now>=_sigSaveDue){ _flushCloudSig(); return; }   // ...and once it passes, no amount of tapping defers it
+  clearTimeout(_sigSaveT);
+  _sigSaveT=setTimeout(_flushCloudSig, _sigSaveDue-now);
+}
+/* ⚠ THE DEVICE SAVE CAN FAIL AND THE HEADER PROMISED IT HAD NOT. sessionStorage throws for real
+   reasons — QuotaExceededError on a long round, and SecurityError on a phone with site data blocked
+   or in a locked-down private window — and the catch below swallowed it and returned undefined, so
+   nothing downstream could tell. Meanwhile _rcPaintSync('local') writes "● Saved on this device —
+   sign in to back up to ClinicalVault" into the sticky header, which is exactly the state a
+   not-yet-signed-in provider on a storage-blocked phone sits in: the round is stored NOWHERE, and
+   the header tells her it is safe on the phone. Driven 2026-08-03 — the header string came out
+   character-for-character identical in the stored-fine and the stored-nowhere runs, so there was no
+   way to tell them apart from the screen. Remember the failure instead of swallowing it, and return
+   the boolean so a caller can ask. The flag is only flipped on a CHANGE, so a healthy card repaints
+   no more often than it did. */
+let _rcStoreDown=false;
+function save(){ let ok=true;
+  try{ sessionStorage.setItem(KEY, JSON.stringify(S)); }catch(e){ ok=false; }
+  if(_rcStoreDown!==!ok){ _rcStoreDown=!ok;
+    /* ⚠ REPAINT ONLY THE TWO STATES THAT READ THE FLAG, OR THE REPAINT TELLS ITS OWN LIE.
+       _rcPaintSync() with no arguments re-derives the 'saved' line's clock from _rcHm(), so an
+       unguarded repaint would walk "☁ Backed up to ClinicalVault · 9:05 AM" forward to "· 2:32 PM"
+       for a backup that never happened again — a fresh false claim, in a state where the storage
+       warning is not even shown. 'saving', 'saved', 'ready' and boot say nothing about the DEVICE,
+       so they have nothing to correct; 'local' and 'error' are the only two lines that do.
+       typeof-guarded like the _rcNoteWorkStarted call below (save() is defined ~2000 lines before
+       the painter), and the try also covers _rcSyncState still being in its dead zone at boot. */
+    try{ if(typeof _rcPaintSync==='function' && (_rcSyncState==='local'||_rcSyncState==='error')) _rcPaintSync(); }catch(e){}
+  }
   saveCloudSig();
   // A carried-forward round files nothing until something actually changes - this is where that
   // "something changed" is noticed. Guarded because save() is defined long before the flag is.
   try{ if(typeof _rcNoteWorkStarted==='function') _rcNoteWorkStarted(); }catch(e){}
   if(typeof scheduleRcAutoSave==='function') scheduleRcAutoSave();
-  if(typeof scheduleSheetSave==='function') scheduleSheetSave(); }
+  if(typeof scheduleSheetSave==='function') scheduleSheetSave();
+  return ok; }   // <- the answer callers could never get: did the device actually take it?
 function todayISO(){ const d=new Date(), p=n=>String(n).padStart(2,'0');
   return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()); }
 
@@ -899,7 +987,11 @@ function toast(m){ const t=document.getElementById('toast'); t.textContent=m; t.
 /* The procedure fields all live on the wound, alongside everything else, so one wound is still one
    object — the record shape, carry-forward and the composer's writer all keep working without a second
    container to keep in step. They stay empty unless a debridement was actually done. */
-function newWound(){ return { wid:'', born:0, loc:'', type:[], stage:'', wagner:'', l:'', w:'', d:'', drain:'', odor:'', status:'', wbGran:'', wbSlough:'', wbFib:'', wbEpi:'', wbEschar:'', exposed:[], periwound:[], undermining:'', tunneling:'', debride:'',
+/* `locSide` is the ONE new field on the wound (2026-08-04) and it exists because the side cannot be
+   read back out of the words — see _locSplitSide. It is the side of the free-text "Other…" escape only;
+   every entry on the closed list already carries its own side, and locPick clears this. `loc` is still
+   the single plain string everything downstream reads, composed from this and the words. */
+function newWound(){ return { wid:'', born:0, loc:'', locSide:'', type:[], stage:'', wagner:'', l:'', w:'', d:'', drain:'', odor:'', status:'', wbGran:'', wbSlough:'', wbFib:'', wbEpi:'', wbEschar:'', exposed:[], periwound:[], undermining:'', tunneling:'', debride:'',
   tissueRemoved:'', postL:'', postW:'', postD:'', deepest:'', debType:'', instrument:'', ebl:'', bloodCtl:'', consent:'', anesthesia:'', cleansing:'', endpoint:'', tolerance:'',
   orders:'' }; }
 /* WHAT THE WOUND IS CALLED — its location, and nothing else (Scott 2026-07-31: "rely on titles and
@@ -1459,10 +1551,50 @@ function addWound(){ const p=activePt(); if(!p) return;
      and never again — it is this wound, in every visit, for the rest of its life. */
   p.wounds.push(Object.assign(newWound(),{ born:p.woundSeq, wid:'c'+p.woundSeq }));
   save(); render(); }
-function delWound(i){
+/* TWO-TAP REMOVE, NOT window.confirm — the third and last button to make this trip. Chrome silently
+   swallows native dialogs fired from inside the composer's overlay iframe, and a swallowed confirm()
+   returns FALSE, so this returned having done nothing and having said nothing. The card is framed by
+   the composer by design (it even slims its own header for it), so this was the everyday case, not an
+   edge one: tap "+ Add another wound" by mistake, tap Remove, nothing happens, tap it again, tap it
+   again, send the sheet — and the facility's document carries a wound block headed
+   "Wound: (site not entered)" with an empty Orders box for a wound that does not exist, the banner
+   says "2 wounds", and it carries forward too because cfRebuildWounds keeps every entry. Clear and
+   Remove patient were converted away from confirm() on 2026-07-21 for exactly this; delWound was
+   left behind and nobody noticed, because in a standalone tab the dialog still shows.
+
+   ARMED PER WOUND, KEYED BY PATIENT ID + wid — the same keying as _healedEdited and _rcFoldPref just
+   below, for the same reason: an arm must never leak onto another patient. Keyed on the index alone,
+   "arm Remove on wound 2, switch patient, tap Remove" would delete a stranger's wound on the first tap.
+   THE BUTTON ALSO CARRIES THE ARM ON ITSELF (data-rcarm). render() rebuilds this markup on any repaint,
+   and a button that is still hot but no longer LOOKS hot is how a two-tap quietly becomes a one-tap
+   delete. Losing the attribute means the next tap merely re-arms, which is the safe direction. */
+let _wDelArm=null;
+function delWound(i,btn){
   const p=activePt(); if(!p) return;
   if(p.wounds.length===1){ toast('A patient needs at least one wound'); return; }
-  if(!confirm('Remove '+wLabel(p.wounds[i],p.wounds)+'?')) return;
+  btn = btn || (typeof document!=='undefined' && document.getElementById ? document.getElementById('wdel_'+i) : null);
+  const armKey=_healedKey(i);                       // patient id + this wound's wid
+  if(!_wDelArm || _wDelArm.key!==armKey || !btn || btn.getAttribute('data-rcarm')!=='1'){
+    /* PUT THE PREVIOUSLY ARMED BUTTON BACK — the whole button, not just its timer. Arming Remove on
+       one wound and then on another left the first one red and still reading "Really remove?", with
+       no timer left to reset it, so it sat there claiming to be armed until the next repaint. It
+       could not one-tap delete (the arm key would not match, so that tap only re-arms), but a
+       warning that is visibly lying is how a provider learns that the warning means nothing — and
+       the warning is the only thing standing between a mis-tap and a deleted wound. */
+    if(_wDelArm){
+      if(_wDelArm.t) clearTimeout(_wDelArm.t);
+      const ob=_wDelArm.btn;
+      if(ob && ob!==btn){ try{ ob.removeAttribute('data-rcarm'); ob.textContent='Remove';
+                               ob.style.background=''; ob.style.color=''; }catch(e){} }
+    }
+    if(btn){ btn.setAttribute('data-rcarm','1'); btn.textContent='Really remove?';
+             btn.style.background='#c0492b'; btn.style.color='#fff'; }
+    _wDelArm={key:armKey, btn:btn, t:setTimeout(()=>{ _wDelArm=null;
+      if(btn){ btn.removeAttribute('data-rcarm'); btn.textContent='Remove';
+               btn.style.background=''; btn.style.color=''; } }, 4000)};
+    return;
+  }
+  clearTimeout(_wDelArm.t); _wDelArm=null;
   /* The survivors KEEP their numbers and woundSeq is not lowered — deleting Wound 1 of {1,2} leaves a
      Wound 2, it does not promote it. That promotion is exactly what made the card disagree with the
      note, and a number that has been in a chart must never be handed to a different wound. */
@@ -1686,6 +1818,10 @@ function locClose(i){
 function locPick(i,val){
   const p=activePt(); if(!p||!p.wounds[i]) return;
   _locFreeMode.delete(_locKey(i));
+  /* THE LIST BAKES THE SIDE INTO THE ENTRY, so the free box's side button has nothing left to own.
+     Leaving a stale locSide behind would prefix the picked entry with a side it already contains the
+     next time she opened Other…, and would keep pulling the wound back into free mode. */
+  setW(i,'locSide','');
   setW(i,'loc',String(val==null?'':val));
   render();
 }
@@ -1696,20 +1832,57 @@ function locPick(i,val){
    already follow. */
 function locSideSet(i,side){
   const p=activePt(); if(!p||!p.wounds[i]) return;
-  const cur=_locSplitSide(String(p.wounds[i].loc||''));
+  const w=p.wounds[i];
+  /* READ THE SIDE OFF THE RECORD, NEVER OFF HER WORDS. Re-deriving it from the stored text is what made
+     the button undo itself: clearing Midline off "central line exit site, chest" wrote the words back,
+     the repaint re-inferred Midline from the word "central", and the button she had just switched off
+     lit up again with "central" now missing from her box. The side is stored, so off stays off. */
+  const cur=_locSplitSide(String(w.loc||''), w.locSide);
   // Tapping the side that is already on clears it, so a wound wrongly sided can be un-sided.
-  setW(i,'loc',_locJoinSide(cur.side===side?'':side, cur.rest));
+  const next=(cur.side===side)?'':side;
+  setW(i,'locSide',next);
+  /* A SIDE ALONE IS NOT A WOUND'S NAME. This used to write the bare side into `loc`, which made `loc`
+     non-empty — so a side tapped on an empty Other wound gave the facility's sheet "Wound: Right", and
+     worse, findGaps() stopped reporting the wound as unnamed, so a fully charted visit shipped with a
+     clean Review screen. The button state lives in `locSide` now, so it can stay lit with nothing
+     stored and the "(site not entered)" guard keeps working. */
+  setW(i,'loc', cur.rest.trim() ? _locJoinSide(next, cur.rest) : '');
+  // She is editing the free box; a repaint must not drop her back into the closed picker.
+  _locFreeMode.add(_locKey(i));
   render();
 }
 function locFreeText(i,val){
   const p=activePt(); if(!p||!p.wounds[i]) return;
-  const cur=_locSplitSide(String(p.wounds[i].loc||''));
-  setW(i,'loc',_locJoinSide(cur.side,val));
+  const w=p.wounds[i];
+  /* THE SIDE COMES FROM THE RECORD, NEVER FROM WHAT SHE IS TYPING. This read _locSplitSide(w.loc) and
+     joined the INFERRED side back onto the whole box, so typing "lateral malleolus area" one character
+     at a time grew "Left lateral malleolus area" in the record while the box on screen still read
+     exactly what she typed. The prefix was born on the space after the first word and then stuck. */
+  const side=_locSplitSide(String(w.loc||''), w.locSide).side;
+  /* EMPTYING THE BOX MUST NOT DROP HER INTO THE CLOSED PICKER. Free mode was inferred from `loc` alone,
+     so select-all-delete on a legacy off-list wound made `loc` falsy, the next repaint swapped the free
+     box for the search combobox — where typing deliberately does not write — and locClose threw away
+     the replacement description she then typed. The wound ended up with no name at all. Typing in the
+     free box IS being in free mode, so record that, for the session. */
+  _locFreeMode.add(_locKey(i));
+  setW(i,'loc', String(val==null?'':val).trim() ? _locJoinSide(side, val) : '');
 }
 function locOtherMode(i){
   const p=activePt(); if(!p||!p.wounds[i]) return;
+  const w=p.wounds[i];
   /* The current value is KEPT and handed to the free box as a starting point. Clearing it would make
      Other a destructive tap with no undo, and she may only want to add a word to it. */
+  /* ADOPT THE SIDE OUT OF A LISTED VALUE, AND ONLY OUT OF A LISTED VALUE. Every one of the listed
+     entries splits and re-joins byte for byte, so the inference is total here rather than a guess, and
+     "Left heel (posterior)" opens as [Left] + "heel (posterior)" the way she expects. Off-list text
+     gets no inference at all — that is exactly where the guess was wrong, and it is one tap away from
+     right. Done on the TAP and not on the repaint: a render that writes to the record is how the free
+     box came to rewrite wounds nobody had touched. */
+  const canon=_locCanon(w.loc);
+  if(canon && !String(w.locSide||'').trim()){
+    const sp=_locSplitSide(canon);
+    if(sp.side) setW(i,'locSide',sp.side);
+  }
   _locFreeMode.add(_locKey(i));
   render();
 }
@@ -1723,20 +1896,40 @@ function locBackToList(i){
     if(!confirm('Replace “'+cur+'” by picking from the list?')) return;
     setW(i,'loc','');
   }
+  /* The side goes back with the words. It belongs to the free box; every list entry carries its own
+     side, and a locSide left behind would drag a wound with no words yet straight back into free mode. */
+  setW(i,'locSide','');
   _locFreeMode.delete(_locKey(i));
   render();
 }
 function locField(i,w){
   const cur=String((w&&w.loc)||'').trim();
-  const free=_locFreeMode.has(_locKey(i)) || (!!cur && !_locListed(cur));
+  const stored=String((w&&w.locSide)||'').trim();
+  /* FREE MODE IS STILL INFERRED FROM THE DATA for an off-list value, so legacy text and carry-forward
+     open in the box that can edit them. The stored side only forces free mode when there are no words
+     at all — a wound she sided before she was interrupted, which must come back sided rather than
+     bounce into the picker. A LISTED value never forces it, or one tap on Other… would leave that
+     wound in free mode for ever. */
+  const free=_locFreeMode.has(_locKey(i)) || (!!cur && !_locListed(cur))
+             || (!cur && LOC_SIDES.indexOf(stored)>=0);
   if(free){
     /* THE SIDE IS A PICK HERE TOO (Scott 2026-08-04). It used to be a sentence in the placeholder
        asking her to type it, and the real data shows that losing: complicated wounds went to Other
        with no side at all, which nothing downstream can repair because nothing knows which limb.
        The box holds only the WORDS; the buttons own the side; _locJoinSide is the one place they
        meet. Unsided is still reachable — tapping the on button clears it — because a midline-ish
-       oddity should not be forced onto a limb. */
-    const sp=_locSplitSide(cur);
+       oddity should not be forced onto a limb.
+       ⚠ NOTHING IS INFERRED FROM HER WORDS HERE. This called _locSplitSide over the WHOLE stored value
+       on every repaint, so a description merely BEGINNING with a side word had its first word torn out
+       of the box and re-labelled as a laterality — "central line exit site, chest" repainted as
+       "line exit site, chest" with Midline lit — and the next keystroke made that the wound's name in
+       the chart and on the nurse's sheet. The side is read from `w.locSide` now; the box shows the rest
+       of the STORED string, untouched (so the trailing space she is mid-word on survives the repaint). */
+    const sp=_locSplitSide(String((w&&w.loc)||''), (w&&w.locSide));
+    /* What will actually be STORED if she walks away now — not what the buttons happen to show. A side
+       with no words stores nothing (see locSideSet), so previewing "Right" there would be a lie about
+       what the nurse is going to read. */
+    const willRead=sp.rest.trim() ? _locJoinSide(sp.side, sp.rest).trim() : '';
     return '<div class="row no-print" style="gap:6px;margin-bottom:6px">'
       + LOC_SIDES.map(function(s){
           const on=(sp.side===s);
@@ -1748,7 +1941,13 @@ function locField(i,w){
       + 'oninput="locFreeText('+i+',this.value)">'
       + '<div class="muted" style="font-size:11.5px;margin-top:4px">Off the list — this is what the note '
       + 'and the nurse’s sheet will call this wound'
-      + (sp.side ? ': <b>'+esc(_locJoinSide(sp.side,sp.rest))+'</b>. ' : ', and <b>no side is set</b>. ')
+      /* TWO QUESTIONS, ASKED SEPARATELY — what will the nurse read, and is a side set. One used to
+         answer for the other, so an UNSIDED wound never saw its own name at all, and a side tapped with
+         nothing typed previewed ": Right." for a record that holds nothing. The exact lowercase phrase
+         "no side is set" is kept deliberately: round-card-location-lock-test.js asserts on it and that
+         assertion is still correct. */
+      + (willRead ? ': <b>'+esc(willRead)+'</b>. ' : ', and <b>nothing is typed in yet</b>. ')
+      + (sp.side ? '' : 'Also, <b>no side is set</b>. ')
       + '<button class="tiny" style="margin-left:4px" onclick="locBackToList('+i+')">Pick from the list</button></div>';
   }
   return '<div class="loc-wrap">'
@@ -1879,6 +2078,11 @@ function cfRebuildWounds(rec){
       num: Number(w.num)||0,
       status: wasHealed ? 'Healed' : '',
       loc: w.loc||'',
+      /* THE SIDE TRAVELS WITH THE NAME. This map builds a brand new wound object, so anything not named
+         here is silently lost — and a locSide dropped next week would leave the free box with no button
+         lit on a wound whose name already begins with the side, which is one tap away from
+         "Right Right lower leg wound" in the chart. It is part of what `loc` means, not a finding. */
+      locSide: w.locSide||'',
       type: Array.isArray(w.type)?w.type.slice():[],
       typeOther: w.typeOther||'',
       stage: w.stage||'',
@@ -1933,7 +2137,11 @@ function woundHTML(w,i,list){
     + (isHealedWound(w)
         ? '<button class="tiny no-print" onclick="toggleWoundFold('+i+')">'+(folded?'Show':'Hide')+'</button>'
         : '')
-    + '<button class="tiny no-print" onclick="delWound('+i+')">Remove</button></div>'
+    /* The id is how delWound finds this button to arm it. The handler deliberately still reads
+       `delWound(<i>)` with no `this`: clearAll already looks its own button up by id, and changing the
+       call shape here would have broken the fold suite's check that Remove is still reachable from a
+       folded banner — a cosmetic edit to a handler string is not worth a red test elsewhere. */
+    + '<button class="tiny no-print" id="wdel_'+i+'" onclick="delWound('+i+')">Remove</button></div>'
     + '<div class="w-fold'+(folded?' w-fold-shut':'')+'">'
     + healedWarn
 
@@ -2116,6 +2324,13 @@ function sheetHTML(list, roundOverride){
    // patient divider needs its own color so boundaries jump out). Teal stays for the document title.
    +".pth-name{background:#d97a1a;color:#ffffff;font-size:12.5pt;font-weight:700;padding:5px 14px}"
    +".pth-meta{background:#d97a1a;color:#ffe3c7;font-size:9pt;font-weight:600;padding:5px 14px;text-align:right;white-space:nowrap}"
+   /* NOT SEEN / DISCHARGED, right in the patient banner. The sheet is served as application/msword
+      and opened through Word's legacy HTML importer, so this embedded stylesheet is the only styling
+      that survives — a span with a class nothing defines prints as plain body text in the middle of
+      an orange banner, i.e. a "fix" that ships and changes nothing anybody sees. A plain bold
+      coloured span for the same reason .w-healed is one: it is all that importer renders faithfully. */
+   +".pth-dispo{background:#5a2d06;color:#ffd9a0;padding:1px 8px;font-size:9.5pt;font-weight:700;letter-spacing:.5px}"
+   +".dispo-note{background:#fdf1e2;border-left:4px solid #d97a1a;padding:7px 13px;margin-top:9px;font-size:10pt;color:#6b3d0c;line-height:1.4}"
    +".pt-body{padding:2px 2px 10px;border-bottom:2px solid #d97a1a}"
    +".w{margin-top:11px;padding-top:11px;border-top:1px dashed #cfcabd}"
    +".w-first{border-top:0}"
@@ -2158,10 +2373,41 @@ function sheetHTML(list, roundOverride){
     if(pi>0) b += '<p style="page-break-before:always;margin:0;padding:0;font-size:2pt;line-height:1">&nbsp;</p>';
     b += '<div class="pt">'
        + '<table width="100%" cellpadding="0" cellspacing="0"><tr>'
-       + '<td class="pth-name">PATIENT: '+esc(v(p.name))+'</td>'
+       /* THE DISPOSITION HAS TO REACH THE DOCUMENT, not just the card (the dispo work of
+          2026-07-27 stopped at the QC count). Before this, a resident the provider had just recorded
+          as DISCHARGED — gone from the building — was handed to that same building as a Wound Care
+          Order with her orders box printed in full and nothing anywhere on the page saying she had
+          left. Same for "Not seen": findings the provider never took today, read by a nurse as
+          today's exam. The only place either word appeared was a muted line on the card, which the
+          facility never sees.
+          IN THE BANNER, not below it: the banner is the one thing a nurse scanning a multi-page .doc
+          cannot read past. Asks isCounted — the same function the QC count and the count pill use —
+          rather than restating the dispo rule, so one place decides what "not seen" means.
+          'discharged' is checked explicitly and everything else non-counted reads NOT SEEN, so an
+          unrecognised value fails toward the more cautious wording. */
+       + '<td class="pth-name">PATIENT: '+esc(v(p.name))
+       +   (isCounted(p) ? '' : ' &nbsp; <span class="pth-dispo">'
+             + (String(p.dispo||'').trim()==='discharged' ? 'DISCHARGED' : 'NOT SEEN') + '</span>')
+       + '</td>'
        + '<td class="pth-meta">Patient '+(pi+1)+' of '+pts.length+' &nbsp;·&nbsp; '+p.wounds.length+' wound'+(p.wounds.length===1?'':'s')+'</td>'
        + '</tr></table>'
-       + '<div class="pt-body">';
+       + '<div class="pt-body">'
+       /* WHAT THE MARKER MEANS FOR THE FINDINGS UNDER IT. A banner tag alone leaves a nurse reading
+          last week's carried-forward measurements as today's exam. This block sits at the top of the
+          patient's body, above the first wound, so it is read before any finding is.
+          ⚠ THE FINDINGS AND THE ORDERS STILL PRINT, deliberately, and for the same reason the
+          resolved-wound branch below keeps its orders: this document exists so a nurse knows what to
+          DO, and silently deleting a discharged resident's dressing orders would be worse than
+          printing them under a marker. What was missing was never the content — it was the one
+          sentence saying what she is looking at.
+          "MAY NOT BE FROM TODAY", not "nothing below was examined today". The card cannot know the
+          stronger claim: a provider can type today's measurements and then tap Not seen, and the
+          fields keep what she typed. Only say what the code can actually vouch for. */
+       + (isCounted(p) ? '' : '<div class="dispo-note">'
+           + (String(p.dispo||'').trim()==='discharged'
+               ? '<b>Discharged</b> — recorded as gone from this facility on this round. The findings below may not be from today; treat them as the last exam on file and confirm before acting on them.'
+               : '<b>Not seen</b> — not available in their room on this round. The findings below may not be from today; treat them as the last exam on file and confirm before acting on them.')
+           + '</div>');
     p.wounds.forEach((w,i)=>{
       const odor=disp(w,'odor'), status=disp(w,'status');
       const stCls = status ? (String(status).toLowerCase().indexOf('improv')>=0?'b-imp':(String(status).toLowerCase().indexOf('wors')>=0?'b-wor':'b-stb')) : '';
@@ -2195,7 +2441,23 @@ function sheetHTML(list, roundOverride){
       b += '<div class="w'+(i===0?' w-first':'')+'"><div class="w-title"><span class="loc">'+esc(wHead(w,p.wounds))+'</span></div>'
          + '<table>'
          + '<tr><td class="k">Type</td><td class="val">'+esc(v(disp(w,'type')))
-         +   (isPressure(w) ? ' &nbsp;·&nbsp; <b>'+esc(v(disp(w,'stage')))+'</b>' : '')+'</td></tr>'
+         +   (isPressure(w) ? ' &nbsp;·&nbsp; <b>'+esc(v(disp(w,'stage')))+'</b>' : '')
+         /* WAGNER RIDES BESIDE STAGE, because they are the same question asked of two different
+            wounds — "how bad is it" — and only one of them was reaching the facility. The card asks
+            for the grade on every diabetic ulcer and carry-forward keeps it week to week, the note
+            prints "Wagner grade:", and the nurses' sheet was the one document that dropped it
+            silently: a Grade 4 (gangrene) toe printed as plain "Type Diabetic ulcer".
+            SPELL THE WORD. disp(w,'wagner') is a bare digit, so appended the way Stage is it reads
+            "Type Diabetic ulcer · 3", which is not a grade to anyone reading it — the composer
+            already writes it out long, and the sheet matches that.
+            GATED ON isDiabetic, not merely on the value, because that is the gate the card itself
+            puts on the question. A wagner left behind on a wound whose type was later changed to
+            Pressure is hidden on screen; printing it on the facility's copy would put a grade in
+            front of a nurse that the provider cannot see and did not mean this week.
+            NO v() WRAPPER: an ungraded diabetic ulcer prints nothing rather than "Wagner —", since
+            unlike Stage there is no findGaps nag telling her the grade is missing. */
+         +   (isDiabetic(w) && disp(w,'wagner') ? ' &nbsp;·&nbsp; <b>Wagner '+esc(disp(w,'wagner'))+'</b>' : '')
+         +   '</td></tr>'
          + '<tr><td class="k">Size</td><td class="val">'+esc(v(sizeText(w)))+'</td></tr>'
          + '<tr><td class="k">Drainage</td><td class="val">'+esc(v(disp(w,'drain')))
          +   (odor && odor!=='None' ? ' &nbsp;·&nbsp; odor '+esc(odor) : '')+'</td></tr>'
@@ -2231,8 +2493,29 @@ function sheetHTML(list, roundOverride){
    just-tapped-+Patient card apart from one with real work in it. */
 function hasContent(p){
   if(String(p.edu||'').trim()) return true;
-  return p.wounds.some(w => ['loc','type','stage','l','w','d','drain','odor','status','wbGran','wbSlough','wbFib','wbEpi','wbEschar','exposed','periwound','undermining','tunneling','orders']
-    .some(f => (Array.isArray(w[f])? w[f].length>0 : String(w[f]||'').trim()!=='')));
+  /* ASK THE BLANK WOUND — DO NOT KEEP A LIST. This carried a hand-typed field list that predated the
+     Procedures block, so `debride` and its fourteen fields, and `wagner`, were never in it.
+     What that looked like at the bedside: she tapped "+ Patient", left the name box empty because the
+     room number wasn't to hand, and documented a full sharp debridement — tissue removed,
+     post-debridement measurements, instrument, EBL, consent, anaesthesia, tolerance. The card read as
+     EMPTY. findGaps stayed silent, so the "⚠ Patient 1 has no name — IT WILL NOT BE SENT" line — the
+     one its own comment calls the failure mode that must never be quiet — never appeared; Review
+     answered "Add a patient first"; and the facility-switch confirm told her "nothing is lost". It
+     was lost: every save path drops an unnamed patient, so the debridement lived in sessionStorage
+     until the idle lock cleared it.
+     newWound() IS the field list. A future block of fields cannot be forgotten here, because there is
+     no longer anywhere to forget it. Iterating newWound()'s keys rather than the wound's own is
+     deliberate: it ignores keys a wound picks up later — `prior`, `__rcwd`, the `<field>Other`
+     free text — so carry-forward bookkeeping can never make an untouched wound read as work. */
+  const blank=newWound();
+  return p.wounds.some(w => Object.keys(blank).some(f => {
+    /* wid and born are the tool's own bookkeeping — every wound is born holding them, so counting
+       them would make a just-tapped "+ Patient" read as full of work, which is the opposite mistake
+       and would nag on every empty row. */
+    if(f==='wid'||f==='born') return false;
+    const val=w[f];
+    return Array.isArray(val) ? val.length>0 : String(val==null?'':val).trim()!=='';
+  }));
 }
 function findGaps(){
   const g=[];
@@ -2253,7 +2536,16 @@ function findGaps(){
          whenever a wound above it was removed, so "wound 2 has no orders" could point at a different
          wound by the time she looked at it. The location is the thing she can act on. */
       const tag = named+' · '+wLabel(w,p.wounds);
-      if(!(w.orders||'').trim()) g.push(tag+': no orders — the nurse gets nothing to do');
+      /* NO ORDERS IS NOT A GAP FOR SOMEONE SHE DID NOT SEE. "· Sacrum: no orders — the nurse gets
+         nothing to do" was being raised for a resident she had just marked Discharged, pushing her to
+         write this week's orders for someone who has left the building. Not seen and Discharged both
+         mean this round produced no new instruction, so there is no gap — the sheet now says so on
+         its face (see the dispo marker in sheetHTML).
+         ⚠ ONLY THIS NAG IS SILENCED, not the whole patient. The location gap and the missing-stage
+         gap below are about whether the RECORD is well formed, and a not-seen resident's record is
+         still carried forward and still read by the composer, so those two must keep firing. An
+         earlier draft of this fix returned early for the whole patient and quietly removed both. */
+      if(!(w.orders||'').trim() && isCounted(p)) g.push(tag+': no orders — the nurse gets nothing to do');
       if(!(w.loc||'').trim())    g.push(tag+': a wound has no location — that is its name in the note');
       // NO nag for a blank status (Scott 2026-07-20): improving/stable/worsening is a COMPARISON —
       // meaningless on an initial visit. Status is optional; unset prints nothing on the sheet.
@@ -2278,8 +2570,21 @@ function openReview(){
 }
 function closeReview(){ document.getElementById('review').classList.remove('on'); }
 
-/* The patients this send will actually carry: named AND still checked. Everything downstream
-   (preview, email, print, Save to ClinicalVault) runs off this one set. */
+/* The patients this SEND will actually carry: named AND still checked. The preview, the print, the
+   download and the QC count all run off this one set.
+   ⚠ THE .doc UPLOADED BY "Save to ClinicalVault" DOES NOT — this comment used to claim it did, and
+   that was MEASURED FALSE on 2026-08-04. saveVault calls a BARE sheetHTML(), and that default list is
+   every NAMED patient, so the sheet filed to Daily Handoffs/ carries the resident the provider
+   unchecked. Driven against a fake vault with three synthetic patients, one of them unchecked: all
+   three appeared in the uploaded application/msword body. That is defect #13, it belongs to another
+   cluster, and it is written down here rather than fixed here so the next reader does not conclude
+   from a confident comment that it is already handled. Do not restate the old claim anywhere.
+   ⚠ AND THIS IS NOT THE BACKUP SET EITHER — reading it as one is defect #63. The per-patient records in
+   RoundCards/<fac>/ are written for every NAMED patient — see rcAutoSaveCloud and saveVault's record
+   loop — because unchecking somebody in Review is an instruction about which building's nurse gets
+   which orders, and it never meant "and throw her charting away". _unsavedCount, the number the
+   clear-the-card confirm speaks with, therefore filters on the name only and must stay in step with
+   those two loops. */
 function sentNamed(){ return S.pts.filter(p=>(p.name||'').trim() && p.send!==false); }
 function toggleSend(id,on){ const p=S.pts.find(x=>x.id===id); if(p){ p.send=on; save(); paintReview(); } }
 function setAllSend(on){ S.pts.forEach(p=>{ if((p.name||'').trim()) p.send=on; }); save(); paintReview(); }
@@ -2901,7 +3206,18 @@ function saveFiled(){ try{ sessionStorage.setItem(FILEDKEY, JSON.stringify(Array
    confirms used to promise "nothing is lost" unconditionally, which was a lie in exactly
    the case where it mattered most. Now they count and say so. */
 function _unsavedCount(){
-  return (S.pts||[]).filter(p=>(p.name||'').trim() && p.send!==false)
+  /* NO `send!==false` HERE — that was the whole defect. The Review checkbox means "don't put them on
+     THIS sheet"; it never meant "don't back them up". Because this counter shared that filter, the
+     ONE patient guaranteed not to be in the vault was the one patient it refused to count.
+     What the provider saw: two charted residents at one building, one of them unchecked in Review
+     because his orders were going to the other building's nurse. Change the facility, and the confirm
+     read "Their records are already filed under Crestmoor — nothing is lost." She pressed OK, the
+     card emptied, and his wound was gone — never uploaded, and no rebuild path can invent a record
+     that was never written. Tapping "None" made the same dialog lie about the whole round.
+     The backup filter is NAME ONLY, and it has to match rcAutoSaveCloud's and the manual save's
+     record loops exactly, or this number goes back to describing a different set than the one that
+     actually reaches the vault. */
+  return (S.pts||[]).filter(p=>(p.name||'').trim())
     .filter(p=>{ try{ return _rcCloudSig[p.id]!==_rcSig(p); }catch(e){ return true; } }).length;
 }
 function _clearRisk(unsaved, where){
@@ -2935,8 +3251,23 @@ function _rcPaintSync(state, when){
     case 'saving': txt='☁ Saving to ClinicalVault…'; break;
     case 'saved':  txt='☁ Backed up to ClinicalVault · '+(when||_rcHm()); break;
     case 'ready':  txt='☁ Auto-saving to ClinicalVault as you go'; break;
-    case 'local':  txt='● Saved on this device — sign in to back up to ClinicalVault'; warn=true; break;
-    case 'error':  txt='⚠ Couldn’t reach ClinicalVault — kept safe on this device, will retry'+_rcErrHint(); warn=true; break;
+    /* ⚠ THESE TWO ARE THE ONLY LINES THAT PROMISE THE DEVICE HAS IT, AND THE DEVICE MAY NOT.
+       save() now records whether sessionStorage actually took the write (_rcStoreDown). When it did
+       not, "Saved on this device" and "kept safe on this device" are the two most dangerous
+       sentences on this screen: the round is in memory only, the next refresh loses all of it, and
+       she has been told the opposite by the one bar she is supposed to trust.
+       THE WORDING NAMES NO CAUSE, ON PURPOSE. The write fails for two unrelated reasons — a browser
+       that blocks site data (SecurityError: a private window, a locked-down phone) and a store that
+       is simply FULL on a long round (QuotaExceededError) — and nothing here can tell them apart.
+       "This browser is blocking storage" would be a brand-new false claim in the quota case, which
+       is no better than the one being fixed. Say only what is known: the device refused it. Then
+       say what to do — there is no recovery once the tab reloads, only prevention. */
+    case 'local':  txt=_rcStoreDown
+                     ? '⚠ NOT saved anywhere — this device refused to store the round. Sign in to back up, or finish and send this round now; a refresh will lose it.'
+                     : '● Saved on this device — sign in to back up to ClinicalVault'; warn=true; break;
+    case 'error':  txt=(_rcStoreDown
+                     ? '⚠ Couldn’t reach ClinicalVault AND this device refused to store the round — this round is NOT saved anywhere, will retry'
+                     : '⚠ Couldn’t reach ClinicalVault — kept safe on this device, will retry')+_rcErrHint(); warn=true; break;
     default:       txt='';
   }
   const hdr=document.getElementById('rcSyncStatusHdr');   // white-on-teal header: light text, light-amber warn
@@ -3106,8 +3437,18 @@ function scheduleRcAutoSave(){ clearTimeout(_rcAutoT); _rcAutoT=setTimeout(rcAut
    apps — inside the 2s debounce silently dropped the last edit (the browser kills in-flight fetches on
    unload). Flush immediately on hide/close with fetch keepalive, which lets the uploads FINISH after
    the page is gone. Same fix the composer drafts already have. Records are tiny (<<64KB keepalive cap). */
+/* AND THE SIGNATURE MAP GOES OUT FROM HERE TOO, FIRST AND SYNCHRONOUSLY (2026-08-04).
+   rcAutoSaveCloud sets _rcCloudSig[id] the moment an upload lands and then calls saveFiled() only —
+   never saveCloudSig — so after the LAST batch of a round nothing was scheduled to persist that map
+   at all. This function is the one place already wired to pagehide and visibilitychange:hidden, and
+   it is the last moment anything can be written. Without it the map was simply lost while S and
+   _rcFiled, both written through, came back full; every patient then read as edited, the clear
+   warning lied about a round already in the vault, and the next keystroke re-uploaded the whole
+   round into every open note as an edit. It goes BEFORE the three savers below, because those are
+   async and the tab may not be there when they come back. */
 let _rcKalFlush=false, _rcKalT=null;
 function rcFlushAutoSave(){ clearTimeout(_rcAutoT); _rcKalFlush=true;
+  _flushCloudSig();   // the signature map, synchronously, before the three async savers — see above
   /* THE FLAG MUST OUTLIVE rcAutoSaveCloud, not track it. It used to be cleared in that promise's
      .finally, which looks right and is wrong in the commonest case: when nothing is dirty (the 2s
      debounce already filed the records) rcAutoSaveCloud returns immediately, so .finally runs on
@@ -3293,7 +3634,18 @@ async function rcAutoSaveCloud(){
      The manual "Save to ClinicalVault" button is a different path (saveAll) and stays ungated:
      that one is an explicit instruction, not an accident. */
   if(_rcUnstarted) return;
-  const named=(S.pts||[]).filter(p=>(p.name||'').trim() && p.send!==false);
+  /* NAME ONLY — a record is a BACKUP, not a send. Unchecking a patient in Review is an instruction
+     about which building's nurse gets which orders; it used to also, silently, take that patient out
+     of the vault, which is how an unchecked-and-then-cleared resident's whole wound stopped existing.
+     RoundCards/<fac>/<id>.json is what "you can reopen that round from Recent rounds" is made of, and
+     what the composer pulls from, so it must hold everyone she charted.
+     The SHEET and the QC COUNT still run off sentNamed()/isCounted — the checkbox keeps doing the job
+     it was built for, on the document the facility receives. Must stay in step with _unsavedCount's
+     filter, which promises the provider that this set is safe.
+     ⚠ CONSEQUENCE WORTH KNOWING: an unchecked patient's record now exists, so the composer's pull
+     lists her where it previously did not. That is right — a note is still owed for a patient the
+     provider charted — but it is a visible change to what the composer offers. */
+  const named=(S.pts||[]).filter(p=>(p.name||'').trim());
   const dirty=named.filter(p=>{ if(!p.id) p.id=newId(); return _rcCloudSig[p.id]!==_rcSig(p); });
   if(!dirty.length) return;
   let token=null; try{ token=await _netTmo(_vaultTokenSilent(), 12000); }catch(e){ token=null; }
@@ -3386,7 +3738,19 @@ async function saveVault(){
      only ever suppresses the AUTOMATIC savers - a deliberate instruction is never second-guessed. */
   _setUnstarted(false);
   const pts=sentNamed();
-  if(!pts.length){ toast('Select at least one named patient to send'); return; }
+  /* NOBODY CHECKED IS NOT THE SAME AS NOBODY ON THE CARD, and once the record loop below files every
+     named patient the two need different words. After "None", _unsavedCount correctly reports the
+     whole round as not-yet-backed-up, and the old single message ("Select at least one named
+     patient to send") read as though the card had nothing on it — leaving a warned provider with no
+     idea what to do next. The guard itself is unchanged on purpose: this button also uploads the
+     facility's handoff .doc, and running it with nobody selected would put a document in Daily
+     Handoffs that she has just said she did not want to send. */
+  if(!pts.length){
+    toast(S.pts.some(p=>(p.name||'').trim())
+      ? 'Nobody is checked in Review — check at least one patient, or this round stays on this device only'
+      : 'Select at least one named patient to send');
+    return;
+  }
   const btn=document.getElementById('vaultBtn'); btn.disabled=true;
   const st=t=>{ btn.textContent=t; };
   const resEl=document.getElementById('vaultResult'); if(resEl) resEl.style.display='none';
@@ -3428,7 +3792,18 @@ async function saveVault(){
        can tell them apart and never double-pulls one. The id also rides inside the record as the
        composer's match key. Re-saving the same patient reuses their id, so it overwrites (latest
        bedside capture wins) instead of duplicating. `key` keeps the old name-slug for readability. */
-    for(const p of pts){
+    /* THE RECORD LOOP RUNS OVER EVERY NAMED PATIENT, not just `pts` (= sentNamed()). Same reason as
+       rcAutoSaveCloud: the Review checkbox holds a patient off the nurse's SHEET, and reading it here
+       as "and don't back her up either" is what left an unchecked resident with no record anywhere
+       while the clear-the-card confirm promised she was filed.
+       `pts` is untouched above and below, and the QC count still runs off it.
+       ⚠ THE SHEET UPLOAD DOES NOT, whatever this comment used to say. The upload below calls a BARE
+       sheetHTML(), whose default list is every NAMED patient — so an unchecked resident IS on the
+       .doc filed to Daily Handoffs/. Measured 2026-08-04 by capturing the actual application/msword
+       body: three synthetic patients in, one unchecked, all three out. That is defect #13, it belongs
+       to another cluster, and it is recorded rather than fixed here. See the note at sentNamed(). */
+    const recPts=S.pts.filter(x=>(x.name||'').trim());
+    for(const p of recPts){
       const id=p.id || newId();
       // Same snapshot-before-await rule as the auto-save: sig must describe the UPLOADED content, not
       // whatever the patient looks like after the network round-trip (mid-upload edits must stay dirty).
@@ -3467,7 +3842,11 @@ async function saveVault(){
     /* If we're running inside the composer's overlay iframe, tell it to pull the patients we just
        filed — so the provider closes the card and they're already in the note, no extra step. */
     try{ if(window.parent && window.parent!==window) window.parent.postMessage({type:'rc-saved'}, location.origin); }catch(e){}
-    _vaultResultShow(true,'Sheet + '+pts.length+' patient record'+(pts.length===1?'':'s')+' + QC count saved to ClinicalVault.',item&&item.webUrl);
+    /* COUNT THE RECORDS ACTUALLY WRITTEN. This said `pts.length` (= the SEND set) and was accurate
+       only while the record loop above used the same set. It does not any more, so with one patient
+       unchecked it uploaded two records and reported one — a success message that undercounts the
+       backup is exactly the kind of thing a provider reads once and then trusts. */
+    _vaultResultShow(true,'Sheet + '+recPts.length+' patient record'+(recPts.length===1?'':'s')+' + QC count saved to ClinicalVault.',item&&item.webUrl);
     _rcPaintSync('saved');
     setTimeout(()=>{ st('☁ Save to ClinicalVault'); btn.disabled=false; },2500);
   }catch(e){
@@ -3735,7 +4114,11 @@ function _wasCleared(dateStr, facRaw){
 }
 async function rcRestoreFromVault(){
   try{
-    if((S.pts||[]).some(p=>(p.name||'').trim())) return;            // session already has work — never clobber
+    /* hasContent, NOT just the name. At a bedside you chart the wound in front of you and name the row
+       afterwards, so a name-only test calls a fully charted Stage 4 "empty" and clobbers it. hasContent
+       lives in this file for exactly this distinction — it was written to tell an empty just-tapped
+       +Patient row from one with real work in it — and neither load guard was asking it. */
+    if((S.pts||[]).some(p=>(p.name||'').trim()||hasContent(p))) return;   // session already has work — never clobber
     const token=await _vaultTokenSilent(); if(!token) return;       // signed out — quietly do nothing
     await _autoFillProvider();
     // Accept a record if its provider matches the signed-in account OR the Provider box — and also
@@ -3815,6 +4198,26 @@ async function rcRestoreFromVault(){
         }, folders[0]);
     const dropped=folders.filter(k=>k!==keep);
     mine=byFolder[keep].map(m=>m.rec);
+    /* RE-CHECK BEFORE WRITING, NOT ONLY AT THE DOOR. The guard at the top ran before the token was even
+       requested; between it and here sit a token fetch, a listing of every building folder and a download
+       per record — seconds on a phone in a corridor. Her tab was reclaimed mid-round so the card came back
+       blank, restore fired at 150ms, it looked stuck and she did not wait: she tapped "+ Patient" and
+       charted the resident in front of her (right heel, Stage 4, "offload boot at all times"). Then the
+       restore landed and S.pts was replaced wholesale. That wound was gone from the screen, gone from the
+       device copy — the restore's own save() overwrote it — and had never reached the vault, so it reached
+       no record, no handoff sheet and no nurse. The only message was "Restored today's round from
+       ClinicalVault (3 patients)", which reads as good news.
+       rcLoadRoundFor learned this in July and returns 'busy' after its awaits; this path never did.
+       And it SAYS so rather than returning silently: nothing on screen changed, so without a word she has
+       no way to know a restore was ever running, or that the saved round is still there to be had.
+       THE MESSAGE NAMES A CONTROL, SO THAT CONTROL HAD TO BE MADE SAFE FIRST. The first draft of this
+       sentence sent her to "Load a recent round" — which, with the name not yet typed, skipped its own
+       confirm and replaced the work this toast had just protected. loadRecentRound now asks the same
+       question (see its guard), so the sentence and the button finally agree. */
+    if((S.pts||[]).some(p=>(p.name||'').trim()||hasContent(p))){
+      toast('You’d already started charting, so today’s saved round was left alone — it’s still on file in ClinicalVault, under “Load a recent round”.');
+      return;
+    }
     S.round.fac=mine[mine.length-1].facility||S.round.fac; S.round.date=today; S.round.prov=S.round.prov||prov;
     /* facLock MUST be set here. applyFacChange skips its whole confirm when facLock is empty
        (`!lock`), and this path was the one load path that never set it - so after a restore
@@ -4408,8 +4811,22 @@ async function carryForward(){
 
 function loadRecentRound(i){
   const g=_rrGroups[i]; if(!g) return;
-  if(S.pts.some(p=>(p.name||'').trim())
-     && !confirm('Replace what’s on screen with the '+g.date+' round for '+(g.facility||'this facility')+'?\n\nThe current round is already backed up to ClinicalVault if it was named and saved.')) return;
+  /* THE THIRD COPY OF THE GUARD, and the one it hurt most to leave behind. Restore-on-open now tells
+     her the saved round was left alone and that THIS button brings it back — so this button must not
+     be the one that destroys her work without asking. It was: with a fully charted wound on screen and
+     the name not yet typed, the name-only test saw an empty card, skipped the confirm entirely and
+     replaced the lot. Same predicate as the two load guards, for the same bedside reason (the name is
+     typed last), and hasContent already exists in this file to draw exactly that line.
+     AND THE REASSURANCE IS NOW CONDITIONAL, because it was only ever true of a NAMED patient:
+     rcAutoSaveCloud and saveVault both filter on `(p.name||'').trim()`, so an unnamed row has never
+     reached ClinicalVault. Telling her "already backed up" at the one moment that is false is worse
+     than not asking at all — she would tap OK on the strength of it. */
+  const _rrUnsaved=S.pts.some(p=>!(p.name||'').trim() && hasContent(p));
+  if(S.pts.some(p=>(p.name||'').trim()||hasContent(p))
+     && !confirm('Replace what’s on screen with the '+g.date+' round for '+(g.facility||'this facility')+'?\n\n'
+         +(_rrUnsaved
+            ? 'A patient on this card still has no name, and an unnamed patient is never saved to ClinicalVault — that work will be lost.'
+            : 'The current round is already backed up to ClinicalVault if it was named and saved.'))) return;
   const mine=g.recs.slice().sort((a,b)=>String(a.savedAt||'').localeCompare(String(b.savedAt||'')));
   /* A half-finished two-tap action refers to a patient by INDEX, and we are about to replace the whole
      list — the second tap would land on whoever now sits at that index and delete the wrong patient
@@ -4497,7 +4914,7 @@ function _rcNoRoundNotice(date, facR){
 async function rcLoadRoundFor(dateStr, facRaw){
   const date=String(dateStr||'').slice(0,10), facR=(facRaw||'').trim();
   try{
-    if((S.pts||[]).some(p=>(p.name||'').trim())) return 'busy';      // never clobber work
+    if((S.pts||[]).some(p=>(p.name||'').trim()||hasContent(p))) return 'busy';   // never clobber work — see the re-check below
     if(!date || !facR) return 'incomplete';                          // half a round identity
     if(_wasCleared(date, facR)) return 'cleared';                    // wiped on purpose, stays wiped
     const token=await _vaultTokenSilent(); if(!token) return 'signed-out';
@@ -4559,7 +4976,17 @@ async function rcLoadRoundFor(dateStr, facRaw){
     /* Re-check AFTER the awaits. SharePoint took a moment; in that moment the provider may have
        started a patient, or moved on to another date entirely. Landing a stale round on top of
        either would be worse than not loading at all. */
-    if((S.pts||[]).some(p=>(p.name||'').trim())) return 'busy';
+    /* ASKS hasContent, NOT ONLY THE NAME, and that one word is the difference between keeping and
+       destroying a Stage 4 pressure ulcer. The re-check was here and it was right to be here — but it
+       only looked for a NAME. Empty card, she flips the date back a day to check yesterday's round (no
+       confirm, the card is empty), the read starts, she is handed a new resident, taps "+ Patient", taps
+       out of the auto-focused name box and charts what she is looking at: left ischial tuberosity, Stage
+       4, 5.0 x 4.0 x 2.5, 40% granulation / 60% slough, "Wet-to-dry BID, pressure-redistribution cushion".
+       Then the load resolves, sees no name, calls her work an empty row and replaces it. Gone from the
+       screen, gone from the device copy, and never in the vault (rcAutoSaveCloud only uploads named
+       patients) — so it reached no sheet and no nurse, under a toast reading "Loaded the 2026-08-02 round".
+       Name typed first and the identical taps were correctly refused. Field order must not decide this. */
+    if((S.pts||[]).some(p=>(p.name||'').trim()||hasContent(p))) return 'busy';
     if(String(S.round.date||'').slice(0,10)!==date || (S.round.fac||'').trim()!==facR) return 'moved-on';
 
     mine.sort((a,b)=>String(a.savedAt||'').localeCompare(String(b.savedAt||'')));
