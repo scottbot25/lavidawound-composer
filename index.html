@@ -396,7 +396,7 @@
    the identical value and we pass ours into its URL, so the two can tell whether they shipped as a
    pair. See build-stamp.js for why, and why it cannot be a number someone remembers to raise.
    Declared here, on the first line of the first script, so every later block can see it. */
-const BUILD = '2026-08-04.af95124';
+const BUILD = '2026-08-04.af3ba78';
 /* SANDBOX MODE (?sandbox=1, LOCALHOST ONLY — the hosted site ignores it): points uploads at the
    ToolSandbox site so end-to-end tests (incl. the Round Card overlay, which inherits it) never touch
    the real vault. Belt = sitePath swap (done where VAULT_CFG is declared); suspenders = _gfetch
@@ -1689,7 +1689,14 @@ async function whLoadAt(fac, name){
   }
   // Signed out is its OWN state, not "no history" — the Round Card returns it as a distinct verdict too.
   const ctx=await _draftContext();
-  if(!ctx) throw _whUnreadable('Not signed in, so this patient’s wound history could not be read.', {signedOut:true});
+  /* The wording follows the REAL cause. This used to assert {signedOut:true} for every null context,
+     so a provider whose token renewal merely timed out was told "you are not signed in" — which sends
+     them to re-authenticate a session that is already fine. Unreadable either way; only the sentence
+     changes, which is the rule _whPrior.signedOut was written to follow. */
+  if(!ctx) throw _whUnreadable(_vaultCtxSignedOut()
+      ? 'Not signed in, so this patient’s wound history could not be read.'
+      : 'Couldn’t confirm your ClinicalVault sign-in just now, so this patient’s wound history could not be read.',
+      {signedOut:_vaultCtxSignedOut()});
   const metaUrl='https://graph.microsoft.com/v1.0/drives/'+ctx.driveId+'/root:/'+_encPath(whSegsAt(fac).join('/')+'/'+whFile(name));
   // A DEADLINE, because neither read here had one: a stalled request hung with nothing on screen while
   // the note quietly behaved as though the patient were new. Same wrapper the draft save uses.
@@ -2988,9 +2995,30 @@ async function _draftDelete(name){
 // Best-effort purge of drafts older than the keep window. Silent; never blocks the session.
 async function purgeOldDrafts(drafts){ try{ for(const d of (drafts||[])){ if(_draftAgeDays(d.name) > DRAFT_KEEP_DAYS) await _draftDelete(d.name); } }catch(e){} }
 
+/* WHY the context is missing, not merely THAT it is. Two completely different situations both used to
+   come back as a bare `null`:
+     signed-out   — getAllAccounts() is empty. Nobody is signed in. "No drafts" is TRUE.
+     unreadable   — an account IS signed in, but we could not turn it into a token.
+   The second one is not exotic. Observed live in the sandbox on 2026-08-03 on a session signed in
+   perfectly well: acquireTokenSilent rejected with errorCode "timed_out" — MSAL renews silently through
+   a hidden iframe against login.microsoftonline.com, and a browser that blocks that iframe (third-party
+   cookie policy, an offline moment, a slow tenant) produces exactly this. The old catch-all
+   `catch(e){ return null; }` erased the difference, and every caller downstream then had to guess —
+   so they guessed the comforting answer.
+   This is the same rule the wound-history banner already follows one screen up: ANY failure counts as
+   unreadable, and the tag only picks the WORDING. See _whUnreadable / _whPrior.signedOut. */
+let _vaultCtxCause='';                                  // '' = fine | 'signed-out' | 'unreadable'
+function _vaultCtxSignedOut(){ return _vaultCtxCause==='signed-out'; }
 async function _draftTokenSilent(){
-  try{ const pca=await _getPca(); const a=pca.getAllAccounts()[0]; if(!a) return null;
-    return (await pca.acquireTokenSilent({scopes:VAULT_CFG.scopes, account:a})).accessToken; }catch(e){ return null; }
+  let pca=null;
+  try{ pca=await _getPca(); }catch(e){ _vaultCtxCause='unreadable'; return null; }
+  if(!pca){ _vaultCtxCause='unreadable'; return null; }
+  let a=null;
+  try{ a=pca.getAllAccounts()[0]; }catch(e){ _vaultCtxCause='unreadable'; return null; }
+  if(!a){ _vaultCtxCause='signed-out'; return null; }   // the ONE case where "nothing is filed" is honest
+  try{ const r=await pca.acquireTokenSilent({scopes:VAULT_CFG.scopes, account:a});
+       _vaultCtxCause=''; return r.accessToken; }
+  catch(e){ _vaultCtxCause='unreadable'; return null; } // signed in, could not prove it — NOT "no drafts"
 }
 async function _draftContext(){
   const token=await _draftTokenSilent(); if(!token) return null;
@@ -3079,8 +3107,16 @@ async function saveDraft(manual, finalFlush){
 }
 function flushDraftSave(){ if(DRAFTS_ENABLED() && _draftRestoreDone){ clearTimeout(_draftT); saveDraft(false, true); } }   // final-flush: keepalive so the upload survives the tab closing
 
+/* THROWS rather than returning [] when the vault could not be read. Its ONE caller, maybeRestoreDraft,
+   converts an empty list into "no draft for today" and then sets safeToSave=true — and safeToSave's own
+   comment says it may only unlock on "a confirmed no-draft-yet state". A [] produced by a failed token
+   is not confirmed, it is unknown, and unlocking on it arms autosave over a real cloud draft that we
+   simply never saw. maybeRestoreDraft already has the correct handler for this — its catch leaves
+   safeToSave false and says "reload before editing". It just never got the chance to run, because the
+   failure had already been laundered into a confident empty answer down here. */
 async function listDrafts(){
-  const ctx=await _draftContext(); if(!ctx) return [];
+  const ctx=await _draftContext();
+  if(!ctx) throw new Error(_vaultCtxSignedOut() ? 'vault-signed-out' : 'vault-unreadable');
   const url='https://graph.microsoft.com/v1.0/drives/'+ctx.driveId+'/root:/'+_encPath(_draftSegs().join('/'))+':/children?$select=name,lastModifiedDateTime,size&$top=90';
   const r=await _gfetch(url, ctx.token); if(!r.ok) return [];
   /* Paged. Graph is under no obligation to return the newest 90 — the sort below is ours, applied to
@@ -4425,7 +4461,12 @@ function _rcProvOk(rec){
 /* Every recent roundcard.v1 record across all buildings. Auto-discovers buildings by listing the
    RoundCards/ folder's children — no roster needed, and it works for a provider covering 2–3 buildings. */
 async function rcListAllRecent(){
-  const ctx=await _draftContext(); if(!ctx) return [];
+  /* A missing context is "we could not look", and the comment four lines down already says saying
+     "no rounds" then is a lie. This branch was the one place that said it anyway: it returned [] and
+     set NEITHER flag, so _rcSayPullUnreadable and the !fresh.length report both had nothing to fire
+     on. Exactly the shape the ⚠ on _rcRecUnread warns about — a gate wired to nothing. */
+  const ctx=await _draftContext();
+  if(!ctx){ if(_vaultCtxSignedOut()) _rcPullBlocked=true; else _rcPullUnreadable=true; return []; }
   const rootUrl='https://graph.microsoft.com/v1.0/drives/'+ctx.driveId+'/root:/RoundCards:/children?$top=200';
   let rr; try{ rr=await _gfetch(rootUrl, ctx.token); }catch(e){ _rcPullUnreadable=true; return []; }
   // 404 is the ONE status that really means nothing is there — the folder has never been created.
@@ -6240,7 +6281,13 @@ function paintCompleteness(){
 // Group/category headers get UNDERLINE only (not bold); the smaller field sub-labels below them
 // stay bold. Matched by exact label (case-insensitive, ignoring a trailing colon/period) so a
 // stripped-empty field like "Other findings:" is never mistaken for a header.
-const HEADER_LABELS = ['Physical exam','Extremities','Vascular','Debridement','Assessment','Plans'];
+/* 'Risk factors' joined this list on 2026-08-04. It is an HPI sub-heading shaped exactly like
+   Extremities:/Vascular: — a bare "Label:" owning the answered lines beneath it — and because it was
+   NOT listed, the /:$/ empty-label rule below deleted it while its whole list survived. The chart then
+   read "Tobacco: yes. Chemotherapy: no." immediately after the HPI prose, with nothing saying those
+   were risk factors. Being on this list does not make it survive unconditionally: pass 2 still prunes
+   it when none of its own lines answered, which is the behaviour every other header here gets. */
+const HEADER_LABELS = ['Physical exam','Extremities','Vascular','Debridement','Assessment','Plans','Risk factors'];
 function isHeaderLine(trimmed){
   const key = trimmed.replace(/[:.\s]+$/,'').trim().toLowerCase();
   return HEADER_LABELS.some(h=>h.toLowerCase()===key);
@@ -6311,6 +6358,10 @@ function _freeTextLines(state){
 }
 function cleanForCopy(text, freeSet){
   const FREE = freeSet || _freeTextLines();
+  /* The SAME whitespace normalisation stripStars applies to the note, so a provider's typed line can
+     be recognised after the resolver has already rewritten it. Keyed on both sides or not at all. */
+  const _freeKey=(s)=>String(s||'').replace(/\s{2,}/g,' ').replace(/\s+([.,;:%])/g,'$1').trim();
+  const FREEK=new Set(); FREE.forEach(v=>FREEK.add(_freeKey(v)));
   // a stripped sub-field has no real value left if it's empty, a dangling "label:", a bare label word,
   // or an empty "%-label" (e.g. "% granulation" with no number).
   // The bare-label class INCLUDES the hyphen: without it "Re-evaluation" was not recognised as a
@@ -6328,9 +6379,18 @@ function cleanForCopy(text, freeSet){
   let perWoundStart=-1;
   let lines = String(text||'').split('\n').map((line,idx)=>{
     if(perWoundStart<0 && line.indexOf(MARKER)>=0) perWoundStart=idx;
-    /* The provider typed this line. Brackets in it are THEIR words, not an unfilled option. */
-    if(FREE.has(line.trim())) return line;
+    /* The provider typed this line. Brackets in it are THEIR words, not an unfilled option.
+       ⚠ COMPARED ON A NORMALISED KEY, NOT VERBATIM. resolve() runs stripStars BEFORE this function,
+       and stripStars rewrites whitespace across the whole note ('  '->' ', ' ,'->',', ' .'->'.'). So a
+       typed order carrying an ordinary double space no longer equalled its own copy in STATE, the
+       exemption was lost, and the bracket rule below then ATE it: "Hold compression  [pending ABI]"
+       reached PCC as nothing at all, and "ABI ordered.  Hold compression [pending result]" arrived as
+       "ABI ordered. Hold compression" — the qualifier deleted and the order now reading as
+       unconditional. freetext-brackets-test.js passed throughout because its fixture is single-spaced.
+       Both sides go through the same normaliser, so the two can no longer disagree. */
+    if(FREEK.has(_freeKey(line))) return line;
     if(/\[[^\]]*\]/.test(line)){
+      const line0 = line;
       // per top-level-comma sub-field: strip [placeholder]; keep only if a real value survives
       // (so "Location: sacrum — [laterality]" keeps "Location: sacrum", "color [ ]" drops).
       // WHICH line it is — not how many brackets survive. Drainage is the only line that is genuinely
@@ -6345,10 +6405,31 @@ function cleanForCopy(text, freeSet){
       const kept=segs.map(seg=>{
         if(!/\[[^\]]*\]/.test(seg)) return seg;
         const s=seg.replace(/\[[^\]]*\]/g,'').replace(/\s{2,}/g,' ').replace(/\s*[—-]+\s*\.?\s*$/,'').trim();
-        return emptySeg(s) ? null : s;
+        if(emptySeg(s)) return null;
+        /* THE BRACKET SAT IN THE FIRST CLAUSE AND REAL PROSE FOLLOWS IT ON THE SAME LINE. emptySeg can
+           only fire when the bracket is the whole segment, so the shipped Plans bullet
+             "-Re-evaluation [in 1 week / in 2 weeks / PRN]. Notify LaVida MD or APP sooner…"
+           stripped to "-Re-evaluation. Notify LaVida MD or APP sooner…" and went to the chart — a plan
+           asserting re-evaluation with no interval, which is the exact string the comment above
+           emptySeg claims was fixed. It was fixed only for freetext-brackets-test.js's fixture, which
+           is the bracket alone with no trailing prose; both note templates (lines 734 and 801) carry
+           the prose. Drop the unfilled clause, keep the sentence that follows — that sentence is
+           unconditional and belongs in the note. A FILLED interval never reaches here at all, because
+           the line has no brackets left. */
+        const head=s.match(/^([^.]*?)\.\s+(\S[\s\S]*)$/);
+        if(head && emptySeg(head[1])) return head[2];
+        return s;
       }).filter(x=>x!==null);
       if(!kept.length) return '';
       line=kept.join(', ');
+      /* PUT THE ROW'S LABEL BACK. Drainage is split on its commas, so when the AMOUNT is unset the
+         segment carrying the word "Drainage:" is the one emptySeg drops — and the surviving
+         sub-fields then paste into the chart with nothing saying what they describe. The Round Card
+         offers amount, colour, consistency and odour as four INDEPENDENT optional selects, so answering
+         only odour is ordinary: the chart received a bare "odor none." sitting between "Exposed
+         structures:" and "Undermining:". 7 of the 16 fill-combinations pasted a headless fragment. */
+      const lab=(line0.match(/^\s*(Drainage:)/)||[])[1];
+      if(lab && line.indexOf(lab)!==0) line=lab+' '+line;
     }
     let l=line.replace(/\s{2,}/g,' ').replace(/\s+([.,;:%])/g,'$1').replace(/,\s*$/,'').replace(/\s*[—-]+\s*\.?\s*$/,'').replace(/[ \t]+$/,'').replace(/^\s+/,'');
     const t=l.trim();
@@ -6369,11 +6450,35 @@ function cleanForCopy(text, freeSet){
     // and "cm²" but not "cm³", so an unmeasured wound leaked a dangling "Volume (auto): cm³" into the
     // chart while the identical empty Surface-area line was correctly dropped. Verified by driving an
     // empty wound card. (2026-07-16)
-    if(/(cm[²³]?|%|mL|mm|minutes|o'clock)\s*\.?$/.test(t) && !/\d/.test(t)) return '';
-    // A "Total time:" line with no number is an unfilled billing time — drop the whole line rather than
-    // paste "Total time: minutes, excluding …" (its trailing billing clause keeps it past the units check
-    // above). Kept in full once a number is entered. (2026-07-17)
-    if(/^total time:/i.test(t) && !/\d/.test(t)) return '';
+    /* ⚠ "HAS NO DIGIT" IS NOT THE SAME QUESTION AS "IS NOT FILLED", and answering the first one
+       deleted real answers. Estimated Blood Loss is normally written in words on a wound-care note —
+       "minimal", "scant", "none" — and every one of those was indistinguishable from an untouched box,
+       so the whole EBL line vanished from a billed debridement note. Ask what is actually being asked:
+       is the VALUE SLOT between the label and the unit empty? A line with no label at all keeps the
+       old digit test, which is what "% granulation" needs. */
+    if(/(cm[²³]?|%|mL|mm|minutes|o'clock)\s*\.?$/.test(t)){
+      const um=t.match(/^(.*?):\s*(.*?)\s*(cm[²³]?|%|mL|mm|minutes|o'clock)\s*\.?$/);
+      if(um){ if(!um[2].trim()) return ''; }
+      else if(!/\d/.test(t)) return '';
+    }
+    /* AN UNMEASURED DEPTH LEFT ITS SCAFFOLDING ON THE ROW. L, W and D share one line, so the whole-line
+       units rule above can never fire once L supplies a digit — the chart got "L: 3 cm W: 2 cm D: cm",
+       which reads as a depth of zero rather than a depth nobody measured, and which the composer's own
+       dimsOf() cannot parse back (so the handoff sheet's Dimensions row is dropped and the history
+       snapshot stores an empty dims for next week's carry-forward). Drop the empty sub-measurement the
+       way every other empty field is dropped. */
+    if(/\b[LWD]:\s*(cm[²³]?)?\s*(?=[LWD]:|$)/.test(t)){
+      const trimmed=l.replace(/\s*\b[LWD]:\s*(?:cm[²³]?)?\s*(?=\b[LWD]:|$)/g,'').replace(/\s{2,}/g,' ').trim();
+      if(!trimmed) return '';
+      l=trimmed;
+    }
+    /* A "Total time:" line with no time is an unfilled billing attestation. It cannot use the rule
+       above because its trailing billing clause means the line does not END in the unit — and it
+       cannot use "has no digit" either, for the same reason EBL could not: "thirty" is an answer.
+       Look only at what sits between the label and the word "minutes". (2026-07-17, reworked 2026-08-04) */
+    const tt=t.match(/^total time:\s*([^,]*?)\s*minutes/i);
+    if(tt && !tt[1].trim()) return '';
+    if(/^total time:/i.test(t) && !tt && !/\d/.test(t)) return '';
     return l;
   });
   // pass 2: drop orphan group headers (none of their OWN fields survived). A group header owns only
