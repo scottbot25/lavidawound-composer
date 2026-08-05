@@ -278,7 +278,7 @@
    it is a hash of BOTH shipped files, so editing either one makes it provably stale and the sweep says
    so. The composer carries the identical value and passes its own into our URL (?b=), which is how the
    two can tell whether they shipped as a pair. See build-stamp.js. */
-const BUILD = '2026-08-05.463e3dc';
+const BUILD = '2026-08-05.94aa0fc';
 /* A top-level `const` is NOT a property of window — only `var` and function declarations are. So the
    composer, reading across the frame, gets `undefined` for our build no matter what we declared here,
    and would conclude on EVERY open that this card is too old to have one. Found by opening the overlay
@@ -4278,7 +4278,18 @@ async function rcRestoreFromVault(){
     S.pts=(function(recs){ const w={}; let u=0; (recs||[]).forEach(function(rec){ if(!rec) return;
       const key=String(rec.ptId||'').trim()||('n:'+String((rec.patient&&rec.patient.name)||'').trim().toLowerCase());
       if(key===''||key==='n:'){ w['__u'+(u++)]=rec; return; }
-      const prev=w[key]; if(!prev||String(rec.savedAt||'')>=String(prev.savedAt||'')) w[key]=rec; });
+      /* THE NEWEST FILE IS NOT ALWAYS THE FULLEST ONE. Found 2026-08-05: the root cause of duplicate
+         files (a save that should overwrite the same record instead minting a new id) is a separate,
+         bigger question — but whatever creates the second file, its timestamp says nothing about
+         which one has more of Abby's actual charting in it. Driven against the real vault: pairs
+         where the LATER save had fewer than half the filled fields of the earlier one, repeatedly.
+         Picking by savedAt alone was throwing away real exam data in favour of a thinner duplicate.
+         Score by how much is actually filled — same field-counting rule as hasContent() — and only
+         fall back to savedAt when two records are equally complete, so a genuine tie still resolves
+         deterministically rather than by object-key order. */
+      const prev=w[key];
+      const sc=r=>{let n=String(r.edu||'').trim()?1:0;(r.wounds||[]).forEach(function(wd){Object.keys(wd).forEach(function(fk){if(fk==='wid'||fk==='born')return;const v=wd[fk];if(Array.isArray(v)?v.length>0:String(v==null?'':v).trim()!=='')n++;});});return n;};
+      if(!prev||sc(rec)>sc(prev)||(sc(rec)===sc(prev)&&String(rec.savedAt||'')>=String(prev.savedAt||''))) w[key]=rec; });
       return Object.values(w); })(mine).map(r=>({ id:r.id||newId(), ptId:String(r.ptId||r.id||''), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], woundSeq:Number(r.woundSeq)||0, send:true, visitType:r.visitType||'', dispo:r.dispo||'' }));
     normalizePts(S); S.active=0;
     S.pts.forEach(p=>{ try{ _rcCloudSig[p.id]=_rcSig(p); _rcFiled.add(p.id); }catch(e){} });   // restored = already in the cloud; no re-upload
@@ -4911,7 +4922,11 @@ function loadRecentRound(i){
   S.pts=(function(recs){ const w={}; let u=0; (recs||[]).forEach(function(rec){ if(!rec) return;
     const key=String(rec.ptId||'').trim()||('n:'+String((rec.patient&&rec.patient.name)||'').trim().toLowerCase());
     if(key===''||key==='n:'){ w['__u'+(u++)]=rec; return; }
-    const prev=w[key]; if(!prev||String(rec.savedAt||'')>=String(prev.savedAt||'')) w[key]=rec; });
+    /* THE NEWEST FILE IS NOT ALWAYS THE FULLEST ONE — see the identical note at the other two load
+       paths. Score by fields actually filled, savedAt only breaks a genuine tie. */
+    const prev=w[key];
+    const sc=r=>{let n=String(r.edu||'').trim()?1:0;(r.wounds||[]).forEach(function(wd){Object.keys(wd).forEach(function(fk){if(fk==='wid'||fk==='born')return;const v=wd[fk];if(Array.isArray(v)?v.length>0:String(v==null?'':v).trim()!=='')n++;});});return n;};
+    if(!prev||sc(rec)>sc(prev)||(sc(rec)===sc(prev)&&String(rec.savedAt||'')>=String(prev.savedAt||''))) w[key]=rec; });
     return Object.values(w); })(mine).map(r=>({ id:r.id||newId(), ptId:String(r.ptId||r.id||''), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], woundSeq:Number(r.woundSeq)||0, send:true, visitType:r.visitType||'', dispo:r.dispo||'' }));
   normalizePts(S); S.active=0;
   S.pts.forEach(p=>{ try{ _rcCloudSig[p.id]=_rcSig(p); _rcFiled.add(p.id); }catch(e){} });   // loaded = already in the cloud; only edits re-upload
@@ -5055,7 +5070,18 @@ async function rcLoadRoundFor(dateStr, facRaw){
     S.pts=(function(recs){ const w={}; let u=0; (recs||[]).forEach(function(rec){ if(!rec) return;
       const key=String(rec.ptId||'').trim()||('n:'+String((rec.patient&&rec.patient.name)||'').trim().toLowerCase());
       if(key===''||key==='n:'){ w['__u'+(u++)]=rec; return; }
-      const prev=w[key]; if(!prev||String(rec.savedAt||'')>=String(prev.savedAt||'')) w[key]=rec; });
+      /* THE NEWEST FILE IS NOT ALWAYS THE FULLEST ONE. Found 2026-08-05: the root cause of duplicate
+         files (a save that should overwrite the same record instead minting a new id) is a separate,
+         bigger question — but whatever creates the second file, its timestamp says nothing about
+         which one has more of Abby's actual charting in it. Driven against the real vault: pairs
+         where the LATER save had fewer than half the filled fields of the earlier one, repeatedly.
+         Picking by savedAt alone was throwing away real exam data in favour of a thinner duplicate.
+         Score by how much is actually filled — same field-counting rule as hasContent() — and only
+         fall back to savedAt when two records are equally complete, so a genuine tie still resolves
+         deterministically rather than by object-key order. */
+      const prev=w[key];
+      const sc=r=>{let n=String(r.edu||'').trim()?1:0;(r.wounds||[]).forEach(function(wd){Object.keys(wd).forEach(function(fk){if(fk==='wid'||fk==='born')return;const v=wd[fk];if(Array.isArray(v)?v.length>0:String(v==null?'':v).trim()!=='')n++;});});return n;};
+      if(!prev||sc(rec)>sc(prev)||(sc(rec)===sc(prev)&&String(rec.savedAt||'')>=String(prev.savedAt||''))) w[key]=rec; });
       return Object.values(w); })(mine).map(r=>({ id:r.id||newId(), ptId:String(r.ptId||r.id||''), name:(r.patient&&r.patient.name)||'',
       edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], woundSeq:Number(r.woundSeq)||0, send:true, visitType:r.visitType||'', dispo:r.dispo||'' }));
     normalizePts(S); S.active=0;
