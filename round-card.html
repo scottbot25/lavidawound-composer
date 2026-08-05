@@ -278,7 +278,7 @@
    it is a hash of BOTH shipped files, so editing either one makes it provably stale and the sweep says
    so. The composer carries the identical value and passes its own into our URL (?b=), which is how the
    two can tell whether they shipped as a pair. See build-stamp.js. */
-const BUILD = '2026-08-05.6f42551';
+const BUILD = '2026-08-05.463e3dc';
 /* A top-level `const` is NOT a property of window — only `var` and function declarations are. So the
    composer, reading across the frame, gets `undefined` for our build no matter what we declared here,
    and would conclude on EVERY open that this card is too old to have one. Found by opening the overlay
@@ -4265,7 +4265,21 @@ async function rcRestoreFromVault(){
     S.round.loadedProv=owner.name; S.round.loadedMixed=owner.mixed;
     // dispo has to come back too — reopening a round must not quietly reset everyone to
     // "seen" and re-inflate the count that was already filed for that day.
-    S.pts=mine.map(r=>({ id:r.id||newId(), ptId:String(r.ptId||r.id||''), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], woundSeq:Number(r.woundSeq)||0, send:true, visitType:r.visitType||'', dispo:r.dispo||'' }));
+    /* ONE RECORD FILE BECOMES ONE ROW below, unless collapsed first. A stale pre-round autosave, a
+       resave that for any reason picked up a new id, a duplicate upload — any of those leaves a
+       second (or third) file for one patient on one round, and she sees herself listed two or three
+       times on screen and on the handoff .doc, at different ages of her own data. Collapsed to the
+       newest record per patient identity — ptId when the record has one, else the trimmed
+       case-insensitive name. A record neither can identify keeps its own row rather than being
+       folded into a guess: a stray extra row is a minor annoyance, merging two different patients
+       because both are nameless is not. Inline, not a shared function — three load paths each slice
+       their own function out of the file for their suites, and a shared symbol they never learned
+       about becomes a ReferenceError that reads like an ordinary failure. */
+    S.pts=(function(recs){ const w={}; let u=0; (recs||[]).forEach(function(rec){ if(!rec) return;
+      const key=String(rec.ptId||'').trim()||('n:'+String((rec.patient&&rec.patient.name)||'').trim().toLowerCase());
+      if(key===''||key==='n:'){ w['__u'+(u++)]=rec; return; }
+      const prev=w[key]; if(!prev||String(rec.savedAt||'')>=String(prev.savedAt||'')) w[key]=rec; });
+      return Object.values(w); })(mine).map(r=>({ id:r.id||newId(), ptId:String(r.ptId||r.id||''), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], woundSeq:Number(r.woundSeq)||0, send:true, visitType:r.visitType||'', dispo:r.dispo||'' }));
     normalizePts(S); S.active=0;
     S.pts.forEach(p=>{ try{ _rcCloudSig[p.id]=_rcSig(p); _rcFiled.add(p.id); }catch(e){} });   // restored = already in the cloud; no re-upload
     saveFiled();
@@ -4891,7 +4905,14 @@ function loadRecentRound(i){
   // dispo comes back too — see the same line in rcRestoreFromVault. Reopening a round must
   // not quietly reset everyone to "seen"; auto-save would then re-upload them as seen and
   // re-inflate a count that was already filed correctly.
-  S.pts=mine.map(r=>({ id:r.id||newId(), ptId:String(r.ptId||r.id||''), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], woundSeq:Number(r.woundSeq)||0, send:true, visitType:r.visitType||'', dispo:r.dispo||'' }));
+  /* SAME COLLAPSE AS THE OTHER TWO LOAD PATHS — see the comment at rcRestoreFromVault's S.pts
+     assignment for why. Inline again, not a shared function, for the same reason: this suite slices
+     its own function out of the file and never learns about a symbol defined elsewhere. */
+  S.pts=(function(recs){ const w={}; let u=0; (recs||[]).forEach(function(rec){ if(!rec) return;
+    const key=String(rec.ptId||'').trim()||('n:'+String((rec.patient&&rec.patient.name)||'').trim().toLowerCase());
+    if(key===''||key==='n:'){ w['__u'+(u++)]=rec; return; }
+    const prev=w[key]; if(!prev||String(rec.savedAt||'')>=String(prev.savedAt||'')) w[key]=rec; });
+    return Object.values(w); })(mine).map(r=>({ id:r.id||newId(), ptId:String(r.ptId||r.id||''), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], woundSeq:Number(r.woundSeq)||0, send:true, visitType:r.visitType||'', dispo:r.dispo||'' }));
   normalizePts(S); S.active=0;
   S.pts.forEach(p=>{ try{ _rcCloudSig[p.id]=_rcSig(p); _rcFiled.add(p.id); }catch(e){} });   // loaded = already in the cloud; only edits re-upload
   saveFiled();
@@ -5028,8 +5049,15 @@ async function rcLoadRoundFor(dateStr, facRaw){
        would let a throw leave a full card on screen with NO seeded signatures - every record dirty,
        the whole round re-uploaded under whatever the box says. That is the 21-record re-file class. */
     const owner=_roundOwner(mine);
-    S.pts=mine.map(r=>({ id:r.id||newId(), ptId:String(r.ptId||r.id||''), name:(r.patient&&r.patient.name)||'', edu:r.edu||'',
-      wounds:Array.isArray(r.wounds)?r.wounds:[], woundSeq:Number(r.woundSeq)||0, send:true, visitType:r.visitType||'', dispo:r.dispo||'' }));
+    /* SAME COLLAPSE AS THE OTHER TWO LOAD PATHS — see the comment at rcRestoreFromVault's S.pts
+       assignment for why. Inline again, not a shared function, for the same reason: this suite
+       slices its own function out of the file and never learns about a symbol defined elsewhere. */
+    S.pts=(function(recs){ const w={}; let u=0; (recs||[]).forEach(function(rec){ if(!rec) return;
+      const key=String(rec.ptId||'').trim()||('n:'+String((rec.patient&&rec.patient.name)||'').trim().toLowerCase());
+      if(key===''||key==='n:'){ w['__u'+(u++)]=rec; return; }
+      const prev=w[key]; if(!prev||String(rec.savedAt||'')>=String(prev.savedAt||'')) w[key]=rec; });
+      return Object.values(w); })(mine).map(r=>({ id:r.id||newId(), ptId:String(r.ptId||r.id||''), name:(r.patient&&r.patient.name)||'',
+      edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], woundSeq:Number(r.woundSeq)||0, send:true, visitType:r.visitType||'', dispo:r.dispo||'' }));
     normalizePts(S); S.active=0;
     S.round.facLock=facR;                                  // every vault-load path must set this
     S.round.loadedProv=owner.name; S.round.loadedMixed=owner.mixed;   // whose round this is - see applyProvChange
