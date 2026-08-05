@@ -278,7 +278,7 @@
    it is a hash of BOTH shipped files, so editing either one makes it provably stale and the sweep says
    so. The composer carries the identical value and passes its own into our URL (?b=), which is how the
    two can tell whether they shipped as a pair. See build-stamp.js. */
-const BUILD = '2026-08-04.a6d35be';
+const BUILD = '2026-08-05.6f42551';
 /* A top-level `const` is NOT a property of window — only `var` and function declarations are. So the
    composer, reading across the frame, gets `undefined` for our build no matter what we declared here,
    and would conclude on EVERY open that this card is too old to have one. Found by opening the overlay
@@ -2307,6 +2307,38 @@ function render(){
    flush triggered by switching facility can't stamp the previous building's patients with the new
    building's name. Everything else passes nothing and gets the live round, exactly as before. */
 function sheetHTML(list, roundOverride){
+  /* THE PROCEDURES BLOCK NEVER REACHED THE FACILITY .DOC. The card collects fourteen fields the
+     moment Debridement is set to Yes — tissue removed, post-debridement size, instrument, blood
+     loss, consent, anesthesia, endpoint, tolerance — and this function never printed a single one of
+     them. hasContent() counts them as work so the "IT WILL NOT BE SENT" alarm stays quiet, which is
+     exactly backwards: the alarm was silent because the fields WERE going somewhere, just not to the
+     nurse. A provider who documented a full sharp debridement had it vanish from the one document the
+     facility actually reads. Mirrors the composer's PROC() section so the sheet and the chart agree
+     on what was done. Nested here, not a top-level function, so the suites that slice sheetHTML by
+     string (round-card-behavior-test.js, card-controls-test.js, no-location-sentinel-test.js) get it
+     for free instead of throwing a ReferenceError on a call they never learned about. */
+  const procSheetRows=(w)=>{
+    if(String(w&&w.debride||'')!=='Yes') return '';
+    const dim=x=>String(x||'').trim();
+    const post = (dim(w.postL)||dim(w.postW)||dim(w.postD))
+      ? [dim(w.postL)||'?',dim(w.postW)||'?',dim(w.postD)||'?'].join(' × ')+' cm' : '';
+    const rows=[
+      ['Debridement performed', v(disp(w,'debType'))],
+      ['Tissue removed', v(disp(w,'tissueRemoved'))],
+      ['Deepest tissue debrided', v(disp(w,'deepest'))],
+      ['Post-debridement size', post || '—'],
+      ['Instrument used', v(disp(w,'instrument'))],
+      ['Estimated blood loss', dim(w.ebl) ? dim(w.ebl)+' mL' : '—'],
+      ['Blood loss controlled via', v(disp(w,'bloodCtl'))],
+      ['Consent', v(disp(w,'consent'))],
+      ['Anesthesia', v(disp(w,'anesthesia'))],
+      ['Cleansing / prep', v(disp(w,'cleansing'))],
+      ['Endpoint', v(disp(w,'endpoint'))],
+      ['Tolerance of procedure', v(disp(w,'tolerance'))],
+    ];
+    return '<tr><td class="k" colspan="2" style="padding-top:8px;color:#0f8a7c;font-weight:700">Procedure performed</td></tr>'
+      + rows.map(([k,val])=>'<tr><td class="k">'+esc(k)+'</td><td class="val">'+esc(val)+'</td></tr>').join('');
+  };
   /* A COPY, never Object.assign(S.round,…) — mutating S.round here would move the Provider box
      itself, which is the design this fix deliberately rejected, arriving through the sheet
      renderer. The header must name whoever the round FILES under (see _fileProv), or the printed
@@ -2469,6 +2501,7 @@ function sheetHTML(list, roundOverride){
          + (disp(w,'periwound') ? '<tr><td class="k">Periwound</td><td class="val">'+esc(disp(w,'periwound'))+'</td></tr>' : '')
          + ((w.undermining||'').trim() ? '<tr><td class="k">Undermining</td><td class="val">'+esc(w.undermining.trim())+'</td></tr>' : '')
          + ((w.tunneling||'').trim()   ? '<tr><td class="k">Tunneling</td><td class="val">'+esc(w.tunneling.trim())+'</td></tr>' : '')
+         + procSheetRows(w)
          + '</table>'
          + '<table width="100%" cellpadding="0" cellspacing="0" style="margin-top:8px"><tr><td class="orders-cell">'
          + '<span class="orders-lab">Orders for the nurse</span><br><span class="orders-txt">'+esc(v(w.orders))+'</span>'
