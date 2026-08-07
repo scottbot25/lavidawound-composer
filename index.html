@@ -396,7 +396,7 @@
    the identical value and we pass ours into its URL, so the two can tell whether they shipped as a
    pair. See build-stamp.js for why, and why it cannot be a number someone remembers to raise.
    Declared here, on the first line of the first script, so every later block can see it. */
-const BUILD = '2026-08-07.a70c0f1';
+const BUILD = '2026-08-07.3f35189';
 /* SANDBOX MODE (?sandbox=1, LOCALHOST ONLY — the hosted site ignores it): points uploads at the
    ToolSandbox site so end-to-end tests (incl. the Round Card overlay, which inherits it) never touch
    the real vault. Belt = sitePath swap (done where VAULT_CFG is declared); suspenders = _gfetch
@@ -1747,7 +1747,7 @@ async function whSaveAt(fac, name, hist){
     const ctx=await _draftContext(); if(!ctx) return false;
     await _vaultEnsureFolders(ctx.token, ctx.driveId, whSegsAt(fac));
     const url='https://graph.microsoft.com/v1.0/drives/'+ctx.driveId+'/root:/'+_encPath(whSegsAt(fac).join('/')+'/'+whFile(name))+':/content';
-    const r=await _gfetch(url, ctx.token, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(hist)});
+    const r=await _gfetch(url, ctx.token, {method:'PUT', headers:{'Content-Type':'application/json;charset=utf-8'}, body:JSON.stringify(hist)});
     return r.ok;
   }catch(e){ return false; }
 }
@@ -2956,7 +2956,7 @@ async function _vaultEnsureFolders(token,driveId,segs){
       const parentUrl=parent
         ? 'https://graph.microsoft.com/v1.0/drives/'+driveId+'/root:/'+_encPath(parent)+':/children'
         : 'https://graph.microsoft.com/v1.0/drives/'+driveId+'/root/children';
-      const mk=await _gfetch(parentUrl,token,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:seg,folder:{},'@microsoft.graph.conflictBehavior':'fail'})});
+      const mk=await _gfetch(parentUrl,token,{method:'POST',headers:{'Content-Type':'application/json;charset=utf-8'},body:JSON.stringify({name:seg,folder:{},'@microsoft.graph.conflictBehavior':'fail'})});
       if(!mk.ok && mk.status!==409) throw new Error('Couldn’t create the “'+seg+'” folder (HTTP '+mk.status+').');
     } else if(!c.ok){ throw new Error('Folder check failed (HTTP '+c.status+').'); }
     parent=childRel;
@@ -3093,7 +3093,7 @@ async function saveDraft(manual, finalFlush){
     // so reopening loaded the stale cloud copy). Browsers cap keepalive bodies (~64KB); oversized
     // payloads fall back to a normal fetch (best effort). Same Microsoft-only egress either way.
     const kal=!!finalFlush && body.length<60000;
-    const r=await _netTmo(_gfetch(url, ctx.token, {method:'PUT', headers:{'Content-Type':'application/json'}, body:body, keepalive:kal, signal:(_ac&&!kal)?_ac.signal:undefined}), 30000);
+    const r=await _netTmo(_gfetch(url, ctx.token, {method:'PUT', headers:{'Content-Type':'application/json;charset=utf-8'}, body:body, keepalive:kal, signal:(_ac&&!kal)?_ac.signal:undefined}), 30000);
     if(!r.ok){ if(r.status===401) _draftCtx=null; _ensuredFolders.clear(); _draftStatus('⚠ not synced','warn'); if(manual) toast('Sync failed (HTTP '+r.status+')'); return false; }
     // Keep the Resume banner honest: the PUT response is the fresh driveItem (name + new mtime) —
     // record what we JUST saved under that key and refresh the listing entry, so the chip for today
@@ -4563,6 +4563,72 @@ function _rcFindExistingPatient(rec){
   return Object.keys(WS.patients).find(pid=>{ const p=WS.patients[pid];
     return p && whNameKey(p.name||'')===nm && whNameKey(p.facility||'')===fac; }) || null;
 }
+/* ===== TWO CARD FILES, ONE RESIDENT, ONE VISIT (2026-08-07) ===========================================
+   RoundCards/<building>/ is FLAT and a record's file is named for the SAVE, not for the person, so one
+   resident can end up with two record FILES covering one day — a second card session, a slot saved
+   twice, a re-save that minted a fresh record id. Nothing upstream can see it: rcListAllRecent has no
+   identity key in it at all, and _rcSelectForPull's uniq is keyed on the record ID, so two files with
+   two ids are two records BY CONSTRUCTION. They arrive as two creates and the provider gets the SAME
+   RESIDENT TWICE — two notes each holding half the visit, and whichever she finishes is missing
+   whatever was only on the other file. _rcFindExistingPatient cannot close it: it matches NAME +
+   building, so a name retyped between the two saves, a building string that differs, or a file saved
+   before the name was typed all slip through with no dialog at all.
+
+   THIS FUNCTION ROUTES. IT NEVER ASKS. That is the whole shape of it, and it is deliberate: every
+   question about WHO a record belongs to is already owned by _rcRenamePrompt on the update path and by
+   the July name+building confirm below. A router that also asked would be a second, byte-identical
+   wrong-patient dialog on a question the provider had already answered — and one OK on that repeat
+   merges two residents into one note. So this returns a pid or null, and null means "do exactly what
+   this file did before I existed".
+
+   It says yes only when ALL of these hold:
+     - ptId        the card's patient-SLOT id, minted once and carried through carry-forward. It is the
+                   only durable "who" in the record, which is why _whPtId files wound history by it.
+     - building    rcListAllRecent spans EVERY building, so one ptId in two buildings on one day is a
+                   transfer, not a duplicate. Compared with whNameKey, exactly as _rcFindExistingPatient
+                   next door compares it, so the two cannot disagree about what "same building" means.
+     - the DAY     one card record is one visit. A patient rounded yesterday AND today has two notes
+                   with one name ON PURPOSE (see the "open that note" toast on the update path).
+                   Folding across days drops today's findings into yesterday's note in silence.
+     - EXACTLY ONE note on that slot. Two notes already sharing a slot, a building and a day means the
+                   tool is looking at a slot it ALREADY KNOWS holds two people — she split it, or the
+                   alpha trap below created the second one. In that state a router that picks the first
+                   match is guessing which resident a wound belongs to, and Object key order is the
+                   thing it would be guessing from. So it declines and the record gets its own note,
+                   which is where she can see it.
+     - the NAMES DO NOT DISAGREE. A card slot keeps its id for life, so the same ptId under a DIFFERENT
+                   name is the "alpha" trap: a finished slot retyped for a different resident. That is
+                   not this function's question — it declines, and the record falls through to the very
+                   same collision check it would have met without this change.
+   A blank name on either side is not a disagreement: the card auto-saves fast, so a record's first
+   version routinely precedes the typed name, and that blank-named second file is the live silent case
+   this whole change exists for. rcMergeIntoPatient fills a blank name from the record.
+
+   IT NEVER DECIDES WHAT HAPPENS NEXT. The caller MERGES — fill-empty, wounds unioned by id, orders
+   appended: the same rcMergeIntoPatient every other collision takes — so nothing that exists only on
+   the second file is lost. Dropping the loser would trade a visible duplicate for silent clinical data
+   loss, which is the worse of the two. Pure: no DOM, no network, no clock. */
+function _rcSlotKey(rec){
+  const id=String((rec&&rec.ptId)||'').trim();
+  return id ? (id+'|'+whNameKey((rec&&rec.facility)||'')) : '';
+}
+function _rcSibling(rec, patients){
+  const slot=_rcSlotKey(rec); if(!slot) return null;                 // legacy record, no ptId: nothing to pair on
+  const day=String((rec&&rec.date)||'').slice(0,10); if(!day) return null;   // undated: with no day there is no same visit to share
+  const id=String((rec&&rec.ptId)||'').trim();
+  const fac=whNameKey((rec&&rec.facility)||'');
+  const pats=patients||{};
+  const cands=Object.keys(pats).filter(k=>{ const p=pats[k];
+    return !!p && String(p.rcPtId||'').trim()===id
+               && whNameKey(p.facility||'')===fac
+               && String(p.rcDate||'').slice(0,10)===day; });
+  if(cands.length!==1) return null;   // 0 = nothing to pair with. 2+ = this slot is ALREADY known to hold two people
+  const pid=cands[0];
+  const rnm=whNameKey((rec&&rec.patient&&rec.patient.name)||'');
+  const pn=whNameKey((pats[pid]||{}).name||'');
+  if(rnm && pn && rnm!==pn) return null;   // the alpha trap — not this function's question, and never its guess
+  return pid;
+}
 // Is this note still a PURE MIRROR of its Round Card — i.e. every non-empty value in both stores is
 // exactly what the card wrote (per the __rcw memory)? True means nothing provider-typed exists, so a
 // card rename can safely follow; any typed value (or a pre-__rcw legacy store) returns false.
@@ -5124,10 +5190,33 @@ async function rcAutoPull(reason){
     _rcBatch++;
     try{
     for(const r of fresh){
+      /* WHICH ENTRANCE DID THIS RECORD TAKE INTO THE CREATE PATH? A record can reach the code below in
+         two completely different states, and only one of them has never been adjudicated.
+           - It is NEW: no note has ever seen it, nobody has been asked anything about it. The sibling
+             router below is allowed to route it.
+           - It FELL THROUGH the branch that follows: the provider was shown _rcRenamePrompt and said
+             "a different patient" (so that note was deliberately severed), or the note it created was
+             deleted and the slot has since been retyped. Either way a decision has ALREADY been made
+             about who this record is, and re-deciding it below means the same wrong-patient dialog
+             twice with a destructive second answer, or a fold into the very note she just declared
+             separate. So the router is not asked at all, and the record takes exactly the path it took
+             before this file learned about siblings. */
+      let _rcFromUpdate=false;
       if(r && r.id && isUpdate(r)){
+        _rcFromUpdate=true;
         // The card was RE-SAVED after we pulled it — refresh the patient it created, quietly.
+        /* A NOTE IS TAGGED TO ONE RECORD BUT CAN BE FED BY SEVERAL. rcMergeIntoPatient's tag block
+           moves srcRcId to whichever record merged last, so once two files have been folded into one
+           note the OTHER file carries an id no note answers to: srcPid comes back undefined, the loop
+           reads that as "she deleted this patient" and drops every later save of it in total silence —
+           no merge, no create, no note change, no toast. rcRecIds is the note's memory of every record
+           folded into it, so neither file is orphaned. It is written at exactly one place (the sibling
+           merge below) and pruned at exactly one (the slot-reuse sever), so a note that never took a
+           sibling merge has no rcRecIds at all and this clause can never change what it does. */
         const srcPid=Object.keys(WS.patients).find(pid=>{ const p=WS.patients[pid];
-          return p && (p.srcRcId===r.id || (!p.srcRcId && p.srcRcKey && p.srcRcKey===_rcKey(r))); });
+          return p && (p.srcRcId===r.id
+                       || (Array.isArray(p.rcRecIds) && p.rcRecIds.indexOf(r.id)>=0)
+                       || (!p.srcRcId && p.srcRcKey && p.srcRcKey===_rcKey(r))); });
         // Did the name on this slot change? (Legacy entries with no remembered name count as unchanged.)
         const oldK=(seen[r.id]&&typeof seen[r.id]==='object')?String(seen[r.id].k||''):'';
         const newK=String(r.key||'');
@@ -5143,7 +5232,12 @@ async function rcAutoPull(reason){
           // SLOT REUSE with the first patient's note still open. Leave that note completely alone —
           // its wounds are NOT this person's — and drop its card tag so no later update can land on it.
           // The new occupant is created below via the normal collision/prefill path.
-          try{ const _op=WS.patients[srcPid]; if(_op){ _op.srcRcId=null; _op.srcRcKey=null; _op.rcName=null; } }catch(e2){}
+          /* rcRecIds is part of the tag now, so severing without pruning it would leave the note still
+             answering to the very record she just said belongs to somebody else — the next save of it
+             would merge straight back into her note. Only THIS record is removed: any other file folded
+             into the note is still that resident's and must keep flowing. */
+          try{ const _op=WS.patients[srcPid]; if(_op){ _op.srcRcId=null; _op.srcRcKey=null; _op.rcName=null;
+                 if(Array.isArray(_op.rcRecIds)) _op.rcRecIds=_op.rcRecIds.filter(i=>i!==r.id); } }catch(e2){}
         }
         if(srcPid && sameSlotPatient){
           rcMergeIntoPatient(srcPid, r); pulled++; mergedCount++;
@@ -5184,20 +5278,43 @@ async function rcAutoPull(reason){
         }
         // fall through: the slot's new occupant is created via the normal collision/prefill path below
       }
+      /* SAME SLOT, SAME BUILDING, SAME DAY, ONE NOTE ON IT, NAMES NOT IN DISPUTE = ONE VISIT = ONE
+         NOTE. This runs BEFORE the name+building collision below because it is the only check that can
+         see the pair at all when the name differs between the two saves — which is the case that
+         produced a silent duplicate with no dialog. It cannot raise a dialog of its own; when it
+         declines, existPid falls back to exactly the check that was here before. See _rcSibling. */
+      let sibPid=null;
+      if(!_rcFromUpdate) sibPid=_rcSibling(r, WS.patients);
       // Collision: this patient is already in the list (she started the note by hand, or an earlier card).
       // Warn + let her pull the card INTO that note instead of silently creating a duplicate (Scott 2026-07-20).
-      const existPid=_rcFindExistingPatient(r);
-      if(existPid && confirm('“'+(((r.patient&&r.patient.name)||'This patient').trim())+'” is already in your '+(facLabel(r.facility||'')||'list')+'.\n\nPull the Round Card into that note?\n\nOK = fill in the note you already started (it won’t overwrite anything you typed).\nCancel = add as a separate patient.')){
+      const existPid=sibPid||_rcFindExistingPatient(r);
+      if(existPid && (sibPid || confirm('“'+(((r.patient&&r.patient.name)||'This patient').trim())+'” is already in your '+(facLabel(r.facility||'')||'list')+'.\n\nPull the Round Card into that note?\n\nOK = fill in the note you already started (it won’t overwrite anything you typed).\nCancel = add as a separate patient.'))){
         /* Read the note's round date BEFORE the merge, which may set it. An OLDER record must not flip
            the note between Initial and Follow-up: that is last week's answer to this week's question,
            and the switch discards the narrative on the side it leaves. */
         const _pd=String(((WS.patients[existPid]||{}).rcDate)||'').slice(0,10);
         const _rd=String((r&&r.date)||'').slice(0,10);
+        // BEFORE the merge, which moves it. This is the record the note is tagged to right now, and it
+        // is the one that would be orphaned the moment the tag steps forward onto the incoming record.
+        const _sibPrev=sibPid?String(((WS.patients[existPid]||{}).srcRcId)||''):'';
         rcMergeIntoPatient(existPid, r);
         // The card's Visit-type choice drives the merged note too (auto-switch when lossless).
         const wantV=(_pd && _rd && _rd<_pd) ? '' : ((r.visitType==='new'||r.visitType==='fu')?r.visitType:'');
         if(wantV && (WS.patients[existPid]||{}).noteType!==wantV && _rcAutoSwitchType(existPid, wantV)){
           toast((((r.patient&&r.patient.name)||'Patient').trim())+': switched to '+(wantV==='fu'?'Follow-Up':'Initial')+' per the Round Card.');
+        }
+        if(sibPid){
+          // BOTH files feed this note from here on — see rcRecIds at the srcPid finder above.
+          const _p=WS.patients[existPid];
+          if(_p){ const _ids=(_p.rcRecIds=Array.isArray(_p.rcRecIds)?_p.rcRecIds:[]);
+            [_sibPrev, r.id].forEach(i=>{ i=String(i||''); if(i && _ids.indexOf(i)<0) _ids.push(i); }); }
+          /* SAY IT, AND SAY ONLY WHAT IS TRUE. This is the one merge with no dialog in front of it, so
+             silence here reads exactly like a record that never arrived. It named the patient and then
+             promised "nothing was dropped" — the merge is FILL-EMPTY, so a value the second file
+             disagrees about does not land, and a promise the code cannot keep is worse than no message.
+             It names the note because the note is often not the one on screen. */
+          toast('Two Round Card records for “'+((String(((WS.patients[existPid]||{}).name)||((r.patient&&r.patient.name)||'')).trim())||'this patient')
+            +'” cover this visit — combined into one note. Nothing was deleted; check it holds everything from both.');
         }
         mergedCount++;
       } else {
@@ -5887,12 +6004,29 @@ function renderLines(text, container, keyPrefix, opts){
    DELIBERATELY CONSERVATIVE — a sentence is dropped only when ALL of:
      1. it holds exactly ONE ***  (multi-field lines like "L: 2 × W: *** × D: ***" are left alone —
         a blunt rule there would throw away a measurement she actually typed),
-     2. that *** sits at the END, so the sentence dangles ("…have included ***." ). A mid-sentence ***
-        still has real text after it ("-ABI/TBI ***, vascular surgery referral as indicated…") and the
-        sentence stays,
+     2. that *** DANGLES — either at the end of the SENTENCE ("…have included ***.") or at the end of a
+        CLAUSE, i.e. immediately before a comma or a semicolon.
+        ⚠ THE CLAUSE HALF IS NOT A REFINEMENT; IT IS A CHART-REACHING FIX, AND THIS COMMENT USED TO
+        ARGUE FOR THE DEFECT. It said a mid-sentence *** "still has real text after it" and named
+          "-ABI/TBI/arterial duplex ***, vascular surgery referral as indicated pending results review"
+        as an intended KEEP. But stripStars runs next and rewrites "duplex ***," to "duplex," — so an
+        untouched slot became a grammatical sentence ORDERING ABI/TBI/arterial duplex studies and a
+        vascular surgery referral, on a visit where the provider ordered neither, with nothing on the
+        page to show anything had been left blank. The words after the slot are not independent of it:
+        with no studies there are no results to review and no referral pending them. THE WHOLE BULLET
+        IS CONDITIONAL ON THAT SLOT. A slot dangling before a comma is the same empty slot as one
+        dangling before a full stop; only the scaffolding around it differs.
+        Proven against the WHOLE template rather than argued: of the 64 ***-bearing lines across both
+        note types and every shared block, exactly the two copies of this bullet change behaviour, and
+        only when the slot is unfilled — every filled line is byte-identical before and after
+        (conditional-plan-test.js, sections 1 and 3),
      3. the sentence has NO digits — anything carrying a number carries real data, so keep it.
-   Bracketed lines are skipped entirely: cleanForCopy already handles those. Runs BEFORE stripStars,
-   while the *** are still visible; the preview (resolveRaw) is untouched, so she still SEES the ghost. */
+   The sibling Plans bullets are a DIFFERENT family and are deliberately untouched here: "-Dressings
+   [… / *** ]", "-Offloading with [… other: ***]" and "-Re-evaluation [in 1 week / …]." carry their
+   slot INSIDE a bracket, so the bracket rule below skips the line entirely and cleanForCopy already
+   drops them when unset. Nothing in this function should start competing with it for those.
+   Runs BEFORE stripStars, while the *** are still visible; the preview (resolveRaw) is untouched, so
+   she still SEES the ghost. */
 function dropUnfilledSentences(t){
   if(!t) return t;
   return String(t).split('\n').map(line=>{
@@ -5904,7 +6038,8 @@ function dropUnfilledSentences(t){
       if(!/\*\*\*/.test(seg)) return true;                       // sentence has no empty slot -> keep
       if((seg.match(/\*\*\*/g)||[]).length!==1) return true;     // 2+ slots -> too risky, keep
       if(/\d/.test(seg)) return true;                            // carries a number -> real data, keep
-      return !/\*\*\*\s*[.;]?\s*$/.test(seg);                    // drop only if the *** dangles at the end
+      if(/\*\*\*\s*[.;]?\s*$/.test(seg)) return false;           // the *** dangles at the end of the SENTENCE
+      return !/\*\*\*\s*[,;]/.test(seg);                         // …or at the end of a CLAUSE (a , or ; follows it)
     });
     return kept.join(' ');
   }).join('\n');
@@ -6520,6 +6655,25 @@ function cleanForCopy(text, freeSet){
        the preview renders resolveRaw and never runs this function. _isWoundTitleLine asks the wound
        registry what the titles ARE, so the writer and the cleaner cannot disagree. */
     if(_isWoundTitleLine(t)) return l;
+    /* AN UNMEASURED DEPTH DELETED THE ENTIRE DEBRIDEMENT MEASUREMENT ROW — THE LENGTH AND THE WIDTH
+       WITH IT. The two debridement rows join their sub-measurements with "×", not spaces:
+       "PRE-Debridement Measurements (cm): L: 2.0 × W: 1.5 × D:". With depth blank the line ENDS in
+       "D:", so the empty-"Label:" rule immediately below fired first and returned '' — a billed
+       debridement charting with NO measurements at all, while the numbers sat on screen in the form
+       looking filled. Silent, because the preview renders resolveRaw and never runs this function.
+       The [LWD]: rule further down cannot help twice over: it was written for the SPACE-separated exam
+       row ("L: 3 cm W: 2 cm D: cm") and its lookahead demands the next token be another [LWD]:, which
+       "×" is not — and it sits AFTER the rule that has already deleted the line. So judge this row
+       here, BEFORE the empty-label rule, and drop only the sub-measurements that are actually empty.
+       The row is recognised by SHAPE, not by the words "Debridement": a label, then nothing but
+       [LWD]: segments joined by "×". A row with nothing filled keeps none of them and still vanishes,
+       exactly as it did before. (2026-08-07) */
+    const mx=t.match(/^(.*?:)\s*([LWD]:.*)$/);
+    if(mx && /^\s*[LWD]:[^×]*(?:×\s*[LWD]:[^×]*)+$/.test(mx[2])){
+      const keptM=mx[2].split(/\s*×\s*/).map(s=>s.trim()).filter(s=>!/^[LWD]:\s*(?:cm[²³]?)?$/.test(s));
+      if(!keptM.length) return '';
+      return mx[1]+' '+keptM.join(' × ');
+    }
     const noTail=t.replace(/[.\s]+$/,'');
     if(/:$/.test(noTail)) return '';                                                  // empty "Label:" (with or without a trailing period)
     // Empty measurement/units line. cm³ added for the new "Volume (auto)" field — `cm²?` matched "cm"
