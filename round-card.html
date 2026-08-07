@@ -278,7 +278,7 @@
    it is a hash of BOTH shipped files, so editing either one makes it provably stale and the sweep says
    so. The composer carries the identical value and passes its own into our URL (?b=), which is how the
    two can tell whether they shipped as a pair. See build-stamp.js. */
-const BUILD = '2026-08-07.8f47a0b';
+const BUILD = '2026-08-07.a70c0f1';
 /* A top-level `const` is NOT a property of window — only `var` and function declarations are. So the
    composer, reading across the frame, gets `undefined` for our build no matter what we declared here,
    and would conclude on EVERY open that this card is too old to have one. Found by opening the overlay
@@ -3609,8 +3609,21 @@ async function qcAutoSave(force){
   // Never file a count for a round nobody has started. This is the one that would have sent the QC reviewer
   // looking for 21 notes that were never owed.
   if(_rcUnstarted) return;
+  /* THE COUNT IS THE SEEN SET, NOT THE SEND SET. Scott, 2026-08-07: "anyone who has a note for that
+     day should be counted."
+     This used to start from sentNamed(), which filters on the Review checkbox — so a patient the
+     provider examined and documented, then held back from the building's orders, was dropped from the
+     QC count even though she owes a note like anyone else. The checkbox answers "which building's
+     nurse gets which orders", a DELIVERY question; the count answers "how much work was done", which
+     is a different question and was never meant to hang off that box.
+     It also put the card in direct disagreement with Build-QcPlan in qc_count_nightly.ps1, which
+     derives its number from the roundcard.v1 records and knows nothing about `send`. Both write the
+     SAME QC Feed file, so the number flipped depending on which ran last — exactly the hazard the
+     comment below names. Driven 2026-08-07: one round, card wrote 1, nightly derived 2.
+     Named, not sent. isCounted below still drops not-seen and discharged (they owe no note), and the
+     record test still drops an untouched carried-forward row (nothing is ever filed for her). */
   // captured synchronously — a facility switch must not file this building's count under the next one
-  const pts=sentNamed();
+  const pts=S.pts.filter(p=>(p.name||'').trim());
   if(!pts.length) return;
   const facRaw=(S.round.fac||'').trim(); if(!facRaw) return;
   const fac  = cleanSeg(facRaw) || 'Unfiled';
@@ -3672,9 +3685,14 @@ async function rcAutoSaveCloud(){
      of the vault, which is how an unchecked-and-then-cleared resident's whole wound stopped existing.
      RoundCards/<fac>/<id>.json is what "you can reopen that round from Recent rounds" is made of, and
      what the composer pulls from, so it must hold everyone she charted.
-     The SHEET and the QC COUNT still run off sentNamed()/isCounted — the checkbox keeps doing the job
-     it was built for, on the document the facility receives. Must stay in step with _unsavedCount's
-     filter, which promises the provider that this set is safe.
+     THE SHEET still runs off sentNamed() — the checkbox keeps doing the job it was built for, on the
+     document the facility receives. Must stay in step with _unsavedCount's filter, which promises the
+     provider that this set is safe.
+     ⚠ THE QC COUNT NO LONGER DOES, as of 2026-08-07. It counts the NAMED-and-seen set instead, per
+     Scott: "anyone who has a note for that day should be counted." The checkbox is a delivery
+     decision; the count measures work done, and hanging it off that box both under-counted a
+     documented patient and put the card in disagreement with qc_count_nightly.ps1, which derives its
+     number from these records and knows nothing about `send`. See the note at qcAutoSave.
      ⚠ CONSEQUENCE WORTH KNOWING: an unchecked patient's record now exists, so the composer's pull
      lists her where it previously did not. That is right — a note is still owed for a patient the
      provider charted — but it is a visible change to what the composer offers. */
