@@ -278,7 +278,7 @@
    it is a hash of BOTH shipped files, so editing either one makes it provably stale and the sweep says
    so. The composer carries the identical value and passes its own into our URL (?b=), which is how the
    two can tell whether they shipped as a pair. See build-stamp.js. */
-const BUILD = '2026-08-05.94aa0fc';
+const BUILD = '2026-08-07.8f47a0b';
 /* A top-level `const` is NOT a property of window — only `var` and function declarations are. So the
    composer, reading across the frame, gets `undefined` for our build no matter what we declared here,
    and would conclude on EVERY open that this card is too old to have one. Found by opening the overlay
@@ -3725,6 +3725,19 @@ async function rcAutoSaveCloud(){
       const rec={ schema:'roundcard.v1', id:id, savedAt:new Date().toISOString(), key:ptSlug(p.name),
         facility:S.round.fac||'', date:date, provider:provNow,
         visitType:p.visitType||'', dispo:p.dispo||'',
+        /* `send` RIDES IN THE RECORD, for exactly the reason `dispo` does two fields up. The Review
+           checkbox is the provider's decision about WHICH BUILDING'S NURSE GETS WHICH ORDERS, and it
+           lived only in the on-screen list — every rebuild-from-record path hardcoded `send:true`, so
+           reopening a round quietly re-checked a patient the provider had deliberately held back and
+           put her orders on the facility's document.
+           This got REACHABLE on 2026-08-05: before that day an unchecked patient was never written to
+           the vault at all, so she could not come back. Fixing that (correctly — her charting must not
+           be lost) means she now always has a record, and without this field the reload silently
+           reverses her exclusion. Driven both ways: pre-fix the reopened sheet does not name her,
+           post-fix-without-this-field it does, with the order she was held back from on it.
+           Written as `!==false` so the ABSENCE of the field in a legacy record reads as checked, which
+           is what every record written before today means. */
+        send: p.send!==false,
         // woundSeq rides in the record: it is the only place a number spent by a since-resolved wound
         // survives, and without it next week's card would reuse it. Each wound carries its own `num`.
         patient:{name:p.name}, edu:p.edu||'', woundSeq:Number(p.woundSeq)||0,
@@ -3844,6 +3857,19 @@ async function saveVault(){
       const rec={ schema:'roundcard.v1', id:id, savedAt:new Date().toISOString(), key:ptSlug(p.name),
         facility:S.round.fac||'', date:date, provider:provName,
         visitType:p.visitType||'', dispo:p.dispo||'',
+        /* `send` RIDES IN THE RECORD, for exactly the reason `dispo` does two fields up. The Review
+           checkbox is the provider's decision about WHICH BUILDING'S NURSE GETS WHICH ORDERS, and it
+           lived only in the on-screen list — every rebuild-from-record path hardcoded `send:true`, so
+           reopening a round quietly re-checked a patient the provider had deliberately held back and
+           put her orders on the facility's document.
+           This got REACHABLE on 2026-08-05: before that day an unchecked patient was never written to
+           the vault at all, so she could not come back. Fixing that (correctly — her charting must not
+           be lost) means she now always has a record, and without this field the reload silently
+           reverses her exclusion. Driven both ways: pre-fix the reopened sheet does not name her,
+           post-fix-without-this-field it does, with the order she was held back from on it.
+           Written as `!==false` so the ABSENCE of the field in a legacy record reads as checked, which
+           is what every record written before today means. */
+        send: p.send!==false,
         // woundSeq rides in the record: it is the only place a number spent by a since-resolved wound
         // survives, and without it next week's card would reuse it. Each wound carries its own `num`.
         patient:{name:p.name}, edu:p.edu||'', woundSeq:Number(p.woundSeq)||0,
@@ -4290,7 +4316,7 @@ async function rcRestoreFromVault(){
       const prev=w[key];
       const sc=r=>{let n=String(r.edu||'').trim()?1:0;(r.wounds||[]).forEach(function(wd){Object.keys(wd).forEach(function(fk){if(fk==='wid'||fk==='born')return;const v=wd[fk];if(Array.isArray(v)?v.length>0:String(v==null?'':v).trim()!=='')n++;});});return n;};
       if(!prev||sc(rec)>sc(prev)||(sc(rec)===sc(prev)&&String(rec.savedAt||'')>=String(prev.savedAt||''))) w[key]=rec; });
-      return Object.values(w); })(mine).map(r=>({ id:r.id||newId(), ptId:String(r.ptId||r.id||''), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], woundSeq:Number(r.woundSeq)||0, send:true, visitType:r.visitType||'', dispo:r.dispo||'' }));
+      return Object.values(w); })(mine).map(r=>({ id:r.id||newId(), ptId:String(r.ptId||r.id||''), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], woundSeq:Number(r.woundSeq)||0, send:r.send!==false, visitType:r.visitType||'', dispo:r.dispo||'' }));
     normalizePts(S); S.active=0;
     S.pts.forEach(p=>{ try{ _rcCloudSig[p.id]=_rcSig(p); _rcFiled.add(p.id); }catch(e){} });   // restored = already in the cloud; no re-upload
     saveFiled();
@@ -4927,7 +4953,7 @@ function loadRecentRound(i){
     const prev=w[key];
     const sc=r=>{let n=String(r.edu||'').trim()?1:0;(r.wounds||[]).forEach(function(wd){Object.keys(wd).forEach(function(fk){if(fk==='wid'||fk==='born')return;const v=wd[fk];if(Array.isArray(v)?v.length>0:String(v==null?'':v).trim()!=='')n++;});});return n;};
     if(!prev||sc(rec)>sc(prev)||(sc(rec)===sc(prev)&&String(rec.savedAt||'')>=String(prev.savedAt||''))) w[key]=rec; });
-    return Object.values(w); })(mine).map(r=>({ id:r.id||newId(), ptId:String(r.ptId||r.id||''), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], woundSeq:Number(r.woundSeq)||0, send:true, visitType:r.visitType||'', dispo:r.dispo||'' }));
+    return Object.values(w); })(mine).map(r=>({ id:r.id||newId(), ptId:String(r.ptId||r.id||''), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], woundSeq:Number(r.woundSeq)||0, send:r.send!==false, visitType:r.visitType||'', dispo:r.dispo||'' }));
   normalizePts(S); S.active=0;
   S.pts.forEach(p=>{ try{ _rcCloudSig[p.id]=_rcSig(p); _rcFiled.add(p.id); }catch(e){} });   // loaded = already in the cloud; only edits re-upload
   saveFiled();
@@ -5083,7 +5109,7 @@ async function rcLoadRoundFor(dateStr, facRaw){
       const sc=r=>{let n=String(r.edu||'').trim()?1:0;(r.wounds||[]).forEach(function(wd){Object.keys(wd).forEach(function(fk){if(fk==='wid'||fk==='born')return;const v=wd[fk];if(Array.isArray(v)?v.length>0:String(v==null?'':v).trim()!=='')n++;});});return n;};
       if(!prev||sc(rec)>sc(prev)||(sc(rec)===sc(prev)&&String(rec.savedAt||'')>=String(prev.savedAt||''))) w[key]=rec; });
       return Object.values(w); })(mine).map(r=>({ id:r.id||newId(), ptId:String(r.ptId||r.id||''), name:(r.patient&&r.patient.name)||'',
-      edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], woundSeq:Number(r.woundSeq)||0, send:true, visitType:r.visitType||'', dispo:r.dispo||'' }));
+      edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], woundSeq:Number(r.woundSeq)||0, send:r.send!==false, visitType:r.visitType||'', dispo:r.dispo||'' }));
     normalizePts(S); S.active=0;
     S.round.facLock=facR;                                  // every vault-load path must set this
     S.round.loadedProv=owner.name; S.round.loadedMixed=owner.mixed;   // whose round this is - see applyProvChange
