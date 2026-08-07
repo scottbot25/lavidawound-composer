@@ -278,7 +278,7 @@
    it is a hash of BOTH shipped files, so editing either one makes it provably stale and the sweep says
    so. The composer carries the identical value and passes its own into our URL (?b=), which is how the
    two can tell whether they shipped as a pair. See build-stamp.js. */
-const BUILD = '2026-08-07.a70c0f1';
+const BUILD = '2026-08-07.3f35189';
 /* A top-level `const` is NOT a property of window — only `var` and function declarations are. So the
    composer, reading across the frame, gets `undefined` for our build no matter what we declared here,
    and would conclude on EVERY open that this card is too old to have one. Found by opening the overlay
@@ -1840,13 +1840,92 @@ function locSideSet(i,side){
   const cur=_locSplitSide(String(w.loc||''), w.locSide);
   // Tapping the side that is already on clears it, so a wound wrongly sided can be un-sided.
   const next=(cur.side===side)?'':side;
+  /* ⚠ `rest` IS HER WORDS AND IT IS NEVER TRIMMED — see the rule on _locJoinSide. A space she has typed
+     but not yet followed with a letter is part of what is in her box; eat it here and the repaint puts
+     "sacral" back where "sacral " was, so her next word arrives joined on and the chart heading and the
+     nurse's sheet read "Right sacralflap". Every reader of `loc` trims, so the space costs nothing
+     downstream and saves the word. Only `probe` below is trimmed, and `probe` is READ-ONLY — it is what
+     the question is ASKED about, never what gets stored. */
+  let rest=cur.rest;
+  /* ---- HER WORDS ALREADY OPEN WITH A SIDE-SHAPED WORD. ASK HER. NEVER GUESS. (2026-08-07) ----
+     THE DEFECT THIS CLOSES. A record written before `locSide` existed keeps the side inside the words:
+     `loc` = "left heel wound", `locSide` = ''. Nothing is lit, because nothing is inferred any more —
+     that half is right. But one tap on [Right] then joined the tapped side onto the WHOLE stored value
+     and the wound's name became "Right left heel wound": a self-contradictory laterality, printed on
+     the nurse's handoff sheet and in the chart-note heading. Tapping [Left] was no better — "Left left
+     heel wound". "Rt. lateral malleolus" + [Left] gave "Left Rt. lateral malleolus". Every one of those
+     reached a facility document, and she was never asked anything.
+
+     WHY A QUESTION AND NOT A REGEX. Stripping the leading word is exactly the inference the comment on
+     _locSplitSide forbids, and for the same reasons: "central line exit site, chest" would become
+     "Right line exit site, chest", "middle third of the shin" would lose "middle", "L-shaped incision"
+     would lose the "L". "left" at the front of a phrase is sometimes a side and sometimes just a word,
+     and the information is not in the string — only the provider knows which. So the one-arg reader
+     below is used to DETECT that the question exists, never to answer it.
+
+     WHY ONE prompt() AND NOT TWO confirm()s. This was two chained confirms and it was wrong, because
+     confirm() cannot tell Cancel from Escape and there are THREE honest outcomes here, not two. With
+     two chained dialogs one Escape necessarily lands on a positive claim about her words, so a single
+     Escape followed by the habitual OK wrote the very name the whole change exists to prevent. There is
+     no ordering of two confirms that avoids it: any two-outcome chain in which every Cancel is safe can
+     only ever reach ONE of the two things she might mean.
+     prompt() has three: a typed answer, an empty box, and dismissal — and dismissal is null. So the
+     ONLY way anything is written is that she read the two names and typed the digit next to one of
+     them. Escape, Cancel, Enter on an empty box, and any answer that is not exactly "1" or "2" all mean
+     THE SAME THING — nothing is changed, no side is set, her words are untouched and she is left in the
+     free box. Habit cannot write a wound's name. */
+  const probe=rest.trim();
+  const lead=(next&&probe) ? _locSplitSide(probe) : {side:'',rest:''};
+  /* THE VOCABULARY SETTLES ITS OWN PLACES, AND THAT IS A LOOKUP, NOT AN INFERENCE. Two of the 287
+     authored entries put a side-shaped word straight after the side — "Right middle finger", "Left
+     middle finger" — so re-siding one of those looks exactly like the defect. If ANY side composed
+     onto her words is an entry Abby wrote, then her words are a place-name on the list and the leading
+     word is part of that name; there is nothing to ask. Asking about all three sides and not just the
+     one she tapped is the difference between the claim being true and being true for one side: the
+     narrower test (is the RESULT listed?) still questioned "Right middle finger" + [Midline], because
+     "Midline middle finger" is not an entry. With this, every one of the 287 places re-sides to every
+     other side with no question at all. The only provider-typed string it silences that the narrower
+     one did not is "middle finger" itself — verified against the shipped vocabulary. */
+  if(lead.side && !LOC_SIDES.some(function(s){ return _locListed(_locJoinSide(s, probe)); })){
+    /* The one-arg reader stops at the word; the punctuation after it is not eaten (that is deliberate,
+       see _locSplitSide). Strip it here or replacing the word in "Rt. lateral malleolus" would orphan
+       the period into "Right . lateral malleolus" — the exact defect that made the old reader unusable. */
+    const kept=lead.rest.replace(/^[\s.,;:–—\-]+/,'');
+    const word=probe.slice(0, probe.length-kept.length).trim();
+    /* THE SPACE SHE IS MID-WORD ON, MEASURED OFF HER ACTUAL WORDS AND PUT BACK. `kept` comes from the
+       one-arg reader, which trims, so replacing the leading word would otherwise silently eat a
+       trailing space and rejoin her next word onto the previous one. */
+    const tail=rest.slice(rest.replace(/\s+$/,'').length);
+    const swapped=kept ? _locJoinSide(next, kept) : '';
+    const answer=String(prompt(
+        'This wound is written “'+probe+'”, and it starts with “'+word+'”.\n\n'
+      + 'Only you know whether that is the SIDE of the wound or part of how you describe it,\n'
+      + 'so nothing is changed until you say which.\n\n'
+      + 'Type 1 or 2, then OK:\n\n'
+      + '   1  —  “'+word+'” is the side. Call this wound:\n         '
+      +          (swapped || '(nothing — “'+probe+'” is only a side, so no place would be left to name)')
+      + '\n\n'
+      + '   2  —  “'+word+'” is part of my description. Call this wound:\n         '
+      +          _locJoinSide(next, probe) + '\n\n'
+      + 'Anything else — Cancel, Escape, or an empty box — changes NOTHING and sets no side.', '') || '').trim();
+    if(answer==='1'){
+      rest=kept+tail;
+    }else if(answer!=='2'){
+      /* Not one field is written. She stays in the free box with her words exactly as they were,
+         whitespace and all, and the line under the box still reads "no side is set", which is true. */
+      _locFreeMode.add(_locKey(i));
+      render();
+      return;
+    }
+    /* "2" falls through with `rest` untouched — her words, every character of them. */
+  }
   setW(i,'locSide',next);
   /* A SIDE ALONE IS NOT A WOUND'S NAME. This used to write the bare side into `loc`, which made `loc`
      non-empty — so a side tapped on an empty Other wound gave the facility's sheet "Wound: Right", and
      worse, findGaps() stopped reporting the wound as unnamed, so a fully charted visit shipped with a
      clean Review screen. The button state lives in `locSide` now, so it can stay lit with nothing
      stored and the "(site not entered)" guard keeps working. */
-  setW(i,'loc', cur.rest.trim() ? _locJoinSide(next, cur.rest) : '');
+  setW(i,'loc', rest.trim() ? _locJoinSide(next, rest) : '');
   // She is editing the free box; a repaint must not drop her back into the closed picker.
   _locFreeMode.add(_locKey(i));
   render();
@@ -2904,7 +2983,7 @@ async function _vaultEnsureFolders(token,driveId,segs){
       const parentUrl=parent
         ? 'https://graph.microsoft.com/v1.0/drives/'+driveId+'/root:/'+_encPath(parent)+':/children'
         : 'https://graph.microsoft.com/v1.0/drives/'+driveId+'/root/children';
-      const mk=await _gfetch(parentUrl,token,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:seg,folder:{},'@microsoft.graph.conflictBehavior':'fail'})});
+      const mk=await _gfetch(parentUrl,token,{method:'POST',headers:{'Content-Type':'application/json;charset=utf-8'},body:JSON.stringify({name:seg,folder:{},'@microsoft.graph.conflictBehavior':'fail'})});
       if(!mk.ok && mk.status!==409) throw new Error('Couldn’t create the “'+seg+'” folder (HTTP '+mk.status+').');
     } else if(!c.ok){ throw new Error('Folder check failed (HTTP '+c.status+').'); }
     parent=childRel;
@@ -3667,7 +3746,7 @@ async function qcAutoSave(force){
     const qc={ schema:'qcfeed.v1', date:date, facility:facRaw, provider:provName,
       patientCount:count, savedAt:new Date().toISOString() };
     await _netTmo(_vaultUpload(token,driveId,['QC Feed'], date+' — '+fac+' — '+prov+'.json',
-      new Blob([JSON.stringify(qc)],{type:'application/json'}),'application/json'), 30000);
+      new Blob([JSON.stringify(qc)],{type:'application/json;charset=utf-8'}),'application/json;charset=utf-8'), 30000);
     _qcLastSig=sig;
   }catch(e){ /* leave the signature unset so the next trigger retries */ }
   finally{ _qcBusy=false; }
@@ -3761,10 +3840,10 @@ async function rcAutoSaveCloud(){
         patient:{name:p.name}, edu:p.edu||'', woundSeq:Number(p.woundSeq)||0,
         ptId:p.ptId||p.id||'',   // the id that survives carry-forward - see normalizePts
         wounds:JSON.parse(JSON.stringify(p.wounds||[])) };
-      const jb=new Blob([JSON.stringify(rec)],{type:'application/json'});
+      const jb=new Blob([JSON.stringify(rec)],{type:'application/json;charset=utf-8'});
       /* provNow, read ONCE above for the whole batch — the same reason the comment there gives. A
          provider read live inside the loop would put one round's records under two different names. */
-      await _netTmo(_vaultUpload(token,driveId,recSegs,_rcRecName(id, provNow),jb,'application/json'), 30000);
+      await _netTmo(_vaultUpload(token,driveId,recSegs,_rcRecName(id, provNow),jb,'application/json;charset=utf-8'), 30000);
       _rcCloudSig[id]=sigNow; _rcFiled.add(id); n++;   // this one really is in the vault now
     }
     saveFiled();          // persist which ids really reached the vault - see _rcFiled
@@ -3893,8 +3972,8 @@ async function saveVault(){
         patient:{name:p.name}, edu:p.edu||'', woundSeq:Number(p.woundSeq)||0,
         ptId:p.ptId||p.id||'',   // the id that survives carry-forward - see normalizePts
         wounds:JSON.parse(JSON.stringify(p.wounds||[])) };
-      const jb=new Blob([JSON.stringify(rec)],{type:'application/json'});
-      await _vaultUpload(token,driveId,recSegs,_rcRecName(id, provName),jb,'application/json');
+      const jb=new Blob([JSON.stringify(rec)],{type:'application/json;charset=utf-8'});
+      await _vaultUpload(token,driveId,recSegs,_rcRecName(id, provName),jb,'application/json;charset=utf-8');
       try{ _rcCloudSig[id]=sigNow; _rcFiled.add(id); }catch(e){}   // keep auto-save in step so it won't re-upload these
     }
     saveFiled();          // persist which ids really reached the vault - see _rcFiled
@@ -3913,7 +3992,7 @@ async function saveVault(){
       const qc={ schema:'qcfeed.v1', date:date, facility:S.round.fac||'', provider:provName,
         patientCount:qcCount, savedAt:new Date().toISOString() };
       await _vaultUpload(token,driveId,['QC Feed'], date+' — '+fac+' — '+prov+'.json',
-        new Blob([JSON.stringify(qc)],{type:'application/json'}),'application/json');
+        new Blob([JSON.stringify(qc)],{type:'application/json;charset=utf-8'}),'application/json;charset=utf-8');
     }
     st('✓ Saved');
     /* If we're running inside the composer's overlay iframe, tell it to pull the patients we just
