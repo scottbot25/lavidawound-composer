@@ -278,7 +278,7 @@
    it is a hash of BOTH shipped files, so editing either one makes it provably stale and the sweep says
    so. The composer carries the identical value and passes its own into our URL (?b=), which is how the
    two can tell whether they shipped as a pair. See build-stamp.js. */
-const BUILD = '2026-08-10.6561e93';
+const BUILD = '2026-08-10.34d09ed';
 /* A top-level `const` is NOT a property of window — only `var` and function declarations are. So the
    composer, reading across the frame, gets `undefined` for our build no matter what we declared here,
    and would conclude on EVERY open that this card is too old to have one. Found by opening the overlay
@@ -4268,45 +4268,306 @@ function _wasCleared(dateStr, facRaw){
     return !!seen[(String(dateStr||'').slice(0,10)||'undated')+'|'+(cleanSeg(facRaw)||'Unfiled')];
   }catch(e){ return false; }
 }
+/* THE NAME KEY THIS FOLD COMPARES ON, AND WHY IT IS NOT _nameKey.
+   _nameKey above is `.toLowerCase().replace(/[^a-z0-9]+/g,' ')`, which turns an interior accent or
+   apostrophe into a SPACE: O’Brien becomes TWO words while OBrien stays one, and Nuñez loses the ñ
+   altogether. Every rule below pins the rest of the name word for word, so one word becoming two
+   reads as two different residents — one resident whose name was saved two ways would be split
+   across two rows with half her charting on each. The identical defect was found and fixed in
+   mojibake_scan.ps1's Get-PtidNameKey on 2026-08-10 and this is the same fold: decompose, drop the
+   combining marks, drop the apostrophes, THEN split.
+   IT IS A SECOND KEY RATHER THAN A FIX TO _nameKey, ON PURPOSE. _nameKey feeds _rcProvSlug, which is
+   part of the FILENAME every record is written under in RoundCards/. Changing what it returns for an
+   accented or apostrophed PROVIDER name changes where that provider's records live, and every record
+   already written under the old spelling stops being found by _rcListRecords. That is a migration,
+   not a bug fix, and it has nothing to do with folding two rows for one resident. So the collapse
+   gets its own key and _nameKey is left exactly as it is. */
+function _rcNameFold(s){
+  let t=String(s==null?'':s);
+  try{ t=t.normalize('NFD'); }catch(e){}
+  /* NFD splits an accented letter into a base letter and a combining mark; \p{M} is every such
+     mark, and the four characters after it are the apostrophes the real world actually types. Both
+     are DROPPED rather than replaced with a space: neither says anything about WHICH person this is,
+     so removing them cannot merge two residents who were otherwise distinct, whereas turning one
+     into a space splits one word into two and every rule below pins the rest of the name word for
+     word. Written as a property escape rather than a literal range so the source carries no raw
+     combining character — one of those sitting inside a [ ] class is unreadable and one bad
+     encoding pass from meaning something else. */
+  t=t.replace(/\p{M}/gu,'').replace(/['‘’`]/g,'')
+     .toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+  return t?t.split(' ').filter(Boolean).sort().join(' '):'';
+}
+/* ARE THESE TWO RECORDS THE SAME PERSON? Three answers, because two are not enough — `different` is
+   a claim strong enough to put a second row on the round, and there is a wide middle where nobody
+   can tell. It must be wrong in NEITHER direction: a wrong `different` splits one resident's
+   charting across two rows, and a wrong `same` merges two residents and one of them disappears.
+     same       the two spellings differ in a way that says nothing about who this is — word order,
+                case, punctuation, an accent, an apostrophe, a middle initial written on one copy
+                only, one word's letters transposed (Jhon/John), one word with a letter more or
+                fewer (Quimblton/Quimbleton).
+     unclear    one word genuinely differs by one letter (Hansen/Hanson), one word is the start of
+                the other (Rob/Robert), one whole extra forename, or one side has no name at all.
+     different  everything else — INCLUDING two residents who merely share a surname or a forename,
+                and a middle INITIAL that differs, because Q Halloway and Z Halloway are two people
+                rather than a slip.
+   Every test is symmetric by construction: the comparison is a multiset difference over the sorted
+   words, so "A is a typo of B" cannot depend on which file was saved first.
+   WHY THE CARD FOLDS `unclear` AND THE VAULT SCANNER DOES NOT. mojibake_scan.ps1 asks "is there a
+   collision ANYWHERE in the vault", where a wrong `same` hides the very defect it is hunting, so it
+   holds a five-letter floor under its typo rules and reports the middle as unknown. This asks a much
+   narrower question: two record files that ALREADY share one card slot id, in one building, on one
+   day. Slot reuse inside a single round means a discharge and a readmission into the same bed
+   between two visits on one morning, and those two residents do not have names one keystroke apart —
+   whereas a corrected typo is exactly how the second file gets minted. So the floor is dropped here,
+   and the reason is written down rather than inherited. */
+function _rcNameRel(a,b){
+  const A=_rcNameFold(a), B=_rcNameFold(b);
+  if(!A||!B) return 'unclear';                       // a blank name cannot disagree with anything
+  if(A===B) return 'same';
+  const bag=Object.create(null);                     // null-prototype: a word like "constructor" is a name, not a method
+  A.split(' ').forEach(function(t){ bag[t]=(bag[t]||0)+1; });
+  const dB=[]; B.split(' ').forEach(function(t){ if(bag[t]>0) bag[t]--; else dB.push(t); });
+  const dA=[]; Object.keys(bag).forEach(function(t){ for(let i=0;i<bag[t];i++) dA.push(t); });
+  /* ONE SIDE SIMPLY HAS WORDS THE OTHER LACKS. Initials are bookkeeping — "Sedgewick Halloway" and
+     "Sedgewick Q Halloway" are one resident. One whole extra forename is not nothing, but it is not
+     evidence of a second person either, so it lands in the middle. Two or more extra words is a
+     different name. */
+  if(!dA.length||!dB.length){
+    const extra=dA.length?dA:dB;
+    if(!extra.length) return 'same';
+    if(extra.every(function(t){ return t.length===1; })) return 'same';
+    if(extra.length===1) return 'unclear';
+    return 'different'; }
+  /* MORE THAN ONE WORD DIFFERS ON BOTH SIDES. Two slips in one name is not a slip. */
+  if(dA.length!==1||dB.length!==1) return 'different';
+  const x=dA[0], y=dB[0];
+  /* A DIFFERING SINGLE LETTER IS A MIDDLE INITIAL, and a middle initial is how a facility tells two
+     residents with the same name apart. It is never read as a typo. */
+  if(x.length<2||y.length<2) return 'different';
+  const bagOf=function(t){ return t.split('').sort().join(''); };
+  if(bagOf(x)===bagOf(y)) return 'same';                     // the same letters in a different order
+  const lo=x.length<y.length?x:y, hi=x.length<y.length?y:x;
+  if(hi.length-lo.length===1){                               // one letter more, or one letter fewer
+    for(let i=0;i<hi.length;i++) if(hi.slice(0,i)+hi.slice(i+1)===lo) return 'same'; }
+  if(x.length===y.length){                                   // one letter genuinely different
+    let d=0; for(let i=0;i<x.length;i++) if(x[i]!==y[i]) d++;
+    if(d===1) return 'unclear'; }
+  if(lo.length>=3&&hi.indexOf(lo)===0) return 'unclear';     // Rob/Robert, and also Ann/Anna
+  return 'different';
+}
 /* ONE RECORD FILE BECOMES ONE ROW, unless collapsed first. A stale pre-round autosave, a resave that
-   for any reason picked up a new id, a duplicate upload — any of those leaves a second (or third) file
-   for one patient on one round, and she sees herself listed two or three times on screen and on the
-   handoff .doc, at different ages of her own data. Collapsed to the FULLEST record per patient identity
-   — ptId when the record has one, else the trimmed case-insensitive name. A record neither can identify
-   keeps its own row rather than being folded into a guess: a stray extra row is a minor annoyance,
-   merging two different patients because both are nameless is not.
+   for any reason picked up a new id, a duplicate upload — any of those leaves a second (or third)
+   file for one patient on one round, and she sees herself listed two or three times on screen and on
+   the handoff .doc, at different ages of her own data.
 
-   ONE COPY, NOT FOUR — 2026-08-10. This body was written INLINE at each of the three load paths, on the
-   reasoning that the suites slice individual functions out of this file by string, so a shared symbol
-   their sandboxes never learned about becomes a ReferenceError at the call site that reads like an
-   ordinary test failure. That happened, and the conclusion drawn from it was the wrong one: it is a
-   reason to TEACH THE SANDBOXES, not to keep the rule in four places. The fourth place is what this
-   change is about. The round picker described a round by how many FILES it was made of while every
-   load path collapsed them, so the menu offered "34 patients at University Heights" and the round
-   opened with about seventeen. Scott, 2026-08-10: "if you actually load this in there isnt even close
-   to 34 patients its maybe half that."
-   A number a provider chooses from must be the number they are about to get, and two copies of a
-   counting rule that must agree is exactly how this defect happened. So: one function, called by the
-   three loaders AND by the picker that describes them. Pure — no DOM, no network, no clock — so it can
-   be driven directly, and every sandbox that slices a load path must now grab it (round-card-dispo,
-   round-card-reload, wrong-order-card, round-picker-count).
-   ⚠ WHAT IT DOES IS UNCHANGED. The body below is the inline block verbatim; only its address moved. */
-function rcCollapseDupeRecords(recs){ const w={}; let u=0; (recs||[]).forEach(function(rec){ if(!rec) return;
-  const key=String(rec.ptId||'').trim()||('n:'+String((rec.patient&&rec.patient.name)||'').trim().toLowerCase());
-  if(key===''||key==='n:'){ w['__u'+(u++)]=rec; return; }
-  /* THE NEWEST FILE IS NOT ALWAYS THE FULLEST ONE. Found 2026-08-05: the root cause of duplicate
-     files (a save that should overwrite the same record instead minting a new id) is a separate,
-     bigger question — but whatever creates the second file, its timestamp says nothing about
-     which one has more of Abby's actual charting in it. Driven against the real vault: pairs
-     where the LATER save had fewer than half the filled fields of the earlier one, repeatedly.
-     Picking by savedAt alone was throwing away real exam data in favour of a thinner duplicate.
-     Score by how much is actually filled — same field-counting rule as hasContent() — and only
-     fall back to savedAt when two records are equally complete, so a genuine tie still resolves
-     deterministically rather than by object-key order. */
-  const prev=w[key];
-  const sc=r=>{let n=String(r.edu||'').trim()?1:0;(r.wounds||[]).forEach(function(wd){Object.keys(wd).forEach(function(fk){if(fk==='wid'||fk==='born')return;const v=wd[fk];if(Array.isArray(v)?v.length>0:String(v==null?'':v).trim()!=='')n++;});});return n;};
-  if(!prev||sc(rec)>sc(prev)||(sc(rec)===sc(prev)&&String(rec.savedAt||'')>=String(prev.savedAt||''))) w[key]=rec; });
+   ONE COPY, NOT FOUR — 2026-08-10. This body was written INLINE at each of the three load paths, on
+   the reasoning that the suites slice individual functions out of this file by string, so a shared
+   symbol their sandboxes never learned about becomes a ReferenceError at the call site that reads
+   like an ordinary test failure. That happened, and the conclusion drawn from it was the wrong one:
+   it is a reason to TEACH THE SANDBOXES, not to keep the rule in four places. The round picker
+   described a round by how many FILES it was made of while every load path collapsed them, so the
+   menu offered "34 patients at University Heights" and the round opened with about seventeen. Scott,
+   2026-08-10: "if you actually load this in there isnt even close to 34 patients its maybe half
+   that." A number a provider chooses from must be the number they are about to get. So: one
+   function, called by the three loaders AND by the picker that describes them. Pure — no DOM, no
+   network, no clock, and it does not modify the records handed to it — so it can be driven directly.
+
+   TWO THINGS IT GOT WRONG UNTIL 2026-08-10, both of which reached the chart.
+
+   1. THE KEY WAS THE SLOT ID ALONE AND THE NAME WAS NEVER LOOKED AT. A card slot keeps its ptId when
+      the bed is reassigned, so one id can span two residents — and both of them folded into ONE row,
+      which means one of them silently left the round. No dialog, no toast, and the picker counted
+      with the same rule, so there was no second surface to notice it on. Now the NAME can veto the
+      fold (see _rcNameRel), and a veto is reported rather than assumed.
+      Measured before building it: a vault-wide sweep (mojibake_scan.ps1 -Mode ptid, 6 rounds, 39
+      round/slot pairs) found ZERO slot ids carrying two residents, and 71 of 125 records carrying no
+      slot id at all. So this is latent rather than live, which is a reason to get it right rather
+      than to get it quickly.
+
+   2. THE FOLD DISCARDED THE LOSER INSTEAD OF MERGING IT. A wound, an order, a disposition or the
+      patient's own name living only on the spare file reached no round, no handoff .doc and no note,
+      and nothing counted it or said a word — while the provider fence sitting a few lines above
+      counts every record IT drops, for exactly that reason. Now the loser is merged into the winner
+      and what could not be merged is counted and named (see rcCollapseNote).
+
+   WHY BOTH HALVES LIVE HERE AND NOT IN A CALLER: the picker's number and the loader's rows have to
+   be the same act, and two copies of one counting rule that must agree is how the "34 patients"
+   defect happened in the first place. */
+function rcCollapseDupeRecords(recs, stats){
+  const w={}, grp=Object.create(null); let u=0, nMerged=0, nKept=0, nLeft=0, nSplit=0;
+  const _WK=Object.keys(newWound());
+  /* HOW MUCH OF THE VISIT IS ON THIS RECORD — counted over newWound()'s OWN keys, exactly as
+     hasContent() does and for the same reason. Walking the RECORD's wound keys instead counted
+     carry-forward bookkeeping as work: `num:0` stringifies to "0" and the `prior` snapshot to
+     "[object Object]", so an entirely uncharted carried wound scored 3 and "fullest" partly tracked
+     ROW COUNT — four untouched carried rows out-scored one fully charted Stage 4.
+     ⚠ IT MUST STILL THROW ON A MALFORMED RECORD, and that is not an oversight. `wounds` that is not
+     an array, or an array holding a null, has to reach the caller as an exception: the round picker
+     counts PER GROUP inside its own try/catch precisely so one bad file marks ONE round uncountable
+     instead of blanking the entire menu, and a `if(!wd) return;` guard here would quietly disarm
+     that (round-picker-count-test.js section 4, and the mutation that pins it). */
+  const sc=r=>{ let n=String((r&&r.edu)||'').trim()?1:0;
+    ((r&&r.wounds)||[]).forEach(function(wd){ _WK.forEach(function(fk){
+      if(fk==='wid'||fk==='born') return; const v=wd[fk];
+      if(Array.isArray(v)?v.length>0:String(v==null?'':v).trim()!=='') n++; }); }); return n; };
+  const _nm=r=>String((r&&r.patient&&r.patient.name)||'');
+  /* The winner is COPIED before anything is merged into it. The picker collapses the very same
+     record objects the loader will collapse again a moment later (_rrGroups holds them, and so does
+     the round cache), so a merge that wrote through to the inputs would leave the second pass
+     looking at records the first pass had already edited. */
+  const _clone=r=>Object.assign({},r,{ patient:Object.assign({},(r&&r.patient)||{}),
+                                       wounds:((r&&r.wounds)||[]).slice() });
+  const _val=(o,k)=>Array.isArray(o[k])?o[k].join('|'):String(o[k]==null?'':o[k]).trim();
+  const _merge=function(win,lose){
+    /* FILL EMPTY, NEVER OVERWRITE — and it has to be right in BOTH directions, because both
+       directions have already gone wrong here.
+       A rule of "the newest save owns dispo and send" was written and rejected: `send` is undefined
+       on an older record and sentNamed() reads `p.send!==false`, so silence beat an explicit
+       decision and a patient the provider had deliberately held OFF the nurses' sheet went back onto
+       it — and a thin later duplicate carrying no dispo wiped a recorded `discharged`, which
+       _cfDropDischarged and isCounted both act on.
+       A rule of "the winner keeps its own, always" is wrong the other way: the winner is the record
+       with more CHARTING on it, and a discharge is recorded on the record with the LEAST charting on
+       it, because there was no exam that visit. Dropping it puts a resident who has left the
+       building back on next week's round.
+       Fill-empty loses nothing in either direction: a word that was actually written is never
+       replaced by silence, and silence never wins over a word. Where both copies carry a different
+       word the winner's stands, and the note below says so. */
+    ['edu','visitType','dispo'].forEach(function(k){
+      if(!String(win[k]||'').trim()&&String(lose[k]||'').trim()) win[k]=lose[k]; });
+    /* A DISCHARGE OUTRANKS ANYTHING, whichever copy holds it — fill-empty is not enough here.
+       A discharge is recorded on the visit with the LEAST charting on it, because there was no exam
+       that day, so it is exactly the value that loses a fullness contest. Driven by audit: a fuller
+       copy saying 'notSeen' beside a thinner one saying 'discharged' collapsed to 'notSeen', so
+       _cfDropDischarged returned 0 and a resident who had left the building carried forward onto
+       next week's round. There is no symmetric risk: 'discharged' is never the value somebody
+       failed to change, it is only ever typed on purpose. */
+    if(String(lose.dispo||'').trim()==='discharged'&&String(win.dispo||'').trim()!=='discharged'){
+      win.dispo='discharged'; if(stats) stats.dispoDischarged=(Number(stats.dispoDischarged)||0)+1; }
+    const ln=String((lose.patient&&lose.patient.name)||'').trim();
+    if(!String((win.patient&&win.patient.name)||'').trim()&&ln) win.patient=Object.assign({},win.patient||{},{name:ln});
+    /* `send` is a tri-state on disk: true, false, or absent. Absent MEANS "on the sheet"
+       (sentNamed reads p.send!==false), so only an explicit boolean may fill an absent one. */
+    if(win.send!==true&&win.send!==false&&(lose.send===true||lose.send===false)) win.send=lose.send;
+    /* BOTH EXPLICIT AND DISAGREEING: THE HOLD-OFF WINS. Fill-empty only decides the case where one
+       side is silent. Where the fuller copy says send:true and the thinner one says send:false, the
+       winner used to take its own value for no reason except having more charting on it — and that
+       put a patient the provider had deliberately held off the facility's handoff sheet back onto
+       it, with her orders, silently. Driven through the shipped sentNamed() by audit 2026-08-10.
+       Unchecking Review is a deliberate act and is never the value somebody forgot; being wrongly
+       ON the sheet publishes orders for a patient who was held back, which is the direction that
+       reaches a facility document. Counted, and the note says so. */
+    else if(win.send===true&&lose.send===false){
+      win.send=false; if(stats) stats.sendHeldOff=(Number(stats.sendHeldOff)||0)+1; }
+    /* THE HIGH-WATER MARK, never the winner's own. Taking the lower one frees a stamp a real wound
+       already holds, and the next wound born at the bedside would reuse it. */
+    if((Number(lose.woundSeq)||0)>(Number(win.woundSeq)||0)) win.woundSeq=Number(lose.woundSeq)||0;
+    /* WOUNDS ARE A UNION, KEYED ON THE WOUND'S OWN ID. A `wid` IS the wound's identity, so a wound
+       both copies hold keeps the winner's version however the two locations read — a rename is not a
+       new wound. A record written before wids carries only `num`, and normalizePts is about to
+       derive 'c'+num for it, so that IS the key it is about to be filed under and two wounds cannot
+       both hold it. But a number is an INFERENCE where a wid is a fact, so the inference has to
+       agree with the place: if the two wounds numbered 1 are a sacrum and an ischium they are two
+       wounds, and the spare's is LEFT BEHIND AND COUNTED rather than folded onto the sacrum (which
+       destroys it) or appended (which mints a second 'c1' on one patient and breaks the wound's
+       history key). The composer reverted exactly this fold on 2026-08-03 for the same reason. Same
+       for a wound with no identity at all — unless the winner has no wounds, when there is nothing
+       it could be a duplicate of. */
+    const _id=x=>String((x&&x.wid)||'').trim(), _key=x=>_id(x)||(Number(x&&x.num)>0?('c'+Number(x.num)):'');
+    const _loc=x=>String((x&&x.loc)||'').trim().toLowerCase();
+    const had=win.wounds.length>0, have=Object.create(null);
+    win.wounds.forEach(function(x){ const k=_key(x); if(k) have[k]=x; });
+    (lose.wounds||[]).forEach(function(x){
+      const k=_key(x), cur=k?have[k]:null;
+      if(!k){ if(had) nLeft++; else win.wounds.push(x); return; }
+      if(cur){
+        if((!_id(x)||!_id(cur))&&_loc(x)&&_loc(cur)&&_loc(x)!==_loc(cur)){ nLeft++; return; }
+        if(_WK.some(function(fk){ return fk!=='wid'&&fk!=='born'&&_val(x,fk)&&_val(x,fk)!==_val(cur,fk); })) nKept++;
+        return; }
+      win.wounds.push(x); have[k]=x; });
+  };
+  /* THE FOLD SORTS ITS OWN INPUT, and that is a seam fix rather than tidiness. Which row a record
+     joins depends on which rows are already open — a blank name folds into the one row under its id
+     and keeps its own row when two are — so the listing order can change the ROW COUNT. The three
+     loaders each sort by savedAt before calling; the round picker collapses g.recs exactly as the
+     listing returned them. Two callers of one counting rule seeing different orders is precisely how
+     the menu came to promise "34 patients" for a round that opened with seventeen, so the order is
+     decided HERE, once, where the counting is. savedAt then id, compared by code unit like the
+     tie-break below, so two records saved in the same second still resolve the same way every time
+     rather than by whatever order the folder was listed in. */
+  const _byAge=function(a,b){
+    const x=String((a&&a.savedAt)||''), y=String((b&&b.savedAt)||'');
+    if(x!==y) return x<y?-1:1;
+    const i=String((a&&a.id)||''), j=String((b&&b.id)||'');
+    return i<j?-1:(i>j?1:0); };
+  const list=(recs||[]).filter(Boolean).slice().sort(_byAge);
+  list.forEach(function(rec){
+    const pid=String(rec.ptId||'').trim(), nm=_nm(rec), nk=_rcNameFold(nm);
+    /* A record that neither an id nor a name can identify keeps its own row rather than being
+       folded into a guess: a stray extra row is a minor annoyance, merging two different patients
+       because both are nameless is not. */
+    const gid=pid||(nk?('n:'+nk):'');
+    if(!gid){ w['__u'+(u++)]=rec; return; }
+    const ks=grp[gid]||(grp[gid]=[]);
+    /* EVERY BUCKET ALREADY OPEN UNDER THIS ID, not just the first one. Checking only the first put
+       the SECOND duplicate of the current resident into a third bucket whenever a previous occupant
+       had claimed the id first — three files became three rows, with one resident on the round
+       twice and her sacral wound split across two of them. `same` wins outright; a lone `unclear`
+       joins, which is what lets a blank name and a corrected typo fold; but when TWO rows are
+       already open under one id an `unclear` cannot pick between them, so it keeps its own row
+       rather than guessing. */
+    let key='', nUnclear=0, uKey='';
+    for(let i=0;i<ks.length;i++){
+      const rel=_rcNameRel(nm,_nm(w[ks[i]]));
+      if(rel==='same'){ key=ks[i]; break; }
+      if(rel==='unclear'){ nUnclear++; uKey=ks[i]; } }
+    if(!key&&nUnclear===1) key=uKey;
+    if(!key){
+      key=gid+(ks.length?('#'+ks.length):''); ks.push(key); w[key]=rec;
+      if(ks.length>1) nSplit++;
+      return; }
+    /* THE NEWEST FILE IS NOT ALWAYS THE FULLEST ONE. Found 2026-08-05: the root cause of duplicate
+       files (a save that should overwrite the same record instead minting a new id) is a separate,
+       bigger question — but whatever creates the second file, its timestamp says nothing about which
+       one has more of the visit in it. Driven against the real vault: pairs where the LATER save had
+       fewer than half the filled fields of the earlier one, repeatedly. Score by what is actually
+       charted, and let savedAt break only a genuine tie so it still resolves deterministically
+       rather than by object-key order. Which one wins decides only WHOSE VERSION STANDS where the
+       two disagree — nothing is discarded either way. */
+    const prev=w[key], sr=sc(rec), sp=sc(prev);
+    const take=sr>sp||(sr===sp&&String(rec.savedAt||'')>=String(prev.savedAt||''));
+    const win=_clone(take?rec:prev), lose=take?prev:rec;
+    _merge(win,lose); nMerged++; w[key]=win; });
+  /* The counts go out through an optional bag rather than the return value, because the return value
+     is a contract three loaders and the picker already hold: it is the rows, and its length is the
+     number the menu prints. A caller that wants the sentence passes an object; the picker passes
+     nothing and is unaffected. */
+  if(stats&&typeof stats==='object'){
+    stats.merged=nMerged; stats.woundsKept=nKept; stats.woundsLeft=nLeft; stats.split=nSplit; }
   return Object.values(w); }
+/* WHAT THE PROVIDER IS TOLD, AND ONLY WHAT IS TRUE. An earlier draft of this sentence promised that
+   "nothing on the spare copy was dropped" while the union was keeping the WINNER's version of any
+   wound both copies held — so the one thing it reassured her about was the one thing that had
+   happened, and a superseding order written at 13:00 was gone under an explicit assurance that it
+   was not. Never make a claim about the chart the code cannot keep. Each kind of loss is counted
+   where it happens, named here, and she is asked to check. ONE COPY of the wording, because all
+   three load paths say it and three copies of a sentence about the chart is three chances to have
+   one of them be false. */
+function rcCollapseNote(st){
+  if(!st) return '';
+  const n=Number(st.merged)||0, k=Number(st.woundsKept)||0, l=Number(st.woundsLeft)||0, s=Number(st.split)||0;
+  const hd=Number(st.sendHeldOff)||0, dc=Number(st.dispoDischarged)||0;
+  let out='';
+  if(n) out+=' '+n+' duplicate saved record'+(n===1?' was':'s were')+' merged in, so nobody is listed twice.';
+  if(k) out+=' '+k+' wound'+(k===1?' was':'s were')+' charted differently on the two copies, and the fuller record’s version is the one on screen.';
+  if(l) out+=' '+l+' wound'+(l===1?'':'s')+' on the spare copy could not be matched to a wound on this record, so '+(l===1?'it was':'they were')+' not added.';
+  /* NOT 'with a different name on it' — a record split off because its name was BLANK has no
+     different name on it, and telling the provider it had one is a false statement about her round. */
+  if(s) out+=' '+s+' saved record'+(s===1?'':'s')+' shared a patient slot but could not be confirmed as the same person, so '+(s===1?'it is':'they are')+' listed separately rather than merged.';
+  if(hd) out+=' '+hd+' patient'+(hd===1?' was':'s were')+' held off the handoff sheet on one copy and not the other; the hold-off was kept.';
+  if(dc) out+=' '+dc+' patient'+(dc===1?' was':'s were')+' marked discharged on one copy only; the discharge was kept.';
+  if(k||l||s||hd||dc) out+=' Check those patients against ClinicalVault before you sign.';
+  return out; }
 async function rcRestoreFromVault(){
   try{
     /* hasContent, NOT just the name. At a bedside you chart the wound in front of you and name the row
@@ -4428,8 +4689,11 @@ async function rcRestoreFromVault(){
     // dispo has to come back too — reopening a round must not quietly reset everyone to
     // "seen" and re-inflate the count that was already filed for that day.
     /* ONE RECORD FILE BECOMES ONE ROW below, unless collapsed first — see rcCollapseDupeRecords, which
-       is the one copy of that rule and is what the round picker counts with too. */
-    S.pts=rcCollapseDupeRecords(mine).map(r=>({ id:r.id||newId(), ptId:String(r.ptId||r.id||''), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], woundSeq:Number(r.woundSeq)||0, send:r.send!==false, visitType:r.visitType||'', dispo:r.dispo||'' }));
+       is the one copy of that rule and is what the round picker counts with too. The bag it fills is
+       what the toast reports: a fold that merged records, left a wound behind or split one slot id
+       across two residents has to be visible, not inferred from a row count. */
+    const _dupSt={};
+    S.pts=rcCollapseDupeRecords(mine,_dupSt).map(r=>({ id:r.id||newId(), ptId:String(r.ptId||r.id||''), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], woundSeq:Number(r.woundSeq)||0, send:r.send!==false, visitType:r.visitType||'', dispo:r.dispo||'' }));
     normalizePts(S); S.active=0;
     S.pts.forEach(p=>{ try{ _rcCloudSig[p.id]=_rcSig(p); _rcFiled.add(p.id); }catch(e){} });   // restored = already in the cloud; no re-upload
     saveFiled();
@@ -4437,7 +4701,7 @@ async function rcRestoreFromVault(){
        the round is real and its savers must not be gated. See _setUnstarted. */
     _setUnstarted(false);
     save(); paintRound(); render();
-    toast('Restored today’s round from ClinicalVault ('+S.pts.length+' patient'+(S.pts.length===1?'':'s')+')'+_ownerNote(owner));
+    toast('Restored today’s round from ClinicalVault ('+S.pts.length+' patient'+(S.pts.length===1?'':'s')+')'+_ownerNote(owner)+rcCollapseNote(_dupSt));
     /* Never let the other building read as lost patients. It is untouched in the vault; picking that
        facility brings it straight back (rcLoadRoundInto), and the picker reaches it too. */
     if(dropped.length) setTimeout(()=>toast('You also have '+(dropped.length===1?'a round':dropped.length+' rounds')+' on file today for '
@@ -5083,13 +5347,14 @@ function loadRecentRound(i){
   /* SAME COLLAPSE AS THE OTHER TWO LOAD PATHS, and as the picker row that offered this round —
      rcCollapseDupeRecords is the one copy of that rule. THIS is the load whose answer the picker was
      describing wrongly: the menu counted g.recs (files) and this line collapses them. */
-  S.pts=rcCollapseDupeRecords(mine).map(r=>({ id:r.id||newId(), ptId:String(r.ptId||r.id||''), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], woundSeq:Number(r.woundSeq)||0, send:r.send!==false, visitType:r.visitType||'', dispo:r.dispo||'' }));
+  const _dupSt={};
+  S.pts=rcCollapseDupeRecords(mine,_dupSt).map(r=>({ id:r.id||newId(), ptId:String(r.ptId||r.id||''), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], woundSeq:Number(r.woundSeq)||0, send:r.send!==false, visitType:r.visitType||'', dispo:r.dispo||'' }));
   normalizePts(S); S.active=0;
   S.pts.forEach(p=>{ try{ _rcCloudSig[p.id]=_rcSig(p); _rcFiled.add(p.id); }catch(e){} });   // loaded = already in the cloud; only edits re-upload
   saveFiled();
   save(); paintRound(); render();
   closeRecentRounds();
-  toast('Loaded the '+g.date+' round ('+S.pts.length+' patient'+(S.pts.length===1?'':'s')+') — edits update the same round'+_ownerNote(owner));
+  toast('Loaded the '+g.date+' round ('+S.pts.length+' patient'+(S.pts.length===1?'':'s')+') — edits update the same round'+_ownerNote(owner)+rcCollapseNote(_dupSt));
 }
 
 /* ---------- COMING BACK TO A ROUND ----------
@@ -5222,7 +5487,8 @@ async function rcLoadRoundFor(dateStr, facRaw){
     const owner=_roundOwner(mine);
     /* SAME COLLAPSE AS THE OTHER TWO LOAD PATHS — see rcCollapseDupeRecords, the one copy of the rule
        (and the one the picker counts with). */
-    S.pts=rcCollapseDupeRecords(mine).map(r=>({ id:r.id||newId(), ptId:String(r.ptId||r.id||''), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], woundSeq:Number(r.woundSeq)||0, send:r.send!==false, visitType:r.visitType||'', dispo:r.dispo||'' }));
+    const _dupSt={};
+    S.pts=rcCollapseDupeRecords(mine,_dupSt).map(r=>({ id:r.id||newId(), ptId:String(r.ptId||r.id||''), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], woundSeq:Number(r.woundSeq)||0, send:r.send!==false, visitType:r.visitType||'', dispo:r.dispo||'' }));
     normalizePts(S); S.active=0;
     S.round.facLock=facR;                                  // every vault-load path must set this
     S.round.loadedProv=owner.name; S.round.loadedMixed=owner.mixed;   // whose round this is - see applyProvChange
@@ -5237,7 +5503,7 @@ async function rcLoadRoundFor(dateStr, facRaw){
     saveFiled();
     _sheetInvalidate(); _sheetLastSig=''; _qcLastSig='';
     save(); paintRound(); render();
-    toast('Loaded the '+date+' round ('+S.pts.length+' patient'+(S.pts.length===1?'':'s')+') — edits update the same round'+_ownerNote(owner));
+    toast('Loaded the '+date+' round ('+S.pts.length+' patient'+(S.pts.length===1?'':'s')+') — edits update the same round'+_ownerNote(owner)+rcCollapseNote(_dupSt));
     return 'loaded';
   }catch(e){ return 'error'; }
 }
