@@ -396,7 +396,7 @@
    the identical value and we pass ours into its URL, so the two can tell whether they shipped as a
    pair. See build-stamp.js for why, and why it cannot be a number someone remembers to raise.
    Declared here, on the first line of the first script, so every later block can see it. */
-const BUILD = '2026-08-07.3f35189';
+const BUILD = '2026-08-10.6561e93';
 /* SANDBOX MODE (?sandbox=1, LOCALHOST ONLY — the hosted site ignores it): points uploads at the
    ToolSandbox site so end-to-end tests (incl. the Round Card overlay, which inherits it) never touch
    the real vault. Belt = sitePath swap (done where VAULT_CFG is declared); suspenders = _gfetch
@@ -4896,8 +4896,38 @@ let _rcPulling=false, _rcLastPull=0, _rcPullAgain=false;
  * Both functions are pure — no DOM, no network — so the suite can drive them.
  */
 
+/* HOW MANY NOTES A ROUND OPENS, as opposed to how many FILES it is made of.
+ *
+ * RoundCards/<building>/ is FLAT and a record's file is named for the SAVE, not for the person, so one
+ * resident routinely has two record FILES covering one day. _rcSibling is the rule that folds them into
+ * ONE note, and the round menu below never learned about it — it printed a record count and called it
+ * "patients", so a round of two files per resident offered "34 patients" and opened about seventeen.
+ * The same defect, from the same cause, as the Round Card's own picker (Scott, 2026-08-10).
+ *
+ * IT ROUTES THROUGH _rcSibling ITSELF rather than restating what _rcSibling decides. That is the whole
+ * point: a count that must agree with a fold, computed by a second rule that merely looks like the
+ * fold, is exactly how this went wrong in the first place. So this replays what rcAutoPull's record
+ * loop does — offer each record to _rcSibling against the notes built so far, fold when it names one,
+ * open a new note when it does not — over a simulated patient map holding only the four fields
+ * _rcSibling reads. A blank name is filled from the folded record because rcMergeIntoPatient fills it,
+ * and a third file carrying the real name must pair the same way there as here.
+ * Returns the GROUPS (each with the records folded into it), so the dispo counts beside the number can
+ * be per-patient too rather than mixing units with it. Pure: no DOM, no network, no clock. */
+function _rcRoundNoteGroups(recs){
+  const pats={}; let n=0;
+  (recs||[]).forEach(r=>{
+    if(!r) return;
+    const pid=_rcSibling(r, pats);
+    if(pid){ const p=pats[pid];
+      if(!whNameKey(p.name||'')) p.name=(r.patient&&r.patient.name)||'';
+      p.recs.push(r); return; }
+    pats['sim'+(n++)]={ rcPtId:String((r&&r.ptId)||''), facility:(r&&r.facility)||'',
+      rcDate:String((r&&r.date)||'').slice(0,10), name:(r&&r.patient&&r.patient.name)||'', recs:[r] };
+  });
+  return Object.keys(pats).map(k=>pats[k]);
+}
 /* Group provider-filtered records into rounds, newest first.
-   [{date, facilities:[...], count, ids:[...]}] */
+   [{date, facilities:[...], count, records, ids:[...]}] — count is NOTES, records is FILES. */
 function _rcRoundsAvailable(recs, todayArg){
   /* A FUTURE DATE IS NEVER A ROUND. The card's date input has no max=, so one mistyped year writes a
      record that sorts highest forever — and this list sorts descending, so the typo was offered as
@@ -4906,28 +4936,41 @@ function _rcRoundsAvailable(recs, todayArg){
      day, and the closing toast named the day she picked rather than the day she got. Same upper bound
      as the pull uses, so the menu and the pull cannot disagree about what a date means. */
   const today = todayArg || (typeof todayISO === 'function' ? todayISO() : '9999-12-31');
-  const by = {};
+  const by = {}, held = {};
   (recs || []).forEach(r => {
     const d = String((r && r.date) || '').slice(0, 10);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return;          // undated / malformed: never a choosable round
     if (d > today) return;                               // a typo, not a round
-    const g = by[d] || (by[d] = { date: d, facilities: [], count: 0, ids: [], notSeen: 0, discharged: 0 });
-    g.count++;
+    const g = by[d] || (by[d] = { date: d, facilities: [], count: 0, records: 0, ids: [], notSeen: 0, discharged: 0 });
+    g.records++;                                         // FILES. `count` is notes, and is settled below.
+    (held[d] = held[d] || []).push(r);
     if (r.id) g.ids.push(r.id);
-    /* WHAT WILL NOT LOAD, counted here rather than filtered out. The menu deliberately describes the
-       round as it stands on the CARD — filtering would put it out of step with the card and the orders
-       sheet — but "2026-07-30 — 5 patients" when two are discharged and one was not seen reads as a
-       promise of five notes, and olderSkipped structurally cannot explain the gap (it only counts
-       records on OTHER dates). So the line says both numbers. */
-    const dispo = _rcDispo(r);
-    if (dispo === 'notSeen') g.notSeen++;
-    else if (dispo === 'discharged') g.discharged++;
     const f = String((r && r.facility) || '').trim();
     if (f && g.facilities.indexOf(f) < 0) g.facilities.push(f);
   });
   return Object.keys(by).sort().reverse().map(d => {
     const g = by[d];
     g.facilities.sort();
+    /* THE NUMBER ON THE MENU IS THE NUMBER OF NOTES, decided by the fold that will actually run — see
+       _rcRoundNoteGroups. It used to be the record count, which is a different number the moment one
+       resident has two files, and the menu is the thing a provider picks from. */
+    const groups = _rcRoundNoteGroups(held[d] || []);
+    g.count = groups.length;
+    /* WHAT WILL NOT LOAD, counted here rather than filtered out. The menu deliberately describes the
+       round as it stands on the CARD — filtering would put it out of step with the card and the orders
+       sheet — but "2026-07-30 — 5 patients" when two are discharged and one was not seen reads as a
+       promise of five notes, and olderSkipped structurally cannot explain the gap (it only counts
+       records on OTHER dates). So the line says both numbers.
+       PER PATIENT, not per file, so it cannot mix units with the count beside it. A patient is
+       discharged only when EVERY file for them says so, and not-seen only when none of the files that
+       survive _rcSelectForPull's discharge drop says she was seen — which is what the pull does: a
+       discharged file is dropped outright and a seen file for the same resident still opens the note. */
+    groups.forEach(p => {
+      const rs = p.recs || [];
+      const live = rs.filter(x => _rcDispo(x) !== 'discharged');
+      if (!live.length) g.discharged++;
+      else if (live.every(x => _rcDispo(x) === 'notSeen')) g.notSeen++;
+    });
     return g;
   });
 }
@@ -5031,6 +5074,11 @@ async function rcRepull(){
       const lines=rounds.slice(0,SHOW).map((g,i)=>{
         const wont=[]; if(g.discharged) wont.push(g.discharged+' discharged'); if(g.notSeen) wont.push(g.notSeen+' not seen');
         return (i+1)+') '+g.date+'  —  '+g.count+' patient'+(g.count===1?'':'s')+
+          /* AND THE FILE COUNT WHEN IT DIFFERS, never instead of the patient count. Two files for one
+             resident is the duplicate-record problem the fold exists to work around, so a provider
+             seeing "17 patients (34 records)" learns something true — hiding it would just make the
+             menu quietly disagree with the vault. */
+          (g.records!==g.count?' ('+g.records+' records)':'')+
           (wont.length?' ('+wont.join(', ')+' — those do not open a note)':'')+
           (g.facilities.length?'  '+g.facilities.join(', '):'');
       });

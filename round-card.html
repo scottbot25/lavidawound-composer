@@ -278,7 +278,7 @@
    it is a hash of BOTH shipped files, so editing either one makes it provably stale and the sweep says
    so. The composer carries the identical value and passes its own into our URL (?b=), which is how the
    two can tell whether they shipped as a pair. See build-stamp.js. */
-const BUILD = '2026-08-07.3f35189';
+const BUILD = '2026-08-10.6561e93';
 /* A top-level `const` is NOT a property of window — only `var` and function declarations are. So the
    composer, reading across the frame, gets `undefined` for our build no matter what we declared here,
    and would conclude on EVERY open that this card is too old to have one. Found by opening the overlay
@@ -4268,6 +4268,45 @@ function _wasCleared(dateStr, facRaw){
     return !!seen[(String(dateStr||'').slice(0,10)||'undated')+'|'+(cleanSeg(facRaw)||'Unfiled')];
   }catch(e){ return false; }
 }
+/* ONE RECORD FILE BECOMES ONE ROW, unless collapsed first. A stale pre-round autosave, a resave that
+   for any reason picked up a new id, a duplicate upload — any of those leaves a second (or third) file
+   for one patient on one round, and she sees herself listed two or three times on screen and on the
+   handoff .doc, at different ages of her own data. Collapsed to the FULLEST record per patient identity
+   — ptId when the record has one, else the trimmed case-insensitive name. A record neither can identify
+   keeps its own row rather than being folded into a guess: a stray extra row is a minor annoyance,
+   merging two different patients because both are nameless is not.
+
+   ONE COPY, NOT FOUR — 2026-08-10. This body was written INLINE at each of the three load paths, on the
+   reasoning that the suites slice individual functions out of this file by string, so a shared symbol
+   their sandboxes never learned about becomes a ReferenceError at the call site that reads like an
+   ordinary test failure. That happened, and the conclusion drawn from it was the wrong one: it is a
+   reason to TEACH THE SANDBOXES, not to keep the rule in four places. The fourth place is what this
+   change is about. The round picker described a round by how many FILES it was made of while every
+   load path collapsed them, so the menu offered "34 patients at University Heights" and the round
+   opened with about seventeen. Scott, 2026-08-10: "if you actually load this in there isnt even close
+   to 34 patients its maybe half that."
+   A number a provider chooses from must be the number they are about to get, and two copies of a
+   counting rule that must agree is exactly how this defect happened. So: one function, called by the
+   three loaders AND by the picker that describes them. Pure — no DOM, no network, no clock — so it can
+   be driven directly, and every sandbox that slices a load path must now grab it (round-card-dispo,
+   round-card-reload, wrong-order-card, round-picker-count).
+   ⚠ WHAT IT DOES IS UNCHANGED. The body below is the inline block verbatim; only its address moved. */
+function rcCollapseDupeRecords(recs){ const w={}; let u=0; (recs||[]).forEach(function(rec){ if(!rec) return;
+  const key=String(rec.ptId||'').trim()||('n:'+String((rec.patient&&rec.patient.name)||'').trim().toLowerCase());
+  if(key===''||key==='n:'){ w['__u'+(u++)]=rec; return; }
+  /* THE NEWEST FILE IS NOT ALWAYS THE FULLEST ONE. Found 2026-08-05: the root cause of duplicate
+     files (a save that should overwrite the same record instead minting a new id) is a separate,
+     bigger question — but whatever creates the second file, its timestamp says nothing about
+     which one has more of Abby's actual charting in it. Driven against the real vault: pairs
+     where the LATER save had fewer than half the filled fields of the earlier one, repeatedly.
+     Picking by savedAt alone was throwing away real exam data in favour of a thinner duplicate.
+     Score by how much is actually filled — same field-counting rule as hasContent() — and only
+     fall back to savedAt when two records are equally complete, so a genuine tie still resolves
+     deterministically rather than by object-key order. */
+  const prev=w[key];
+  const sc=r=>{let n=String(r.edu||'').trim()?1:0;(r.wounds||[]).forEach(function(wd){Object.keys(wd).forEach(function(fk){if(fk==='wid'||fk==='born')return;const v=wd[fk];if(Array.isArray(v)?v.length>0:String(v==null?'':v).trim()!=='')n++;});});return n;};
+  if(!prev||sc(rec)>sc(prev)||(sc(rec)===sc(prev)&&String(rec.savedAt||'')>=String(prev.savedAt||''))) w[key]=rec; });
+  return Object.values(w); }
 async function rcRestoreFromVault(){
   try{
     /* hasContent, NOT just the name. At a bedside you chart the wound in front of you and name the row
@@ -4388,32 +4427,9 @@ async function rcRestoreFromVault(){
     S.round.loadedProv=owner.name; S.round.loadedMixed=owner.mixed;
     // dispo has to come back too — reopening a round must not quietly reset everyone to
     // "seen" and re-inflate the count that was already filed for that day.
-    /* ONE RECORD FILE BECOMES ONE ROW below, unless collapsed first. A stale pre-round autosave, a
-       resave that for any reason picked up a new id, a duplicate upload — any of those leaves a
-       second (or third) file for one patient on one round, and she sees herself listed two or three
-       times on screen and on the handoff .doc, at different ages of her own data. Collapsed to the
-       newest record per patient identity — ptId when the record has one, else the trimmed
-       case-insensitive name. A record neither can identify keeps its own row rather than being
-       folded into a guess: a stray extra row is a minor annoyance, merging two different patients
-       because both are nameless is not. Inline, not a shared function — three load paths each slice
-       their own function out of the file for their suites, and a shared symbol they never learned
-       about becomes a ReferenceError that reads like an ordinary failure. */
-    S.pts=(function(recs){ const w={}; let u=0; (recs||[]).forEach(function(rec){ if(!rec) return;
-      const key=String(rec.ptId||'').trim()||('n:'+String((rec.patient&&rec.patient.name)||'').trim().toLowerCase());
-      if(key===''||key==='n:'){ w['__u'+(u++)]=rec; return; }
-      /* THE NEWEST FILE IS NOT ALWAYS THE FULLEST ONE. Found 2026-08-05: the root cause of duplicate
-         files (a save that should overwrite the same record instead minting a new id) is a separate,
-         bigger question — but whatever creates the second file, its timestamp says nothing about
-         which one has more of Abby's actual charting in it. Driven against the real vault: pairs
-         where the LATER save had fewer than half the filled fields of the earlier one, repeatedly.
-         Picking by savedAt alone was throwing away real exam data in favour of a thinner duplicate.
-         Score by how much is actually filled — same field-counting rule as hasContent() — and only
-         fall back to savedAt when two records are equally complete, so a genuine tie still resolves
-         deterministically rather than by object-key order. */
-      const prev=w[key];
-      const sc=r=>{let n=String(r.edu||'').trim()?1:0;(r.wounds||[]).forEach(function(wd){Object.keys(wd).forEach(function(fk){if(fk==='wid'||fk==='born')return;const v=wd[fk];if(Array.isArray(v)?v.length>0:String(v==null?'':v).trim()!=='')n++;});});return n;};
-      if(!prev||sc(rec)>sc(prev)||(sc(rec)===sc(prev)&&String(rec.savedAt||'')>=String(prev.savedAt||''))) w[key]=rec; });
-      return Object.values(w); })(mine).map(r=>({ id:r.id||newId(), ptId:String(r.ptId||r.id||''), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], woundSeq:Number(r.woundSeq)||0, send:r.send!==false, visitType:r.visitType||'', dispo:r.dispo||'' }));
+    /* ONE RECORD FILE BECOMES ONE ROW below, unless collapsed first — see rcCollapseDupeRecords, which
+       is the one copy of that rule and is what the round picker counts with too. */
+    S.pts=rcCollapseDupeRecords(mine).map(r=>({ id:r.id||newId(), ptId:String(r.ptId||r.id||''), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], woundSeq:Number(r.woundSeq)||0, send:r.send!==false, visitType:r.visitType||'', dispo:r.dispo||'' }));
     normalizePts(S); S.active=0;
     S.pts.forEach(p=>{ try{ _rcCloudSig[p.id]=_rcSig(p); _rcFiled.add(p.id); }catch(e){} });   // restored = already in the cloud; no re-upload
     saveFiled();
@@ -4576,6 +4592,23 @@ async function openRecentRounds(){
     _rrGroups=Object.keys(groups).map(k=>groups[k])
       .sort((a,b)=>b.date.localeCompare(a.date) || String(a.facility).localeCompare(String(b.facility)))
       .slice(0, RR_MAX_ROUNDS);                    // the last N rounds, newest first — however old they are
+    /* HOW MANY ROWS THIS ROUND WILL ACTUALLY OPEN, decided HERE by the very function loadRecentRound
+       will use — not by a second rule that looks like it. The row used to print g.recs.length, which is
+       how many FILES the round is made of; loadRecentRound then collapses duplicate files to one row
+       per patient, so the menu promised 34 patients at University Heights and the round opened with
+       about seventeen (Scott, 2026-08-10). The gap is not noise either: 34 files for 17 patients is two
+       files per patient, which is the duplicate-file problem the collapse exists to work around. So
+       BOTH numbers are kept and the row prints the record count whenever it differs — "17 patients
+       (34 records)" tells a provider something true; "34 patients" is simply wrong. */
+    /* PER GROUP, NOT ONE PASS THAT CAN THROW. rcCollapseDupeRecords reads every record's wounds, so a
+       malformed file - wounds not an array, or an array holding a null - makes it throw. This whole
+       function sits inside a try/catch, so before this guard ONE bad file blanked the ENTIRE menu:
+       every round, every building, zero rows and a bare WARN. Until the count moved here that same
+       file only broke the LOAD of its own round and left the rest of the menu working, so this was a
+       straight widening of the blast radius. A row that cannot be counted now says so and still
+       offers itself; the load path decides what happens when it is opened, exactly as it did before. */
+    _rrGroups.forEach(g=>{ g.records=g.recs.length;
+      try{ g.patients=rcCollapseDupeRecords(g.recs).length; }catch(e){ g.patients=null; } });
     if(!_rrGroups.length){
       /* "No saved rounds found" is a claim about the record store, and a building we could not read
          does not support it. An unreachable building must never read as an empty week. */
@@ -4589,7 +4622,15 @@ async function openRecentRounds(){
     }
     list.innerHTML=_rrGroups.map((g,i)=>
       '<button class="rr-row" onclick="loadRecentRound('+i+')" style="display:block;width:100%;text-align:left;margin-top:6px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel);font:inherit;cursor:pointer">'
-      +'<b>'+esc(g.date)+'</b> · '+esc(g.facility||'Unfiled')+' · '+g.recs.length+' patient'+(g.recs.length===1?'':'s')
+      +'<b>'+esc(g.date)+'</b> · '+esc(g.facility||'Unfiled')+' · '
+      /* A row whose patient count could not be worked out reports what it DOES know - the file
+         count - and says the rest is unknown. It must never print "null patients", and it must
+         never quietly show the file count as if it were the patient count, which is the defect
+         this whole change exists to fix. */
+      +(g.patients===null
+        ? g.records+' record'+(g.records===1?'':'s')+' <span class="muted">(could not count the patients - open it to see)</span>'
+        : g.patients+' patient'+(g.patients===1?'':'s')
+          +(g.records!==g.patients ? ' <span class="muted">('+g.records+' records)</span>' : ''))
       +(g.provider?' <span class="muted">('+esc(g.provider)+')</span>':' <span class="muted">(no provider on file)</span>')
       +'</button>').join('')
       /* Never cap silently. If the folder was big enough that we stopped reading, say so - a list
@@ -5039,18 +5080,10 @@ function loadRecentRound(i){
   // dispo comes back too — see the same line in rcRestoreFromVault. Reopening a round must
   // not quietly reset everyone to "seen"; auto-save would then re-upload them as seen and
   // re-inflate a count that was already filed correctly.
-  /* SAME COLLAPSE AS THE OTHER TWO LOAD PATHS — see the comment at rcRestoreFromVault's S.pts
-     assignment for why. Inline again, not a shared function, for the same reason: this suite slices
-     its own function out of the file and never learns about a symbol defined elsewhere. */
-  S.pts=(function(recs){ const w={}; let u=0; (recs||[]).forEach(function(rec){ if(!rec) return;
-    const key=String(rec.ptId||'').trim()||('n:'+String((rec.patient&&rec.patient.name)||'').trim().toLowerCase());
-    if(key===''||key==='n:'){ w['__u'+(u++)]=rec; return; }
-    /* THE NEWEST FILE IS NOT ALWAYS THE FULLEST ONE — see the identical note at the other two load
-       paths. Score by fields actually filled, savedAt only breaks a genuine tie. */
-    const prev=w[key];
-    const sc=r=>{let n=String(r.edu||'').trim()?1:0;(r.wounds||[]).forEach(function(wd){Object.keys(wd).forEach(function(fk){if(fk==='wid'||fk==='born')return;const v=wd[fk];if(Array.isArray(v)?v.length>0:String(v==null?'':v).trim()!=='')n++;});});return n;};
-    if(!prev||sc(rec)>sc(prev)||(sc(rec)===sc(prev)&&String(rec.savedAt||'')>=String(prev.savedAt||''))) w[key]=rec; });
-    return Object.values(w); })(mine).map(r=>({ id:r.id||newId(), ptId:String(r.ptId||r.id||''), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], woundSeq:Number(r.woundSeq)||0, send:r.send!==false, visitType:r.visitType||'', dispo:r.dispo||'' }));
+  /* SAME COLLAPSE AS THE OTHER TWO LOAD PATHS, and as the picker row that offered this round —
+     rcCollapseDupeRecords is the one copy of that rule. THIS is the load whose answer the picker was
+     describing wrongly: the menu counted g.recs (files) and this line collapses them. */
+  S.pts=rcCollapseDupeRecords(mine).map(r=>({ id:r.id||newId(), ptId:String(r.ptId||r.id||''), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], woundSeq:Number(r.woundSeq)||0, send:r.send!==false, visitType:r.visitType||'', dispo:r.dispo||'' }));
   normalizePts(S); S.active=0;
   S.pts.forEach(p=>{ try{ _rcCloudSig[p.id]=_rcSig(p); _rcFiled.add(p.id); }catch(e){} });   // loaded = already in the cloud; only edits re-upload
   saveFiled();
@@ -5187,26 +5220,9 @@ async function rcLoadRoundFor(dateStr, facRaw){
        would let a throw leave a full card on screen with NO seeded signatures - every record dirty,
        the whole round re-uploaded under whatever the box says. That is the 21-record re-file class. */
     const owner=_roundOwner(mine);
-    /* SAME COLLAPSE AS THE OTHER TWO LOAD PATHS — see the comment at rcRestoreFromVault's S.pts
-       assignment for why. Inline again, not a shared function, for the same reason: this suite
-       slices its own function out of the file and never learns about a symbol defined elsewhere. */
-    S.pts=(function(recs){ const w={}; let u=0; (recs||[]).forEach(function(rec){ if(!rec) return;
-      const key=String(rec.ptId||'').trim()||('n:'+String((rec.patient&&rec.patient.name)||'').trim().toLowerCase());
-      if(key===''||key==='n:'){ w['__u'+(u++)]=rec; return; }
-      /* THE NEWEST FILE IS NOT ALWAYS THE FULLEST ONE. Found 2026-08-05: the root cause of duplicate
-         files (a save that should overwrite the same record instead minting a new id) is a separate,
-         bigger question — but whatever creates the second file, its timestamp says nothing about
-         which one has more of Abby's actual charting in it. Driven against the real vault: pairs
-         where the LATER save had fewer than half the filled fields of the earlier one, repeatedly.
-         Picking by savedAt alone was throwing away real exam data in favour of a thinner duplicate.
-         Score by how much is actually filled — same field-counting rule as hasContent() — and only
-         fall back to savedAt when two records are equally complete, so a genuine tie still resolves
-         deterministically rather than by object-key order. */
-      const prev=w[key];
-      const sc=r=>{let n=String(r.edu||'').trim()?1:0;(r.wounds||[]).forEach(function(wd){Object.keys(wd).forEach(function(fk){if(fk==='wid'||fk==='born')return;const v=wd[fk];if(Array.isArray(v)?v.length>0:String(v==null?'':v).trim()!=='')n++;});});return n;};
-      if(!prev||sc(rec)>sc(prev)||(sc(rec)===sc(prev)&&String(rec.savedAt||'')>=String(prev.savedAt||''))) w[key]=rec; });
-      return Object.values(w); })(mine).map(r=>({ id:r.id||newId(), ptId:String(r.ptId||r.id||''), name:(r.patient&&r.patient.name)||'',
-      edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], woundSeq:Number(r.woundSeq)||0, send:r.send!==false, visitType:r.visitType||'', dispo:r.dispo||'' }));
+    /* SAME COLLAPSE AS THE OTHER TWO LOAD PATHS — see rcCollapseDupeRecords, the one copy of the rule
+       (and the one the picker counts with). */
+    S.pts=rcCollapseDupeRecords(mine).map(r=>({ id:r.id||newId(), ptId:String(r.ptId||r.id||''), name:(r.patient&&r.patient.name)||'', edu:r.edu||'', wounds:Array.isArray(r.wounds)?r.wounds:[], woundSeq:Number(r.woundSeq)||0, send:r.send!==false, visitType:r.visitType||'', dispo:r.dispo||'' }));
     normalizePts(S); S.active=0;
     S.round.facLock=facR;                                  // every vault-load path must set this
     S.round.loadedProv=owner.name; S.round.loadedMixed=owner.mixed;   // whose round this is - see applyProvChange
