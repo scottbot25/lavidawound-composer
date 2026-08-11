@@ -278,7 +278,7 @@
    it is a hash of BOTH shipped files, so editing either one makes it provably stale and the sweep says
    so. The composer carries the identical value and passes its own into our URL (?b=), which is how the
    two can tell whether they shipped as a pair. See build-stamp.js. */
-const BUILD = '2026-08-11.bb02ef6';
+const BUILD = '2026-08-11.11b0747';
 /* A top-level `const` is NOT a property of window — only `var` and function declarations are. So the
    composer, reading across the frame, gets `undefined` for our build no matter what we declared here,
    and would conclude on EVERY open that this card is too old to have one. Found by opening the overlay
@@ -1377,6 +1377,14 @@ function applyProvChange(v){
        the outcome this confirm just promised. */
     S.round.loadedProv=v; S.round.loadedMixed=false;    // they are this provider's now
   }
+  /* A DIFFERENT HUMAN NEVER INHERITS THIS ROUND'S FILENAME. The sheet lock (#14) exists to absorb a
+     RE-SPELLING — "Abby Mehler" becoming "Mehler, Abby", where the records do not move because
+     _rcProvSlug sorts the tokens — and _nameKey answers exactly that question, since it sorts them
+     the same way. So a change the slug can see is a change of person as far as filing is concerned,
+     and the lock is released. It is belt and braces with the key, which now carries the filing name
+     too; a lock that overwrites the wrong document is worse than the duplicate it prevents, so it
+     gets two independent releases and neither is load-bearing alone. */
+  if(_nameKey(old)!==_nameKey(v)) _sheetFiledAs=null;
   /* Through _rcRoundFieldChange, and BEFORE save(): save() calls _rcNoteWorkStarted(), which would
      read the freshly shifted signatures as twelve edits and start a round nobody has charted.
      Guarded by typeof for the same reason save() guards its own call - this runs long before the
@@ -1402,7 +1410,16 @@ function onFacPick(sel){
 }
 function applyFacChange(nf){
   nf=(nf||'').trim(); let lock=(S.round.facLock||'').trim();
-  _sheetInvalidate();                                  // different facility = a different round's sheet
+  /* THE ROUND'S SHEET IDENTITY IS RELEASED WHERE THE ROUND ACTUALLY CHANGES — in the two branches
+     below, not on arrival. This was an unconditional _sheetInvalidate() on this line, before the
+     guard had decided anything and before the confirm had even been shown, so a MIS-TAP on the
+     Facility dropdown threw the identity away even when the provider read the dialog and tapped
+     Cancel. Nothing moved and the round still lost its filename: the next save minted a SECOND
+     "Wound Orders" document beside the first, the earlier one frozen at whatever it said, and the
+     nurse could pick up either. That is defect #14 restored in full, reached through the one control
+     a provider is most likely to fat-finger — and it undid the fix after a single stray tap.
+     The cancel branch at the bottom now leaves every one of _sheetOnFile / _sheetCheckKey /
+     _sheetLastSig / _sheetFiledAs exactly as it found them, because nothing happened. */
   /* READ THE LOCK OFF THE HEADER BEFORE THE GUARD DECIDES ANYTHING. addPt binds facLock to whatever
      is in the Facility box when the FIRST patient is added — and on a fresh card that box is blank
      (blank() leaves it ''), while "Add the first patient" is not gated on a facility. So a provider
@@ -1426,6 +1443,9 @@ function applyFacChange(nf){
   // round is already on file it belongs on screen. Same path as flipping the date back.
   // Same release as the date path: an empty card carries no round, so it carries no owner either.
   if(!S.pts.length || !lock || nf===lock){
+    // A real move ends this round's sheet; re-picking the building already in the header is not a
+    // move and must not cost the round its filename (see the note at the top).
+    if(nf!==(S.round.fac||'').trim()) _sheetInvalidate();
     if(!S.pts.length){ S.round.facLock=nf; S.round.loadedProv=''; S.round.loadedMixed=false; _setUnstarted(false); paintProvSel(); }
     /* Rows on the card and STILL no lock: the header was blank too, so this pick is the first
        building this round has ever had and it adopts them — there is nothing to move them away from.
@@ -1449,6 +1469,24 @@ function applyFacChange(nf){
     // we get. File the sheet before the patients are cleared. sheetAutoSave() captures the facility,
     // date and patients synchronously, so this lands under the OLD building even though we change it
     // on the next line.
+    /* THE EXIT FLUSH KEEPS THIS ROUND'S FILENAME, which the old unconditional invalidate on line
+       one took away from it: _sheetFiledAs was already gone by the time sheetAutoSave read it four
+       awaits later, so a provider who had corrected her own name earlier in the round filed the
+       sheet she sends ON THE WAY OUT under a second filename — #14, reached through the door
+       instead of through the box. Nothing can leak into the next building either, because the lock
+       is keyed on facility + date + filing name — NOT the owner; see _sheetFiledKey, and note that
+       this comment claimed a fourth component that has never existed — and the facility moves on the
+       very next line, so the key stops matching on its own. _sheetLastSig is cleared here rather
+       than by _sheetInvalidate because sheetAutoSave compares it SYNCHRONOUSLY and would otherwise
+       skip the flush.
+       ⚠ THE THREE LINES BELOW ARE _sheetInvalidate() MINUS _sheetFiledAs, AND THAT IS THE ENTIRE
+       POINT OF THEM. Writing _sheetInvalidate() here is shorter and silently restores #14 through
+       the door: the exit sheet uploads four awaits later, reads a lock that has already been thrown
+       away, and a provider who corrected her own name earlier in the round gets a SECOND handoff
+       document in the building she is walking out of. That mutant survived the entire 51-suite gate
+       on 2026-08-11 with only this comment guarding it — which this project's rules call out by
+       name — so vault-write-race-test.js §8 now drives it. */
+    _sheetOnFile=null; _sheetCheckKey=''; _sheetLastSig='';
     clearTimeout(_sheetAutoT); sheetAutoSave(); qcAutoSave(true);
     S.pts=[]; S.active=0; S.round.facLock=nf; S.round.fac=nf; S.round.loadedProv=''; S.round.loadedMixed=false; _setUnstarted(false); _sheetLastSig=''; _qcLastSig=''; save(); paintFacSel(); render(); toast('Started '+(nf||'a new facility'));
     rcLoadRoundInto(S.round.date, nf); }      // if that building already has this day's round, put it back
@@ -1475,6 +1513,10 @@ function delPt(i,btn){
   clearTimeout(_delArm.t); _delArm=null;
   const doomedId=(S.pts[i]&&S.pts[i].id)||null, fac=cleanSeg(S.round.fac)||'Unfiled';
   S.pts.splice(i,1);
+  /* SHE IS OFF THIS CARD, AND THAT IS TRUE NOW — before the token, before the listing, before the
+     delete, and whatever any of them go on to say. This one line is what every writer gates on; see
+     _rcOnCard for why it is not _rcGone and not a live read of S.pts. */
+  if(doomedId) _rcRemovedIds.add(doomedId);
   /* Removing the last patient empties the card one at a time, which the date and facility handlers
      do in one go — and only they released the loaded round's owner. Load a colleague's round,
      remove their patients, add your own on the same day and building, and every record, the nurse's
@@ -1482,8 +1524,16 @@ function delPt(i,btn){
      the sheet is named facility+date+provider, so it OVERWRITES the colleague's real handoff sheet
      and rewrites their count.
      NAMED patients, not rows. `+ Patient` leaves a blank row behind, so a row count of 1 with
-     nothing in it would have skipped the release and kept the round on the colleague. */
-  if(!S.pts.some(p=>(p.name||'').trim())){ S.round.loadedProv=''; S.round.loadedMixed=false; }
+     nothing in it would have skipped the release and kept the round on the colleague.
+     _sheetInvalidate() FOR THE SAME REASON, added 2026-08-11. Emptying the card one patient at a
+     time is the third way a round ends, and it was the only one that did not say so: the date and
+     facility handlers both call _sheetInvalidate, this one released the owner and left the sheet
+     lock (#14) standing. Whoever picked the tablet up next — same building, same day, their own
+     name in the box — inherited the previous round's filename and their first save overwrote a
+     handoff sheet that was not theirs. The lock's key now carries the filing name as well, so this
+     is the second of two independent releases rather than the only one; a lock this important gets
+     both, because it may only ever be IGNORED, never misapplied. */
+  if(!S.pts.some(p=>(p.name||'').trim())){ S.round.loadedProv=''; S.round.loadedMixed=false; _sheetInvalidate(); }
   if(S.active >= S.pts.length) S.active = Math.max(0, S.pts.length-1);
   save(); render(); paintProvSel();   // repaint the "Filing under" line, or it says the round is still theirs
   /* Clean up the removed patient's vault record too, so restore-on-open can't resurrect them.
@@ -2684,13 +2734,20 @@ function closeReview(){ document.getElementById('review').classList.remove('on')
 
 /* The patients this SEND will actually carry: named AND still checked. The preview, the print, the
    download and the QC count all run off this one set.
-   ⚠ THE .doc UPLOADED BY "Save to ClinicalVault" DOES NOT — this comment used to claim it did, and
-   that was MEASURED FALSE on 2026-08-04. saveVault calls a BARE sheetHTML(), and that default list is
-   every NAMED patient, so the sheet filed to Daily Handoffs/ carries the resident the provider
-   unchecked. Driven against a fake vault with three synthetic patients, one of them unchecked: all
-   three appeared in the uploaded application/msword body. That is defect #13, it belongs to another
-   cluster, and it is written down here rather than fixed here so the next reader does not conclude
-   from a confident comment that it is already handled. Do not restate the old claim anywhere.
+   THE .doc UPLOADED BY "Save to ClinicalVault" RUNS OFF IT TOO, as of 2026-08-10 (defect #13). This
+   paragraph spent six days saying the opposite in bold, and by 2026-08-11 that was the confidently
+   wrong kind of comment — worse than none, because the next reader would have gone and re-fixed a
+   line that was already right. Between 2026-08-05 and 2026-08-10 saveVault did call a BARE
+   sheetHTML(), whose default list is every NAMED patient, so the sheet filed to Daily Handoffs/
+   carried the resident the provider had unchecked; it was measured on the uploaded
+   application/msword body, three synthetic patients in with one unchecked and all three out. It now
+   passes this set explicitly, and vault-write-race-test.js asserts on those same uploaded bytes.
+   ⚠ WHAT THIS SET STILL DOES NOT ANSWER is whether a resident is still ON the card. saveVault and
+   sheetAutoSave both deep-copy it before their first await so the document says what it said when
+   the provider tapped the button, and both then drop anyone _rcOnCard says she has since removed —
+   pinned against the round moving, live against a removal. _rcOnCard, NOT _rcGone: _rcGone means the
+   vault DELETE succeeded, which is false for the ordinary case of a resident who had never been
+   uploaded, and gating the writers on it put her straight back on the building's document.
    ⚠ AND THIS IS NOT THE BACKUP SET EITHER — reading it as one is defect #63. The per-patient records in
    RoundCards/<fac>/ are written for every NAMED patient — see rcAutoSaveCloud and saveVault's record
    loop — because unchecking somebody in Review is an instruction about which building's nurse gets
@@ -2735,7 +2792,65 @@ let _sheetOnFile=null, _sheetCheckKey='';
    is skipped — one extra vault listing rather than a wrong answer. */
 function _sheetKey(f,d){ f=(f===undefined?S.round.fac:f); d=(d===undefined?S.round.date:d);
   return (cleanSeg(f)||'Unfiled')+'|'+(String(d||'').slice(0,10)||'undated'); }
-function _sheetInvalidate(){ _sheetOnFile=null; _sheetCheckKey=''; _sheetLastSig=''; }   // new round ⇒ re-check AND re-file
+/* ---------- ONE ROUND, ONE SHEET FILE (2026-08-10) ----------
+   The sheet's filename carries the provider's name LITERALLY; the records carry it through
+   _rcProvSlug, which sorts the name's tokens so "Abby Mehler", "Mehler, Abby" and "abby mehler"
+   all slug the same. That asymmetry was the defect. Correcting your own name mid-round is a pure
+   re-spelling of the same human and raises no confirm at all (applyProvChange's takeover guard
+   needs a loadedProv, and your own round has none) — so the records re-file onto the SAME slug
+   while the SHEET goes out under a NEW filename and the old one simply stays. Daily Handoffs then
+   holds two "Wound Orders" documents for one round, the first frozen at whatever it said when the
+   name changed, and the nurse can pick up either. Driven: one holding "foam dressing daily", the
+   other "collagen + foam, change q48h", same building, same day, same provider.
+   qc_count_nightly.ps1's Get-DuplicateSheets already REPORTS the pair, but nothing deletes it and
+   it runs at 23:00 — after she has acted on whichever she opened.
+   So the first name a round files its sheet under becomes that round's filename, and every later
+   save of the SAME round overwrites it instead of minting a second document. The Provider row
+   INSIDE the document still says the corrected name — only the filename is pinned.
+
+   IT FAILS SAFE, which is the whole reason it is keyed rather than a bare variable. Overwriting a
+   file is worse than leaving a duplicate if the lock ever escapes its round, so the key carries the
+   facility, the date AND the name this save would otherwise file under. Change any one of them and
+   the key stops matching, so the lock is IGNORED — it can never be APPLIED to a round that would
+   file under a different name, which is the only way it could destroy a document that is not this
+   round's.
+   ⚠ THE KEY DOES NOT CARRY THE LOADED ROUND'S OWNER, and this paragraph said it did until
+   2026-08-11 — the same confidently-wrong-comment failure this cluster had already fixed once at
+   sentNamed(), and worse than no comment because the next reader goes and re-adds a component that
+   is already in there. provName is provLoaded || _fileProv(), and _fileProv() is loadedProv || prov,
+   so the FILING NAME already encodes the owner whenever there is one. Both owner mutants survived
+   the whole gate, which is how it was found. Three components: facility, date, filing name.
+
+   KNOWN RESIDUAL, DELIBERATELY LEFT: the lock lives in memory only, so reloading the tab mid-round
+   loses it and a re-spelling AFTER that reload can fork the sheet once. Persisting it would be
+   worse, not better — a filename lock that outlives its round is a lock that can be APPLIED to
+   somebody else's round, and overwriting a real handoff sheet beats leaving a duplicate beside it
+   every time. A duplicate is at least reported by Get-DuplicateSheets in qc_count_nightly.ps1; an
+   overwrite is simply gone. Leave it.
+
+   THE FILING NAME JOINED THE KEY ON 2026-08-11, and it is what makes "a re-spelling" and "a
+   different human" two different things instead of one. _nameKey sorts the name's tokens exactly as
+   _rcProvSlug does for the records, so "Abby Mehler", "Mehler, Abby" and "abby mehler" all key the
+   same and the lock DOES apply — which is right, because the records do not move either, and that
+   asymmetry is the whole reason this lock exists. "A Vance" and "K Nguyen" key differently and the
+   lock is ignored. Without the filing name the lock could not tell them apart, and applyProvChange
+   raises NO confirm on a fresh round (its takeover guard needs a loadedProv), so the Provider box
+   moving to a DIFFERENT human mid-round silently handed that person's round the previous person's
+   filename — and her first save then overwrote a handoff sheet that was never hers. Worse than the
+   duplicate this exists to prevent, which is the test every change here has to pass.
+
+   _sheetInvalidate clears it, and the one load path that does not call _sheetInvalidate
+   (rcRestoreFromVault) still sets loadedProv, which moves the key on its own. delPt calls it too, as
+   of 2026-08-11: emptying the card one patient at a time is the third way a round ends, and it was
+   the one way that left the lock behind for whoever picked the tablet up next. A stale lock can only
+   ever be skipped, never misapplied. */
+let _sheetFiledAs=null;                                  // {key, seg} — what THIS round's sheet is on file as
+function _sheetFiledKey(f,d,provName){ return _sheetKey(f,d)+'|'+_nameKey(provName||''); }
+function _sheetFileSeg(key, seg){
+  return (_sheetFiledAs && _sheetFiledAs.key===key && _sheetFiledAs.seg) ? _sheetFiledAs.seg : seg;
+}
+function _sheetFiledStamp(key, seg){ _sheetFiledAs={key:key, seg:seg}; }
+function _sheetInvalidate(){ _sheetOnFile=null; _sheetCheckKey=''; _sheetLastSig=''; _sheetFiledAs=null; }   // new round ⇒ re-check AND re-file
 async function _checkSheetOnFile(){
   const key=_sheetKey();
   if(_sheetCheckKey===key && _sheetOnFile!==null) return _sheetOnFile;   // already answered for this round
@@ -3200,6 +3315,58 @@ const _rcDeleting=new Set();   // delete in flight
 const _rcDeleted=new Set();    // delete confirmed by the server
 function _rcGone(id){ return !!id && (_rcDeleting.has(id) || _rcDeleted.has(id)); }
 
+/* ---------- IS SHE STILL ON THE CARD? THE QUESTION THE WRITERS HAVE TO ASK (2026-08-11) ----------
+   _rcGone answers a DIFFERENT question, and for one day the two looked like the same question.
+
+   _rcGone means THE VAULT DELETE SUCCEEDED. delPt sets it on the tap and it survives only if the
+   server agrees. That is exactly right for the READ paths — the round picker, restore-on-open and
+   the composer's pull all use it to refuse to SHOW a record that is on its way out of the vault, and
+   they still do. It is the wrong question for a WRITER, because the commonest removal of all has no
+   delete to succeed: a resident charted and removed before anything was uploaded has no record in
+   ClinicalVault at all, so delPt's listing finds nothing, it reports "the record was not found",
+   _rcDeleting drops the id — and _rcGone goes back to FALSE. Same for a delete the server refuses
+   and a delete attempted while signed out.
+   Every writer that gated on _rcGone therefore put that resident back: onto the building's handoff
+   .doc with her wounds and her orders, into RoundCards under a record the tool had just told the
+   provider it could not remove, and into the QC count. She tapped Remove, the card said "their
+   record is still in ClinicalVault", and the save in flight then quietly re-filed her.
+
+   SO THE WRITERS ASK THE CARD INSTEAD. _rcRemovedIds is written SYNCHRONOUSLY by delPt, on the tap,
+   before any token and any network call. It is true the instant she answers "Really remove <name>?",
+   it cannot depend on whether an upload had happened first, and nothing that fails later takes it
+   back.
+
+   WHY THIS IS NOT A BARE "is p.id still in S.pts" TEST, which is the obvious version and is wrong.
+   S.pts empties for two completely different reasons and cannot tell them apart: delPt takes ONE
+   resident off, and a facility or date switch clears the WHOLE card because the round changed.
+   Reading membership alone would drop every resident on a mid-save switch — #11/#12/#15 restored in
+   full, the exact thing the capture-before-await block exists to prevent — and the last-resident
+   case makes the two indistinguishable anyway, because delPt empties the card too. The ledger is
+   the only signal that separates them, and once you have it S.pts adds nothing: remove Alma and
+   then switch building, and S.pts says Bruno is gone as well when he is not. Pinned against the
+   round moving, live against a removal — and this is the live half.
+
+   IT IS IDS, NOT PATIENT OBJECTS, on purpose: the sheet carries deep copies (the document must say
+   what it said when she tapped the button) while the record loops carry live rows, so object
+   identity would answer for one and not the other. Ids are minted per record and never reused. */
+const _rcRemovedIds=new Set();   // ids the provider has taken off this card — delPt writes it on the tap
+/* TWO QUESTIONS, AND ONLY BOTH TOGETHER MEAN "GONE". The ledger alone answers "was she EVER
+   removed" — it is never cleared, and addOnePatient hands a patient back under her ORIGINAL record
+   id on purpose (see its own comment), while every round load replaces S.pts wholesale with records
+   carrying their own ids. Keyed on the ledger alone, a resident removed once and legitimately put
+   back was PERMANENTLY invisible to every writer — off the handoff sheet, out of RoundCards, out of
+   the count, in silence. Found by two independent auditors, 2026-08-11.
+   Membership alone is not the answer either, and that is why the ledger exists: S.pts empties for
+   TWO reasons — delPt takes one resident off, a facility or date switch clears the WHOLE card
+   because the round changed — and membership cannot tell those apart, so a mid-save switch would
+   drop everybody and put #11/#12/#15 straight back.
+   Asking both costs nothing and is exact: a resident who was never removed is not in the ledger, so
+   she returns early and a switch still cannot touch her. Only a resident the provider actually
+   removed is ever asked whether she is back. */
+function _rcOnCard(p){ const id=p && p.id;
+  if(!id || !_rcRemovedIds.has(id)) return true;
+  return (S.pts||[]).some(function(q){ return q && q.id===id; }); }
+
 /* LOOKING IS NOT ROUNDING. "Start from last visit" used to file the whole round the instant it was
    tapped - on 2026-07-27 that put 21 records into the vault for a round nobody had started, purely
    because Scott wanted to see what the button did. Undoing it meant deleting 21 patients one at a
@@ -3641,13 +3808,34 @@ async function sheetAutoSave(){
   try{
     await _netTmo(_autoFillProvider(), 15000);         // so the filename names who rounded
     const provName = provLoaded || _fileProv();
-    const prov = cleanSeg(provName) || 'Provider unlisted';
+    /* ONE ROUND, ONE SHEET FILE — see _sheetFileSeg. A re-spelling of the same provider must
+       OVERWRITE this round's sheet, not leave a second frozen one beside it. The live filing name
+       is part of the key, so a DIFFERENT human in the box gets a different key and her own file. */
+    const nameKey=_sheetFiledKey(facRaw, date, provName);
+    const prov = _sheetFileSeg(nameKey, cleanSeg(provName) || 'Provider unlisted');
     const {driveId}=await _netTmo(_vaultCtx(token), 15000);
     const segs=['Daily Handoffs',fac,date];
     await _netTmo(_vaultEnsureFolders(token,driveId,segs), 15000);
-    const blob=new Blob(['﻿'+sheetHTML(pts,{fac:facRaw, date:date, prov:provName})],{type:'application/msword'});
+    /* PINNED AGAINST THE ROUND MOVING, LIVE AGAINST A REMOVAL. The deep copy above freezes what the
+       document SAYS, which is right — the provider keeps typing and the .doc has to say what it said
+       when this save started. It must not freeze WHETHER a resident is still on the card: delPt is a
+       decision she is making right now. See the same block in saveVault. If every checked resident
+       has been removed, no sheet goes at all: a blank document under this round's filename would
+       overwrite the building's real orders sheet.
+       _rcOnCard, NOT _rcGone — see _rcOnCard. "Removed" only coincides with "the vault delete
+       succeeded" for a resident who had already been uploaded, and this saver runs from the very
+       first edit of a round, when most of them have not been.
+       THIS SAVER SELF-HEALS AND THE MANUAL BUTTON DOES NOT, which is why the corrective re-upload in
+       saveVault has no twin here: delPt calls save(), save() calls scheduleSheetSave(), and the next
+       run takes a fresh _sheetSig over the smaller sentNamed() — so a removal that lands during the
+       upload itself is re-filed under the same filename a few seconds later, without a second
+       upload nested inside this one. */
+    const send=pts.filter(p=>_rcOnCard(p));
+    if(!send.length) return;
+    const blob=new Blob(['﻿'+sheetHTML(send,{fac:facRaw, date:date, prov:provName})],{type:'application/msword'});
     await _netTmo(_vaultUpload(token,driveId,segs,'Wound Orders — '+fac+' — '+date+' — '+prov+'.doc',blob,'application/msword'), 30000);
     _sheetLastSig=sig;
+    _sheetFiledStamp(nameKey, prov);                   // this round's sheet now HAS a filename — keep using it
     /* STAMP THE ROUND WE ACTUALLY FILED FOR, NOT THE ONE ON SCREEN NOW. Everything this upload
        depends on was captured synchronously above for exactly this reason — and then the ANSWER was
        recorded against a live _sheetKey() four awaits later. The flush applyFacChange fires on the
@@ -3778,6 +3966,38 @@ async function rcAutoSaveCloud(){
   const named=(S.pts||[]).filter(p=>(p.name||'').trim());
   const dirty=named.filter(p=>{ if(!p.id) p.id=newId(); return _rcCloudSig[p.id]!==_rcSig(p); });
   if(!dirty.length) return;
+  /* EVERYTHING THE UPLOAD DEPENDS ON IS CAPTURED HERE, BEFORE THE FIRST AWAIT — the rule
+     sheetAutoSave states at its own top, and this function was the one writer that did not follow
+     it. The facility, the date and the folder used to be read AFTER three awaits and the provider
+     after a fourth, so an upload parked on the network resumed under whatever the boxes held when
+     it landed. The parks are ordinary, not exotic: the first token of a session, any silent
+     refresh, _vaultCtx whenever the token string changes (two Graph calls), and _vaultEnsureFolders
+     on every new month or facility folder. And the resume is GUARANTEED, not merely likely, on the
+     path that matters — applyFacChange and applyDateChange both raise a confirm(), which blocks the
+     thread while the provider reads it, so the parked loop always resumes after the switch.
+     Driven: a Crestmoor resident's record uploaded to RoundCards/Wheatridge/2026-08 with
+     facility:"Wheatridge" — the folder the composer pulls from and the building her wound history
+     then files under — while the handoff sheet, filed by the same click, correctly went to
+     Crestmoor. The sheet and the records disagreed about which building she was in. The record was
+     also LOST from its own building: the loop stamps _rcCloudSig/_rcFiled on the way out and
+     applyFacChange has already emptied S.pts, so nothing ever re-files her under Crestmoor.
+     `dirty` already holds the patient objects themselves, so a cleared card cannot empty it —
+     capturing the destination is what was missing. (defect #11) */
+  const facRaw=(S.round.fac||'').trim();
+  const fac=cleanSeg(facRaw)||'Unfiled';
+  const date=/^\d{4}-\d{2}-\d{2}/.test(String(S.round.date||''))?S.round.date.slice(0,10):'undated';
+  /* Split on the ROUND'S date, not the clock — see _rcRecFolder. An undated round has no month to
+     file under and keeps the flat path, which reads still cover. */
+  const recSegs=_rcRecFolder(fac, date).split('/');
+  /* CAPTURE THE OWNER, KEEP READING THE BOX LIVE — the same split sheetAutoSave and qcAutoSave
+     make, for the same two reasons. Only loadedProv can be STOLEN mid-flight: applyFacChange,
+     applyDateChange and delPt all release it on a synchronous line, so a post-await read files a
+     loaded colleague's round under whoever is in the box. Pinning the WHOLE name would be the
+     mirror-image bug — the box is the one field a provider may still be correcting while a save is
+     in flight. Driven: Dr Vance's patient re-attributed to K Nguyen in k-nguyen__p1.json, and
+     since restore-on-open and carry-forward both filter by provider, Dr Vance can never read that
+     record back. That variant needs no dialog at all: delPt releases loadedProv on two taps. */
+  const provLoaded=(S.round.loadedProv||'').trim();
   let token=null; try{ token=await _netTmo(_vaultTokenSilent(), 12000); }catch(e){ token=null; }
   if(!token){ _rcPaintSync('local'); return; }   // not signed in (or the sign-in check stalled) — device-only, no nagging
   // Make sure the PROVIDER is stamped before any record is written (manual save always did this; the
@@ -3787,20 +4007,16 @@ async function rcAutoSaveCloud(){
   _rcAutoBusy=true; _rcPaintSync('saving');
   try{
     const {driveId}=await _netTmo(_vaultCtx(token), 15000);
-    const fac=cleanSeg(S.round.fac)||'Unfiled';
-    const date=/^\d{4}-\d{2}-\d{2}/.test(String(S.round.date||''))?S.round.date.slice(0,10):'undated';
-    /* Split on the ROUND'S date, not the clock — see _rcRecFolder. An undated round has no month to
-       file under and keeps the flat path, which reads still cover. */
-    const recSegs=_rcRecFolder(fac, date).split('/');
     await _netTmo(_vaultEnsureFolders(token,driveId,recSegs), 15000);
-    /* ONE READ FOR THE WHOLE BATCH, like saveVault. The loop below awaits an upload per record, and
-       three ordinary actions - removing the last patient, changing the date, changing the facility -
-       now release S.round.loadedProv SYNCHRONOUSLY. A date or facility change even guarantees the
-       loop is parked, because confirm() blocks the thread while the provider reads the dialog. Read
-       live inside the loop and one round's records go out under TWO different provider names, which
-       the nightly job then turns into two QC counts that its reconcile is structurally unable to
+    /* ONE READ FOR THE WHOLE BATCH, like saveVault, and now from the owner captured before the
+       first await. The loop below awaits an upload per record, and three ordinary actions -
+       removing the last patient, changing the date, changing the facility - release
+       S.round.loadedProv SYNCHRONOUSLY. A date or facility change even guarantees the loop is
+       parked, because confirm() blocks the thread while the provider reads the dialog. Read live
+       inside the loop and one round's records go out under TWO different provider names, which the
+       nightly job then turns into two QC counts that its reconcile is structurally unable to
        remove (both are backed by real records). */
-    const provNow=_fileProv();
+    const provNow=provLoaded || _fileProv();
     /* Remember what this device FILED under, not what the box says. Those were the same thing until
        a loaded round started keeping its own provider - and then this line quietly became the bug:
        it replaced the owner's name in the read set with the box's, so the card had written a record
@@ -3812,6 +4028,18 @@ async function rcAutoSaveCloud(){
     try{ if(provNow) localStorage.setItem('rc_last_prov', provNow); }catch(e){}
     let n=0;
     for(const p of dirty){
+      /* SKIP ANYONE THE PROVIDER HAS SINCE REMOVED. `dirty` is captured before the first await so a
+         cleared card cannot empty it (defect #11) — that is right for a change of ROUND, and wrong
+         for a removal, which is a live decision delPt is acting on right now by deleting this very
+         record from the vault. Writing it back here undoes her tap, and restore-on-open then puts
+         the resident back on her card. _rcGone is the card's own answer to "did I delete this?", and
+         it already stops the picker, the composer's pull and restore-on-open SHOWING such a record.
+         THE WRITERS ASK _rcOnCard INSTEAD, and the difference is not academic — see _rcOnCard. This
+         loop runs from the first edit of a round, so most of the residents it writes have never been
+         uploaded before; a delete for one of them can only ever report "not found", _rcGone falls
+         back to false, and this loop then re-filed the exact record delPt had just failed to remove.
+         Reads and writes still agree about a removal, which is the property that matters. */
+      if(!_rcOnCard(p)) continue;                        // the streaming saver's copy of the rule
       const id=p.id||newId();
       // Snapshot + signature captured in the SAME synchronous stretch, BEFORE the upload await. The
       // provider keeps typing while an upload is in flight (slow facility Wi-Fi makes that window big),
@@ -3819,8 +4047,13 @@ async function rcAutoSaveCloud(){
       // "already saved" — so they never uploaded at all (found by the 2026-07-21 sync-test campaign:
       // wounds typed right as the name-only save fired were silently lost until the next edit).
       const sigNow=_rcSig(p);
+      /* facRaw, captured before the first await — NOT a live read. The path already came from the
+         captured facility, so a live read here put the two in direct disagreement inside one save:
+         a record filed under RoundCards/Crestmoor whose body said "University Heights". That is not
+         cosmetic — the round picker rebuilds the card's facility FROM the record body, so one
+         reopen later the next handoff sheet goes to the wrong building. (defect #15) */
       const rec={ schema:'roundcard.v1', id:id, savedAt:new Date().toISOString(), key:ptSlug(p.name),
-        facility:S.round.fac||'', date:date, provider:provNow,
+        facility:facRaw, date:date, provider:provNow,
         visitType:p.visitType||'', dispo:p.dispo||'',
         /* `send` RIDES IN THE RECORD, for exactly the reason `dispo` does two fields up. The Review
            checkbox is the provider's decision about WHICH BUILDING'S NURSE GETS WHICH ORDERS, and it
@@ -3894,6 +4127,34 @@ async function saveVault(){
       : 'Select at least one named patient to send');
     return;
   }
+  /* EVERYTHING THE FILENAMES AND THE DOCUMENTS DEPEND ON IS CAPTURED HERE, BEFORE THE FIRST AWAIT.
+     sheetAutoSave has stated this rule at its own top all along — "a wrong-facility disclosure,
+     which is the one mistake this tool must never make" — and this function, the DELIBERATE save,
+     was the one that broke it. Nothing disables the Facility box, the Date box or the Provider box
+     while this runs; only #vaultBtn is. And the window is not a sliver: a token refresh, a site +
+     drive resolve, two folder ensures and a multi-hundred-KB .doc upload, with no _netTmo deadlines
+     anywhere in this path.
+     Driven, switching building mid-save: the sheet, three records and the QC count all went to
+     Daily Handoffs / RoundCards / QC Feed under the building she had just walked into, each record
+     stamped with it, the .doc header naming it — and the .doc's patient list EMPTY, because the
+     bare sheetHTML() below re-read an S.pts that applyFacChange had already cleared. Crestmoor's
+     own sheet was overwritten with that empty document, which costs the nurse her orders sheet.
+     saveVault then reported success. (defects #12 / #15)
+     The patient list is deep-copied for the reason sheetAutoSave deep-copies it: the provider keeps
+     typing, and the document has to say what it said when she tapped the button. `recPts` keeps
+     LIVE rows on purpose — its per-row signature is taken inside the loop and must describe the
+     bytes actually uploaded — but the LIST is pinned here, or clearing the card mid-save files no
+     records at all while the banner still says they were saved. */
+  const sheetPts=pts.map(p=>JSON.parse(JSON.stringify(p)));
+  const recPts=S.pts.filter(x=>(x.name||'').trim());
+  const facRaw=(S.round.fac||'').trim();
+  const fac  = cleanSeg(facRaw) || 'Unfiled';
+  const date = /^\d{4}-\d{2}-\d{2}/.test(String(S.round.date||'')) ? S.round.date.slice(0,10) : 'undated';
+  /* CAPTURE THE OWNER, KEEP READING THE BOX LIVE — the identical split sheetAutoSave and qcAutoSave
+     make, and for the identical pair of reasons. Only loadedProv can be stolen mid-save (three
+     ordinary actions release it on a synchronous line); the Provider BOX is the one field she may
+     still be correcting, and freezing it here would file this round under the name she just fixed. */
+  const provLoaded=(S.round.loadedProv||'').trim();
   const btn=document.getElementById('vaultBtn'); btn.disabled=true;
   const st=t=>{ btn.textContent=t; };
   const resEl=document.getElementById('vaultResult'); if(resEl) resEl.style.display='none';
@@ -3906,26 +4167,85 @@ async function saveVault(){
       const a=_pca.getAllAccounts()[0];
       if(a && !(S.round.prov||'').trim()){ S.round.prov=a.name||a.username||''; save(); paintRound(); }
     }catch(e){}
-    const fac  = cleanSeg(S.round.fac) || 'Unfiled';
-    const date = /^\d{4}-\d{2}-\d{2}/.test(String(S.round.date||'')) ? S.round.date.slice(0,10) : 'undated';
     // One read for the whole save, so the sheet, the records and the count can never disagree.
-    const provName=_fileProv();
-    const prov = cleanSeg(provName) || 'Provider unlisted';
+    const provName=provLoaded || _fileProv();
+    /* TWO SEGMENTS, AND ONLY THE SHEET GETS THE PINNED ONE. `provSeg` is the name this round files
+       under right now — the identical line qcAutoSave computes for itself. `prov` is what this
+       round's SHEET is already on file as, which the one-round-one-sheet-file lock may pin to an
+       earlier spelling (defect #14).
+       They were one variable until 2026-08-11, and the QC count borrowed the pinned one. qcAutoSave
+       writes THE SAME FILE — date + facility + provider .json — from the live name, so after a
+       re-spelling the two writers of one filename disagreed about what it is called: this function
+       filed the count under the old spelling, the streaming saver under the new one, and QC Feed
+       held two counts for one round. Nothing reconciles that pair — Get-OrphanedCounts in
+       qc_count_nightly.ps1 only removes a count when the same day has a round under a DIFFERENT
+       provider, and both of these name the same human — so the QC tracker reads one visit as two and
+       goes looking for notes that are not owed. A DOCUMENT must not fork, which is why the sheet is
+       pinned; a count is a number and the number is identical either way, so it files under the live
+       name like every other count. Two writers of one filename must not disagree. */
+    const provSeg = cleanSeg(provName) || 'Provider unlisted';
+    /* ONE ROUND, ONE SHEET FILE — see _sheetFileSeg. Shares the lock with sheetAutoSave, which
+       writes this same path and filename, so the streaming saver and the deliberate one cannot
+       leave two documents for one round between them. */
+    const nameKey=_sheetFiledKey(facRaw, date, provName);
+    const prov = _sheetFileSeg(nameKey, provSeg);
     st('Preparing folders…');
     const {driveId}=await _vaultCtx(token);
     const sheetSegs=['Daily Handoffs',fac,date];
     await _vaultEnsureFolders(token,driveId,sheetSegs);
     st('Uploading sheet…');
-    const blob=new Blob(['﻿'+sheetHTML()],{type:'application/msword'});
-    const item=await _vaultUpload(token,driveId,sheetSegs,
-      'Wound Orders — '+fac+' — '+date+' — '+prov+'.doc',blob,'application/msword');
-    /* Same rule as sheetAutoSave's tail, and reachable the same way: nothing disables the Facility
-       box while this save runs (only #vaultBtn is), so a switch mid-save would record "a sheet is on
-       file" against the building she has just moved to, where none is. Stamp the round we uploaded
-       FOR — see _sheetKey. (2026-08-04) */
-    const filedKey=_sheetKey(fac, date);
-    if(filedKey===_sheetKey()){ _sheetOnFile=true; _sheetCheckKey=filedKey; }   // the sheet now exists for this round
-    _paintSheetWarn();
+    /* THE SHEET IS THE SEND SET, PINNED — the same call sheetAutoSave makes, at last.
+       This line used to be a bare sheetHTML(), whose default list is S.pts.filter(named) and
+       ignores p.send entirely. So the .doc uploaded to the facility's Daily Handoffs folder carried
+       every named patient on the card INCLUDING the ones the provider had explicitly unchecked in
+       "Send which patients?", with their wounds and their orders on it, and its header strip said
+       "Patients: 2" over a round that sent one. Measured on the uploaded bytes. The preview, the
+       print, the download and sheetAutoSave all passed sentNamed(); only the button that actually
+       files it did not — and since sheetAutoSave writes the SAME path and filename, which version
+       the facility ended up with came down to which write ran last.
+       Same harm as the Review-checkbox defect closed on 2026-08-07, reached by a different route:
+       a resident the provider deliberately held back from the building's orders being disclosed to
+       that building anyway. sentNamed()'s own comment claims "Everything downstream (preview,
+       email, print, Save to ClinicalVault) runs off this one set" — now it does. (defect #13)
+       The round override pins the header for the reason the whole capture block above exists. */
+    /* PINNED AGAINST THE ROUND MOVING, LIVE AGAINST A REMOVAL — and those are different questions
+       that the capture block above had collapsed into one answer.
+       Everything captured before the first await is a property of THE ROUND: which building, which
+       day, whose round, and what the document said when she tapped the button. Whether a resident is
+       still on the card is not. "Really remove <name>?" is a decision the provider is making WHILE
+       this save runs, delPt fires a real vault delete to carry it out, and nothing here disables the
+       Remove button. Frozen, the deep copy carried her to the facility's Daily Handoffs .doc with
+       her wounds and her orders on it — a resident deliberately taken off the round disclosed to the
+       building anyway, the same harm as #13 reached by removing her instead of unchecking her — and
+       the record loop below re-uploaded her record AFTER delPt had deleted it, so she reappeared on
+       the next reopen and in the composer's pull. Fixing a race by freezing state froze the wrong
+       thing: a facility is a property of the round and must be pinned, a removal is not and must not
+       be. _rcOnCard is the card's own answer to "have I taken her off?" — written by delPt on the
+       tap, before any network call — so the writers refuse to WRITE somebody the provider has
+       removed. NOT _rcGone, which means the vault DELETE SUCCEEDED: a resident who was never
+       uploaded has no record to delete, so _rcGone reads false for her and every writer put her
+       back. See _rcOnCard.
+       IF THAT EMPTIES THE SEND SET, NO SHEET IS UPLOADED AT ALL. An empty .doc under this round's
+       filename would overwrite the building's real orders sheet with a blank page, which is the one
+       outcome worse than writing nothing — see the empty-document half of #12 two blocks up. */
+    const sheetSend=sheetPts.filter(p=>_rcOnCard(p));
+    /* HOISTED OUT OF THE if, because the document has to be RE-RENDERABLE at the end of the save —
+       see the reconciliation just above the banner. */
+    const sheetName='Wound Orders — '+fac+' — '+date+' — '+prov+'.doc';
+    const sheetDoc=list=>new Blob(['﻿'+sheetHTML(list,{fac:facRaw, date:date, prov:provName})],{type:'application/msword'});
+    let item=null, sheetOn=[], sheetLate='';
+    if(sheetSend.length){
+      item=await _vaultUpload(token,driveId,sheetSegs,sheetName,sheetDoc(sheetSend),'application/msword');
+      sheetOn=sheetSend;
+      _sheetFiledStamp(nameKey, prov);                 // this round's sheet now HAS a filename — keep using it
+      /* Same rule as sheetAutoSave's tail, and reachable the same way: nothing disables the Facility
+         box while this save runs (only #vaultBtn is), so a switch mid-save would record "a sheet is
+         on file" against the building she has just moved to, where none is. Stamp the round we
+         uploaded FOR — see _sheetKey. (2026-08-04) */
+      const filedKey=_sheetKey(fac, date);
+      if(filedKey===_sheetKey()){ _sheetOnFile=true; _sheetCheckKey=filedKey; }   // the sheet now exists for this round
+      _paintSheetWarn();
+    }
     st('Saving patient records…');
     // Same month split as the auto-save above, from the round's own date.
     const recSegs=_rcRecFolder(fac, date).split('/');
@@ -3940,19 +4260,28 @@ async function saveVault(){
        as "and don't back her up either" is what left an unchecked resident with no record anywhere
        while the clear-the-card confirm promised she was filed.
        `pts` is untouched above and below, and the QC count still runs off it.
-       ⚠ THE SHEET UPLOAD DOES NOT, whatever this comment used to say. The upload below calls a BARE
-       sheetHTML(), whose default list is every NAMED patient — so an unchecked resident IS on the
-       .doc filed to Daily Handoffs/. Measured 2026-08-04 by capturing the actual application/msword
-       body: three synthetic patients in, one unchecked, all three out. That is defect #13, it belongs
-       to another cluster, and it is recorded rather than fixed here. See the note at sentNamed(). */
-    const recPts=S.pts.filter(x=>(x.name||'').trim());
+       THE SHEET UPLOAD DOES TOO, as of 2026-08-10: it passes sentNamed() explicitly (defect #13).
+       Between 2026-08-05 and then it called a bare sheetHTML() and put an unchecked resident's
+       orders on the facility's document. `recPts` is captured with everything else before the
+       first await — see the block at the top. */
+    let nRec=0;
     for(const p of recPts){
+      /* SKIP ANYONE THE PROVIDER HAS SINCE REMOVED — see the note at the sheet above, and _rcOnCard
+         for why this is not _rcGone. delPt is TRYING to delete this record from the vault as this
+         loop runs; writing it back undoes her tap, and when the delete cannot land at all — no
+         record uploaded yet, signed out, or the server refuses — writing it back is the only thing
+         that happens. */
+      if(!_rcOnCard(p)) continue;                        // the manual Save's copy of the rule
       const id=p.id || newId();
       // Same snapshot-before-await rule as the auto-save: sig must describe the UPLOADED content, not
       // whatever the patient looks like after the network round-trip (mid-upload edits must stay dirty).
       const sigNow=_rcSig(p);
+      /* facRaw, captured before the first await — see the block at the top and the same line in
+         rcAutoSaveCloud. The FOLDER was already captured; reading the facility live here made the
+         path and the payload name two different buildings inside one save, and the round picker
+         rebuilds the card's facility from the payload. (defect #15) */
       const rec={ schema:'roundcard.v1', id:id, savedAt:new Date().toISOString(), key:ptSlug(p.name),
-        facility:S.round.fac||'', date:date, provider:provName,
+        facility:facRaw, date:date, provider:provName,
         visitType:p.visitType||'', dispo:p.dispo||'',
         /* `send` RIDES IN THE RECORD, for exactly the reason `dispo` does two fields up. The Review
            checkbox is the provider's decision about WHICH BUILDING'S NURSE GETS WHICH ORDERS, and it
@@ -3975,6 +4304,7 @@ async function saveVault(){
       const jb=new Blob([JSON.stringify(rec)],{type:'application/json;charset=utf-8'});
       await _vaultUpload(token,driveId,recSegs,_rcRecName(id, provName),jb,'application/json;charset=utf-8');
       try{ _rcCloudSig[id]=sigNow; _rcFiled.add(id); }catch(e){}   // keep auto-save in step so it won't re-upload these
+      nRec++;
     }
     saveFiled();          // persist which ids really reached the vault - see _rcFiled
     /* QC count feed (QC-COUNT-FEED-SPEC.md, Scott 2026-07-19): one COUNT-ONLY record per
@@ -3985,14 +4315,61 @@ async function saveVault(){
     // Seen patients only — same rule as the auto-save above and as the nightly job. A round
     // where the provider attended but nobody was available owes no count, so nothing is filed
     // and the silence check reads that day as quiet rather than raising a missing-count alarm.
-    const qcCount=pts.filter(isCounted).length;
+    // A resident removed while this save ran owes no note either — same live read as the two loops
+    // above, and the number has to match the records that actually reached RoundCards.
+    const qcCount=pts.filter(p=>_rcOnCard(p)).filter(isCounted).length;
     if(qcCount>0){
       st('Logging QC count…');
       await _vaultEnsureFolders(token,driveId,['QC Feed']);
-      const qc={ schema:'qcfeed.v1', date:date, facility:S.round.fac||'', provider:provName,
+      const qc={ schema:'qcfeed.v1', date:date, facility:facRaw, provider:provName,
         patientCount:qcCount, savedAt:new Date().toISOString() };
-      await _vaultUpload(token,driveId,['QC Feed'], date+' — '+fac+' — '+prov+'.json',
+      // provSeg, NOT the pinned sheet segment — qcAutoSave writes this exact filename from the live
+      // name, and two writers of one filename must not disagree. See the note at provSeg.
+      await _vaultUpload(token,driveId,['QC Feed'], date+' — '+fac+' — '+provSeg+'.json',
         new Blob([JSON.stringify(qc)],{type:'application/json;charset=utf-8'}),'application/json;charset=utf-8');
+    }
+    /* THE LAST POSSIBLE MOMENT, BECAUSE THE .doc UPLOAD IS THE WIDEST AWAIT THE CARD HAS.
+       Filtering immediately before the Blob is as late as the BYTES can be chosen — once they are
+       handed to _vaultUpload they are gone — but that filter cannot cover the upload itself, and a
+       several-hundred-KB document over facility Wi-Fi is far and away the longest window in this
+       save. Nor could it cover the record loop and the QC write that follow. A removal landing
+       anywhere in there left the resident on the document that reached the building while the record
+       loop correctly dropped her, and the banner then reported the SMALLER number: the tool's own
+       account of what it did was wrong in the direction that HIDES a disclosure, which is the worst
+       direction available.
+       So the send set is asked once more, here, with every await behind it. The filename is fixed
+       for this round (see _sheetFileSeg), so a second upload OVERWRITES the first rather than adding
+       a document beside it — that is what makes a correction possible here and impossible in Daily
+       Handoffs generally. ONE corrective pass, never a loop: it closes the window that matters and
+       cannot turn a slow network into an upload storm. A removal landing during the CORRECTION is
+       covered by the streaming saver, which self-heals — delPt calls save(), save() calls
+       scheduleSheetSave(), and the next run re-files this same filename from the smaller set. */
+    if(item){
+      const stillOn=sheetSend.filter(p=>_rcOnCard(p));
+      if(stillOn.length!==sheetOn.length){
+        if(stillOn.length){
+          st('Replacing the handoff sheet…');
+          item=await _vaultUpload(token,driveId,sheetSegs,sheetName,sheetDoc(stillOn),'application/msword');
+          sheetOn=stillOn;
+        }else{
+          /* Everyone the document names has been removed since it went. A BLANK .doc under this
+             filename would overwrite the building's real orders sheet with an empty page, which is
+             worse than the document that is now there — so it stays, and she is TOLD, because a
+             handoff sheet naming somebody she took off the round is not a thing to find out later. */
+          sheetLate='the handoff sheet had already reached '+fac+' when you removed the last patient, so it still names them — send this round again to replace it';
+        }
+      }
+    }
+    /* NOTHING REACHED THE VAULT, SO NOTHING MAY BE REPORTED AS IF IT HAD. With every checked
+       resident removed while the save ran, no sheet goes (a blank page over the building's real
+       orders sheet is worse than none), no record goes and no count goes — and this function still
+       painted the green tick and "0 patient records saved to ClinicalVault", a sentence that reads
+       as success and describes nothing. Say what happened, and do not tell the composer to pull
+       records that were never filed. */
+    if(!item && !nRec && !qcCount){
+      st('☁ Save to ClinicalVault'); btn.disabled=false;
+      _vaultResultShow(false,'Nothing was saved — every patient on this round was removed while the save was running. ClinicalVault has not been changed.');
+      return;
     }
     st('✓ Saved');
     /* If we're running inside the composer's overlay iframe, tell it to pull the patients we just
@@ -4002,7 +4379,17 @@ async function saveVault(){
        only while the record loop above used the same set. It does not any more, so with one patient
        unchecked it uploaded two records and reported one — a success message that undercounts the
        backup is exactly the kind of thing a provider reads once and then trusts. */
-    _vaultResultShow(true,'Sheet + '+recPts.length+' patient record'+(recPts.length===1?'':'s')+' + QC count saved to ClinicalVault.',item&&item.webUrl);
+    /* ...AND ONLY WHAT ACTUALLY WENT. `recPts.length` was the captured list, which is no longer the
+       same thing as the records written: a resident removed mid-save is skipped by both loops above,
+       and if every checked resident goes the sheet is skipped too. Reporting the captured numbers
+       would tell her a document reached the building when none did. */
+    /* ...AND SAY HOW MANY THE DOCUMENT NAMES, not merely that one went. The sheet and the records
+       are two different sets on purpose (the Review checkbox holds a resident off the building's
+       orders without throwing her charting away), and once a removal can land between them the two
+       numbers legitimately differ. One number for both is how the removal-during-the-upload case
+       came to report "1 patient record" over a document that named two. sheetOn is the list the .doc
+       the building now holds was rendered from — including after the corrective re-upload above. */
+    _vaultResultShow(true,(item?'Handoff sheet ('+sheetOn.length+' patient'+(sheetOn.length===1?'':'s')+') + ':'')+nRec+' patient record'+(nRec===1?'':'s')+(qcCount>0?' + QC count':'')+' saved to ClinicalVault.'+(sheetLate?' ⚠ '+sheetLate+'.':''),item&&item.webUrl);
     _rcPaintSync('saved');
     setTimeout(()=>{ st('☁ Save to ClinicalVault'); btn.disabled=false; },2500);
   }catch(e){
